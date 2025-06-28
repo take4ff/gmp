@@ -1,0 +1,66 @@
+# COVID-19変異予測パッケージの設定ファイル
+
+# モデル設定
+model:
+  input_dim: 256
+  hidden_dim: 512
+  num_layers: 6
+  num_heads: 8
+  dropout_rate: 0.1
+  max_seq_length: 2048
+  use_positional_encoding: true
+  
+# 訓練設定
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  num_epochs: 100
+  patience: 15
+  weight_decay: 0.01
+  warmup_epochs: 10
+  gradient_clip_norm: 1.0
+  use_mixed_precision: true
+  
+# 評価設定
+evaluation:
+  threshold: 0.5
+  cv_folds: 5
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+    - auc_roc
+    - auc_pr
+    
+# データ設定
+data:
+  data_path: "meta_data/"
+  codon_file: "codon.csv"
+  mutation_files:
+    - "codon_mutation.csv"
+    - "codon_mutation2.csv"
+    - "codon_mutation3.csv"
+    - "codon_mutation4.csv"
+  test_split: 0.2
+  val_split: 0.2
+  max_samples_per_strain: 1000
+  
+# ハイパーパラメータ最適化設定
+optimization:
+  n_trials: 100
+  timeout: 3600  # 1時間
+  pruning: true
+  sampler: "TPE"
+  
+# ロギング設定
+logging:
+  level: "INFO"
+  file: "covid_mutation_prediction.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+# 出力設定
+output:
+  model_save_dir: "models/"
+  results_save_dir: "results/"
+  plots_save_dir: "plots/"
