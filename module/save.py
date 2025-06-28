@@ -296,7 +296,7 @@ def save_readme(strains, model, train_dataset, val_dataset,
     strain_list = ', '.join(strains)
     
     # f-stringを使わない方法で文字列を構築
-    readme_content = """# COVID-19 Mutation Prediction Model - 20250628_train1
+    readme_content = """# COVID-19 Mutation Prediction Model
 
 ## 実験概要
 - **実験日**: {}

@@ -11,6 +11,7 @@ from torch import nn, optim
 import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
 import os
+from datetime import datetime
 
 # %%
 import importlib
@@ -31,16 +32,19 @@ importlib.reload(save)
 
 # %%
 # 保存ディレクトリの設定
+current_time = datetime.now().strftime("%H%M%S")
 save_dir = "../model/20250628_train1/"
-os.makedirs(save_dir, exist_ok=True)
+save_dir_time = os.path.join(save_dir, current_time)
+os.makedirs(save_dir_time, exist_ok=True)
 
 # %%
 num_epochs = 30
 
 # タイムステップとラベルの長さ、検証データの割合を設定
-test_start=31
+test_start=36
 ylen=1
 val_ratio=0.2
+batch_size = 32
 
 # タイムステップを含む特徴データの抽出
 feature_idx = 6
@@ -49,8 +53,8 @@ feature_idx = 6
 # データセット設定
 #strains = ['B.1.1.7','P.1','BA.2','BA.1.1','BA.1','B.1.617.2','B.1.351','B.1.1.529']
 strains = ['B.1.1.7']
-usher_dir = '~/usher_output/'
-nmax = 10000
+usher_dir = '../usher_output/'
+nmax = 1000000000
 nmax_per_strain = 1000000000000000
 
 # 入力データの読み込み
@@ -109,7 +113,6 @@ train_dataset = mds.MutationSequenceDataset(train_x2, train_y2, feature_vocabs)
 val_dataset = mds.MutationSequenceDataset(val_x2, val_y_protein2, feature_vocabs, train_dataset.max_length)
 
 # データローダー
-batch_size = 16
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
