@@ -50,7 +50,7 @@ os.makedirs(save_dir, exist_ok=True)
 # モデルハイパーパラメータ
 model_config = {
     'num_epochs': 30,
-    'batch_size': 256,
+    'batch_size': 64,
     'd_model': 256,
     'nhead': 8,
     'num_layers': 4,
@@ -130,6 +130,130 @@ train_x, train_y, val_x, val_y, test_x, test_y = mds.create_time_aware_split_mod
     data, data_config['test_start'], data_config['ylen'], data_config['val_ratio']
 )
 
+print(f"train_x type: {type(train_x)}, length: {len(train_x) if hasattr(train_x, '__len__') else 'N/A'}")
+if len(train_x) > 0:
+    print(f"train_x[0] type: {type(train_x[0])}")
+    print(f"train_x[0]: {train_x[0]}")
+    if hasattr(train_x[0], '__len__') and len(train_x[0]) > 0:
+        print(f"train_x[0][0]: {train_x[0][0]}")
+    if hasattr(train_x[0], '__getitem__') and hasattr(train_x[0], 'keys'):
+        print(f"train_x[0] keys: {list(train_x[0].keys()) if hasattr(train_x[0], 'keys') else 'No keys'}")
+print(f"train_y type: {type(train_y)}, length: {len(train_y) if hasattr(train_y, '__len__') else 'N/A'}")
+if len(train_y) > 0:
+    print(f"train_y[0]: {train_y[0]}")
+
+def determine_maxlen_make_vocabulary(train_x, val_x, test_x_ts):
+    vocabulary = ["<UNK>", "<PAD>", "<CLS>", "<SEP>"]
+    max_len = 0
+    for x in train_x:
+        if len(x) > max_len:
+            max_len = len(x)
+        vocabulary.extend(x)
+    for x in val_x: 
+        if len(x) > max_len:
+            max_len = len(x)
+        vocabulary.extend(x)
+    # test_x_tsは辞書形式（タイムステップ: [シーケンスリスト]）
+    for timestep, test_sequences in test_x_ts.items():
+        for x in test_sequences:
+            if len(x) > max_len:
+                max_len = len(x)
+            vocabulary.extend(x) 
+    return max_len, sorted(list(set(vocabulary)))
+
+def create_protein_vocabulary():
+    """プロテイン語彙を作成"""
+    protein_names = [
+        "non_coding1", "nsp1", "nsp2", "nsp3", "nsp4", "nsp5", "nsp6", "nsp7", "nsp8", "nsp9", "nsp10",
+        "nsp12", "nsp13", "nsp14", "nsp15", "nsp16", "non_coding2", "S", "non_coding3", "ORF3a", 
+        "non_coding4", "E", "non_coding5", "M", "non_coding6", "ORF6", "non_coding7", "ORF7a", 
+        "ORF7b", "non_coding8", "ORF8", "non_coding9", "N", "non_coding10", "ORF10", "non_coding11"
+    ]
+    
+    vocab = {
+        '<PAD>': 0,
+        '<UNK>': 1
+    }
+    
+    for i, protein in enumerate(protein_names, start=2):
+        vocab[protein] = i
+    
+    return vocab
+
+max_len, mutation_vocab_list = determine_maxlen_make_vocabulary(train_x, val_x, test_x)
+
+print(f"変異語彙サイズ: {len(mutation_vocab_list)}")
+
+# 初期化
+bert_tokenizer = None
+
+# 事前学習済みBERTを使用する場合は、BERT語彙を基盤とした統一語彙を作成
+if model_config['use_pretrained_bert']:
+    try:
+        import transformers
+        from transformers import AutoTokenizer
+        
+        print("🤗 事前学習済みBERT語彙を基盤とした統一語彙を作成中...")
+        tokenizer = AutoTokenizer.from_pretrained(model_config['bert_model_name'])
+        print(f"語彙サイズ: {len(tokenizer):,}")
+        
+        # カスタム変異トークンをBERT語彙に追加
+        custom_mutation_tokens = []
+        for token in mutation_vocab_list:
+            if token not in ['<UNK>', '<PAD>', '<CLS>', '<SEP>']:  # 特別トークンは除く
+                # BERTトークナイザーに存在しないトークンのみ追加
+                if tokenizer.convert_tokens_to_ids(token) == tokenizer.unk_token_id:
+                    custom_mutation_tokens.append(token)
+        
+        # 新しいトークンを追加
+        num_added = tokenizer.add_tokens(custom_mutation_tokens)
+        print(f"BERT語彙に {num_added:,} 個の変異トークンを追加しました")
+        print(f"統一語彙サイズ: {len(tokenizer):,}")
+        
+        # 統一語彙辞書を作成（BERT語彙IDベース）
+        mutation_vocab = {}
+        for token in mutation_vocab_list:
+            if token == '<PAD>':
+                mutation_vocab[token] = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.unk_token_id
+            elif token == '<UNK>':
+                mutation_vocab[token] = tokenizer.unk_token_id
+            elif token == '<CLS>':
+                mutation_vocab[token] = tokenizer.cls_token_id if tokenizer.cls_token_id is not None else tokenizer.unk_token_id
+            elif token == '<SEP>':
+                mutation_vocab[token] = tokenizer.sep_token_id if tokenizer.sep_token_id is not None else tokenizer.unk_token_id
+            else:
+                mutation_vocab[token] = tokenizer.convert_tokens_to_ids(token)
+        
+        print("✅ BERT語彙ベースの統一語彙辞書を作成しました")
+        print(f"特別トークンID - PAD: {mutation_vocab.get('<PAD>')}, UNK: {mutation_vocab.get('<UNK>')}")
+        print(f"特別トークンID - CLS: {mutation_vocab.get('<CLS>')}, SEP: {mutation_vocab.get('<SEP>')}")
+        
+        # 語彙辞書の整合性確認
+        missing_tokens = []
+        for token in mutation_vocab_list:
+            if token not in mutation_vocab:
+                missing_tokens.append(token)
+        
+        if missing_tokens:
+            print(f"⚠️ 警告: 以下のトークンが語彙辞書に含まれていません: {missing_tokens[:10]}...")
+            # 不足しているトークンを追加
+            for token in missing_tokens:
+                mutation_vocab[token] = tokenizer.convert_tokens_to_ids(token)
+        
+        # BERTトークナイザーを保存（後で使用）
+        bert_tokenizer = tokenizer
+        
+    except ImportError:
+        print("⚠️ transformersライブラリが見つかりません。カスタム語彙を使用します。")
+        mutation_vocab = {token: idx for idx, token in enumerate(mutation_vocab_list)}
+        bert_tokenizer = None
+else:
+    # オリジナルBERTの場合は従来通り
+    mutation_vocab = {token: idx for idx, token in enumerate(mutation_vocab_list)}
+    bert_tokenizer = None
+
+protein_vocab = create_protein_vocabulary()
+
 def extract_protein(y, codon_df, bunpu_df):
     # タイムステップごとにプロテイン特徴量を抽出
     new_y = []
@@ -151,65 +275,21 @@ val_x2, val_y2 = mds.add_x_by_y(val_x, val_y_protein)
 
 print(f"データ分割完了:")
 print(f"  訓練データ: {len(train_x2)} サンプル")
+print(f"train_x2[0] = {train_x2[0]}")
+print(f"train_y2[0] = {train_y2[0]}")
 print(f"  検証データ: {len(val_x2)} サンプル")
+print(f"val_x2[0] = {val_x2[0]}")
+print(f"val_y2[0] = {val_y2[0]}")
 print(f"  テストデータ: {len(test_x)} タイムステップ")
 # %%
 # BERT風の語彙構築とデータセット作成
 # =============================================================================
 
-def create_mutation_vocabulary():
-    """塩基変異パターンのみの語彙を作成"""
-    base = ['A', 'C', 'G', 'T']
-    
-    # 特別トークンを追加
-    vocab = {
-        '<PAD>': 0,
-        '<UNK>': 1,
-        '<CLS>': 2,
-        '<SEP>': 3
-    }
-    
-    # 塩基変異パターンを生成 (例: A1C, A1G, A1T, ...)
-    # 4種類の塩基 × 3種類の変異 × 30,000位置 = 360,000パターン
-    mutations = []
-    for b1 in base:
-        for b2 in base:
-            if b1 != b2:  # 同じ塩基への変異は除外
-                for pos in range(1, 30001):  # 位置1-30000
-                    mutations.append(f"{b1}{pos}{b2}")
-    
-    # 変異を語彙に追加
-    for i, mutation in enumerate(sorted(mutations), start=4):
-        vocab[mutation] = i
-    
-    return vocab
-
-def create_protein_vocabulary():
-    """プロテイン語彙を作成"""
-    protein_names = [
-        "non_coding1", "nsp1", "nsp2", "nsp3", "nsp4", "nsp5", "nsp6", "nsp7", "nsp8", "nsp9", "nsp10",
-        "nsp12", "nsp13", "nsp14", "nsp15", "nsp16", "non_coding2", "S", "non_coding3", "ORF3a", 
-        "non_coding4", "E", "non_coding5", "M", "non_coding6", "ORF6", "non_coding7", "ORF7a", 
-        "ORF7b", "non_coding8", "ORF8", "non_coding9", "N", "non_coding10", "ORF10", "non_coding11"
-    ]
-    
-    vocab = {
-        '<PAD>': 0,
-        '<UNK>': 1
-    }
-    
-    for i, protein in enumerate(protein_names, start=2):
-        vocab[protein] = i
-    
-    return vocab
-
-# 語彙辞書を作成
-print("語彙辞書を構築中...")
-mutation_vocab = create_mutation_vocabulary()
-protein_vocab = create_protein_vocabulary()
-
+# 語彙辞書を作成（既に上で実行済み）
+print("語彙辞書構築完了:")
 print(f"変異語彙サイズ: {len(mutation_vocab):,}")
 print(f"プロテイン語彙サイズ: {len(protein_vocab):,}")
+print(f"最大シーケンス長: {max_len}")
 
 # データセットクラスの定義
 class MutationBERTDataset(torch.utils.data.Dataset):
@@ -270,7 +350,15 @@ class MutationBERTDataset(torch.utils.data.Dataset):
         attention_mask = [1 if token != self.mutation_vocab['<PAD>'] else 0 for token in mutation_tokens]
         
         # ラベル（最初のプロテインを使用）
-        label = self.protein_to_idx[y_sample[0]]
+        if isinstance(y_sample, list) and len(y_sample) > 0:
+            first_protein = y_sample[0]
+        else:
+            first_protein = y_sample
+        
+        if first_protein not in self.protein_to_idx:
+            raise ValueError(f"未知のプロテインラベル: {first_protein}. 利用可能なラベル: {list(self.protein_to_idx.keys())}")
+        
+        label = self.protein_to_idx[first_protein]
         
         return {
             'input_ids': torch.tensor(mutation_tokens, dtype=torch.long),
@@ -280,8 +368,8 @@ class MutationBERTDataset(torch.utils.data.Dataset):
 
 # データセットの作成
 print("データセットを作成中...")
-train_dataset = MutationBERTDataset(train_x2, train_y2, mutation_vocab, protein_vocab)
-val_dataset = MutationBERTDataset(val_x2, val_y2, mutation_vocab, protein_vocab, train_dataset.max_length)
+train_dataset = MutationBERTDataset(train_x2, train_y2, mutation_vocab, protein_vocab, max_len)
+val_dataset = MutationBERTDataset(val_x2, val_y2, mutation_vocab, protein_vocab, max_len)
 
 # データローダー
 train_loader = DataLoader(train_dataset, batch_size=model_config['batch_size'], shuffle=True)
@@ -358,71 +446,35 @@ class MutationBERTModel(nn.Module):
         return logits
 
 class PretrainedBERTModel(nn.Module):
-    def __init__(self, bert_model_name, num_classes, mutation_vocab, freeze_layers=0):
+    def __init__(self, bert_model_name, num_classes, mutation_vocab, freeze_layers=0, bert_tokenizer=None):
         super(PretrainedBERTModel, self).__init__()
         
         try:
             import transformers
-            from transformers import AutoModel, AutoConfig, AutoTokenizer
+            from transformers import AutoModel, AutoConfig
             self.use_pretrained = True
             
-            # BERTのトークナイザーと語彙を取得
-            print(f"🤗 transformersライブラリを使用してBERTモデルを読み込みます: {bert_model_name}")
-            self.tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
-            original_vocab_size = len(self.tokenizer)
-            print(f"元のBERT語彙サイズ: {original_vocab_size:,}")
+            print(f"🤗 事前学習済みBERTモデルを読み込みます: {bert_model_name}")
             
-            # カスタム変異トークンをBERT語彙に追加
-            print("変異トークンをBERT語彙に追加中...")
-            mutation_tokens = []
-            for token, _ in sorted(mutation_vocab.items(), key=lambda x: x[1]):
-                if token not in ['<PAD>', '<UNK>', '<CLS>', '<SEP>']:  # 特別トークンは除く
-                    mutation_tokens.append(token)
-            
-            print(f"追加するトークン数: {len(mutation_tokens):,}")
-            
-            # 新しいトークンを追加（バッチ処理で高速化）
-            num_added_tokens = self.tokenizer.add_tokens(mutation_tokens)
-            print(f"BERT語彙に {num_added_tokens:,} 個の変異トークンを追加しました")
-            print(f"語彙サイズ: {original_vocab_size:,} → {len(self.tokenizer):,}")
-            
-            # 語彙マッピングを作成（カスタム→BERT）- 高速化版
-            print("語彙マッピングを作成中...")
-            self.vocab_mapping = {}
-            
-            # 特別トークンの処理
-            special_tokens = {
-                '<PAD>': self.tokenizer.pad_token_id or self.tokenizer.unk_token_id,
-                '<UNK>': self.tokenizer.unk_token_id or 0,
-                '<CLS>': self.tokenizer.cls_token_id or self.tokenizer.unk_token_id,
-                '<SEP>': self.tokenizer.sep_token_id or self.tokenizer.unk_token_id
-            }
-            
-            for token, custom_id in mutation_vocab.items():
-                if token in special_tokens:
-                    self.vocab_mapping[custom_id] = special_tokens[token]
-                else:
-                    # 変異トークンは新しく追加されているので、直接IDを取得
-                    bert_id = self.tokenizer.convert_tokens_to_ids(token)
-                    self.vocab_mapping[custom_id] = bert_id
-            
-            print(f"語彙マッピング完了: {len(self.vocab_mapping):,} トークン")
-            
-            # 高速変換用のテンソルマッピングを作成
-            print("高速変換テーブルを作成中...")
-            max_custom_id = max(mutation_vocab.values())
-            self.vocab_mapping_tensor = torch.full(
-                (max_custom_id + 1,), 
-                self.tokenizer.unk_token_id, 
-                dtype=torch.long
-            )
-            
-            for custom_id, bert_id in self.vocab_mapping.items():
-                self.vocab_mapping_tensor[custom_id] = bert_id
+            # 既に統一語彙が作成されている場合はそれを使用
+            if bert_tokenizer is not None:
+                self.tokenizer = bert_tokenizer
+                print(f"✅ 統一語彙を使用: {len(self.tokenizer):,} トークン")
+            else:
+                # フォールバック: 独自に語彙統合を行う
+                from transformers import AutoTokenizer
+                self.tokenizer = AutoTokenizer.from_pretrained(bert_model_name)
+                original_vocab_size = len(self.tokenizer)
                 
-            # テンソルをパラメータとして登録（GPUに自動移動）
-            self.register_buffer('vocab_mapping_tensor', self.vocab_mapping_tensor)
-            print("高速変換テーブル作成完了")
+                # カスタム変異トークンをBERT語彙に追加
+                mutation_tokens = []
+                for token, _ in sorted(mutation_vocab.items(), key=lambda x: x[1]):
+                    if token not in ['<PAD>', '<UNK>', '<CLS>', '<SEP>']:  # 特別トークンは除く
+                        mutation_tokens.append(token)
+                
+                num_added_tokens = self.tokenizer.add_tokens(mutation_tokens)
+                print(f"BERT語彙に {num_added_tokens:,} 個の変異トークンを追加しました")
+                print(f"語彙サイズ: {original_vocab_size:,} → {len(self.tokenizer):,}")
             
             # BERTモデルの設定を取得
             config = AutoConfig.from_pretrained(bert_model_name)
@@ -431,9 +483,10 @@ class PretrainedBERTModel(nn.Module):
             # BERTモデルを読み込み
             self.bert = AutoModel.from_pretrained(bert_model_name)
             
-            # 語彙サイズが変更されたので、埋め込み層をリサイズ
-            self.bert.resize_token_embeddings(len(self.tokenizer))
-            print(f"BERT埋め込み層をリサイズ: {original_vocab_size:,} → {len(self.tokenizer):,}")
+            # 語彙サイズが変更されている場合は埋め込み層をリサイズ
+            if len(self.tokenizer) != self.bert.config.vocab_size:
+                self.bert.resize_token_embeddings(len(self.tokenizer))
+                print(f"BERT埋め込み層をリサイズ: {self.bert.config.vocab_size:,} → {len(self.tokenizer):,}")
             
             # 下位層をフリーズ
             if freeze_layers > 0:
@@ -455,29 +508,16 @@ class PretrainedBERTModel(nn.Module):
         except ImportError:
             print("⚠️ transformersライブラリが見つかりません。オリジナルBERTモデルを使用します。")
             self.use_pretrained = False
+            # フォールバック用の属性設定
+            self.d_model = 256  # デフォルト値
             
     def forward(self, input_ids, attention_mask=None):
-        if not self.use_pretrained:
-            raise RuntimeError("事前学習済みBERTが利用できません")
+        if not hasattr(self, 'use_pretrained') or not self.use_pretrained:
+            raise RuntimeError("事前学習済みBERTが利用できません。オリジナルBERTモデルを使用してください。")
         
-        # カスタム語彙IDをBERT語彙IDに変換（高速化版）
-        # テンソル全体を一度に変換
-        input_ids_flat = input_ids.flatten()
-        
-        # 範囲外のIDをunk_token_idにクランプ
-        valid_mask = input_ids_flat < len(self.vocab_mapping_tensor)
-        clamped_ids = torch.clamp(input_ids_flat, 0, len(self.vocab_mapping_tensor)-1)
-        
-        bert_input_ids_flat = torch.where(
-            valid_mask,
-            self.vocab_mapping_tensor[clamped_ids],
-            torch.tensor(self.tokenizer.unk_token_id, device=input_ids.device, dtype=input_ids.dtype)
-        )
-        
-        bert_input_ids = bert_input_ids_flat.view(input_ids.shape)
-            
-        # BERT forward
-        outputs = self.bert(input_ids=bert_input_ids, attention_mask=attention_mask)
+        # 統一語彙を使用しているため、直接BERTに入力可能
+        # 語彙変換は不要
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         
         # CLSトークンの出力を使用
         cls_output = outputs.last_hidden_state[:, 0, :]
@@ -487,7 +527,7 @@ class PretrainedBERTModel(nn.Module):
         
         return logits
 
-def create_model(model_config, vocab_size, num_classes, max_seq_length, mutation_vocab=None):
+def create_model(model_config, vocab_size, num_classes, max_seq_length, mutation_vocab=None, bert_tokenizer=None):
     """モデル設定に基づいてモデルを作成"""
     
     if model_config['use_pretrained_bert']:
@@ -503,10 +543,11 @@ def create_model(model_config, vocab_size, num_classes, max_seq_length, mutation
                 bert_model_name=model_config['bert_model_name'],
                 num_classes=num_classes,
                 mutation_vocab=mutation_vocab,
-                freeze_layers=model_config['freeze_bert_layers']
+                freeze_layers=model_config['freeze_bert_layers'],
+                bert_tokenizer=bert_tokenizer  # 統一語彙のトークナイザーを渡す
             )
             
-            if not model.use_pretrained:
+            if not hasattr(model, 'use_pretrained') or not model.use_pretrained:
                 # フォールバック: オリジナルモデルを使用
                 print("🔄 オリジナルBERTモデルにフォールバック")
                 model = MutationBERTModel(
@@ -554,14 +595,17 @@ model = create_model(
     vocab_size=len(mutation_vocab),
     num_classes=train_dataset.num_classes,
     max_seq_length=train_dataset.max_length,
-    mutation_vocab=mutation_vocab
+    mutation_vocab=mutation_vocab,
+    bert_tokenizer=bert_tokenizer if 'bert_tokenizer' in locals() else None
 ).to(device)
 
 # 損失関数とオプティマイザー
 criterion = nn.CrossEntropyLoss()
 
 # 事前学習済みBERTの場合は学習率を調整
-if model_config['use_pretrained_bert'] and hasattr(model, 'use_pretrained') and model.use_pretrained:
+if (model_config['use_pretrained_bert'] and 
+    hasattr(model, 'use_pretrained') and 
+    getattr(model, 'use_pretrained', False)):
     # BERTパラメータと分類ヘッドで異なる学習率を設定
     bert_params = []
     classifier_params = []
@@ -572,14 +616,19 @@ if model_config['use_pretrained_bert'] and hasattr(model, 'use_pretrained') and 
         else:
             classifier_params.append(param)
     
-    optimizer = optim.AdamW([
-        {'params': bert_params, 'lr': model_config['learning_rate'] * 0.1},  # BERTは小さい学習率
-        {'params': classifier_params, 'lr': model_config['learning_rate']}    # 分類ヘッドは通常の学習率
-    ], weight_decay=model_config['weight_decay'])
-    
-    print(f"差分学習率設定:")
-    print(f"  BERT層: {model_config['learning_rate'] * 0.1:.2e}")
-    print(f"  分類ヘッド: {model_config['learning_rate']:.2e}")
+    if bert_params:  # BERTパラメータが存在する場合のみ差分学習率を設定
+        optimizer = optim.AdamW([
+            {'params': bert_params, 'lr': model_config['learning_rate'] * 0.1},  # BERTは小さい学習率
+            {'params': classifier_params, 'lr': model_config['learning_rate']}    # 分類ヘッドは通常の学習率
+        ], weight_decay=model_config['weight_decay'])
+        
+        print(f"差分学習率設定:")
+        print(f"  BERT層: {model_config['learning_rate'] * 0.1:.2e} ({len(bert_params)}パラメータ)")
+        print(f"  分類ヘッド: {model_config['learning_rate']:.2e} ({len(classifier_params)}パラメータ)")
+    else:
+        # BERTパラメータが見つからない場合は統一学習率
+        optimizer = optim.AdamW(model.parameters(), lr=model_config['learning_rate'], weight_decay=model_config['weight_decay'])
+        print(f"統一学習率（BERTパラメータ不明）: {model_config['learning_rate']:.2e}")
 else:
     optimizer = optim.AdamW(model.parameters(), lr=model_config['learning_rate'], weight_decay=model_config['weight_decay'])
     print(f"統一学習率: {model_config['learning_rate']:.2e}")
@@ -593,9 +642,9 @@ print(f"クラス数: {train_dataset.num_classes}")
 print(f"最大シーケンス長: {train_dataset.max_length}")
 
 # モデルタイプの表示
-if hasattr(model, 'use_pretrained') and model.use_pretrained:
+if hasattr(model, 'use_pretrained') and getattr(model, 'use_pretrained', False):
     print(f"モデルタイプ: 事前学習済みBERT ({model_config['bert_model_name']})")
-    if hasattr(model, 'd_model') and model.d_model:
+    if hasattr(model, 'd_model') and getattr(model, 'd_model', None):
         print(f"隠れ層サイズ: {model.d_model}")
     print(f"フリーズ層数: {model_config.get('freeze_bert_layers', 0)}")
 else:
