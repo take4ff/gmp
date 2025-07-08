@@ -1,0 +1,445 @@
+# %%
+import torch
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+# %%
+import pandas as pd
+import numpy as np
+from torch.utils.data import DataLoader
+from torch import nn, optim
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report
+import os
+from datetime import datetime
+import time
+
+# %%
+import importlib
+import module.input_mutation_path as imp
+import module.get_feature as gfea
+import module.mutation_transformer2 as mt
+import module.make_dataset as mds
+import module.evaluation as ev
+import module.save as save
+
+# %%
+importlib.reload(imp)
+importlib.reload(gfea)
+importlib.reload(mt)
+importlib.reload(mds)
+importlib.reload(ev)
+importlib.reload(save)
+
+# %%
+# 保存ディレクトリの設定
+current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+folder_name = "../model/20250628_train1/"
+save_dir = os.path.join(folder_name, current_time)
+os.makedirs(save_dir, exist_ok=True)
+
+# %%
+num_epochs = 30
+batch_size = 32
+
+# タイムステップとラベルの長さ、検証データの割合を設定
+test_start=36
+ylen=1
+val_ratio=0.2
+
+# タイムステップを含む特徴データの抽出
+feature_idx = 6
+
+# %%
+# データセット設定
+#strains = ['B.1.1.7','P.1','BA.2','BA.1.1','BA.1','B.1.617.2','B.1.351','B.1.1.529']
+strains = ['B.1.1.7']
+usher_dir = '../usher_output/'
+nmax = 1000000000
+nmax_per_strain = 1000000000000000
+
+# 入力データの読み込み
+names, lengths, base_HGVS_paths = imp.input(strains, usher_dir, nmax=nmax, nmax_per_strain=nmax_per_strain)
+bunpu_df = pd.read_csv("table_heatmap/250621/table_set/table_set.csv")
+codon_df = pd.read_csv('meta_data/codon_mutation4.csv')
+
+# %%
+# タイムステップを含む特徴データの抽出
+data = gfea.Feature_path_incl_ts(base_HGVS_paths, codon_df, bunpu_df)
+print(f"Feature data extracted for {len(data)} sequences")
+
+print(data[0][1])
+
+# タイムステップを考慮したデータ分割を実行
+train_x, train_y, val_x, val_y, test_x, test_y = mds.create_time_aware_split_modified(data, test_start, ylen, val_ratio)
+
+train_y_protein = mds.extract_feature_sequences(train_y, feature_idx)
+val_y_protein = mds.extract_feature_sequences(val_y, feature_idx)
+test_y_protein = {}
+for i in range(test_start, test_start + len(test_y)):
+    if i not in test_y_protein:
+        test_y_protein[i] = []
+    test_y_protein[i] = mds.extract_feature_sequences(test_y[i], feature_idx)
+
+train_x2, train_y2 = mds.add_x_by_y(train_x, train_y_protein)
+val_x2, val_y_protein2 = mds.add_x_by_y(val_x, val_y_protein)
+
+# %%
+print(len(train_x2), len(train_y2))
+print(len(val_x2), len(val_y_protein2))
+print(len(test_x), len(test_y_protein))
+
+# %%
+# 語彙を構築
+print("定義済み特徴量名から語彙を構築中（制限なし）...")
+feature_vocabs = mds.build_feature_vocabularies_from_definitions()
+
+print(f"\n総特徴量数: {len(feature_vocabs)}")
+print(f"総語彙サイズ: {sum(len(vocab) for vocab in feature_vocabs):,}")
+
+# 各特徴量の語彙サイズを詳細表示（カテゴリカル特徴量のみ）
+print("\n各特徴量の詳細:")
+feature_names = ['ts', 'base_mut', 'base_pos', 'amino_mut', 'amino_pos', 'mut_type', 'protein', 'codon_pos']
+for i, name in enumerate(feature_names):
+    print(f"  {name}: {len(feature_vocabs[i]):,} tokens")
+
+print(f"  count: 数値（語彙辞書なし）")
+
+# %%
+# データセットとデータローダーを作成
+print("データセットを作成中...")
+
+# 訓練データセット
+train_dataset = mds.MutationSequenceDataset(train_x2, train_y2, feature_vocabs)
+val_dataset = mds.MutationSequenceDataset(val_x2, val_y_protein2, feature_vocabs, train_dataset.max_length)
+
+# データローダー
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+print(f"訓練データセット: {len(train_dataset)} サンプル")
+print(f"検証データセット: {len(val_dataset)} サンプル")
+print(f"クラス数: {train_dataset.num_classes}")
+print(f"最大シーケンス長: {train_dataset.max_length}")
+print(f"クラス: {train_dataset.label_encoder.classes_}")
+
+# %%
+def debug_vocab_mismatch(train_loader, feature_vocabs):
+    print("=== 語彙とデータの不整合チェック ===")
+    
+    for batch_idx, batch in enumerate(train_loader):
+        categorical_data = batch['categorical']
+        print(f"バッチ {batch_idx}: 形状 {categorical_data.shape}")
+        
+        for feature_idx in range(categorical_data.shape[1]):
+            feature_data = categorical_data[:, feature_idx, :]
+            max_val = feature_data.max().item()
+            min_val = feature_data.min().item()
+            vocab_size = len(feature_vocabs[feature_idx])
+            
+            print(f"  特徴量{feature_idx}: min={min_val}, max={max_val}, vocab_size={vocab_size}")
+            
+            if max_val >= vocab_size:
+                print(f"    ❌ エラー: max_val({max_val}) >= vocab_size({vocab_size})")
+                # 実際のデータを確認
+                problematic_values = feature_data[feature_data >= vocab_size]
+                print(f"    問題のある値: {problematic_values[:10].tolist()}")
+                return feature_idx, max_val, vocab_size
+            elif max_val < 0:
+                print(f"    ❌ エラー: 負の値が検出されました")
+                return feature_idx, max_val, vocab_size
+        
+        if batch_idx >= 2:  # 最初の3バッチのみチェック
+            break
+    
+    print("✅ 全ての特徴量で語彙サイズの範囲内です")
+    return None, None, None
+
+# デバッグを実行
+debug_vocab_mismatch(train_loader, feature_vocabs)
+
+# %%
+
+# モデル、オプティマイザー、損失関数の初期化
+print("モデルを初期化中...")
+
+# モデルのインスタンス化
+model = mt.MutationTransformer(
+    feature_vocabs=feature_vocabs,
+    d_model=512,
+    nhead=16,
+    num_layers=4,
+    num_classes=train_dataset.num_classes,
+    max_seq_length=train_dataset.max_length
+).to(device)
+
+# 損失関数とオプティマイザー
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
+
+print(f"モデルのパラメータ数: {sum(p.numel() for p in model.parameters()):,}")
+print(f"クラス数: {train_dataset.num_classes}")
+print(f"最大シーケンス長: {train_dataset.max_length}")
+
+# %%
+# モデルの訓練
+best_val_acc = 0
+best_model_state = None
+train_losses = []
+val_losses = []
+train_accs = []
+val_accs = []
+epoch_times = []  # エポック時間を記録
+
+print("訓練を開始します...")
+training_start_time = time.time()  # 全体の開始時間
+
+try:
+    for epoch in range(num_epochs):
+        epoch_start_time = time.time()  # エポック開始時間
+        print(f"\nEpoch {epoch+1}/{num_epochs}")
+        
+        # 訓練
+        train_loss, train_acc = mt.train_epoch(model, train_loader, criterion, optimizer, device)
+        
+        # 検証
+        val_loss, val_acc, val_preds, val_targets = mt.evaluate(model, val_loader, criterion, device)
+        
+        # スケジューラを更新
+        scheduler.step(val_loss)
+        
+        # エポック終了時間計算
+        epoch_end_time = time.time()
+        epoch_duration = epoch_end_time - epoch_start_time
+        epoch_times.append(epoch_duration)
+        
+        # 結果を記録
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+        train_accs.append(train_acc)
+        val_accs.append(val_acc)
+        
+        # 時間情報を含む出力
+        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
+        print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+        print(f"Epoch Time: {epoch_duration:.2f}s ({epoch_duration/60:.1f}min)")
+        
+        # 累積時間と推定残り時間
+        total_elapsed = sum(epoch_times)
+        avg_epoch_time = total_elapsed / len(epoch_times)
+        remaining_epochs = num_epochs - (epoch + 1)
+        estimated_remaining = avg_epoch_time * remaining_epochs
+        
+        print(f"Elapsed: {total_elapsed:.1f}s ({total_elapsed/60:.1f}min), "
+              f"ETA: {estimated_remaining:.1f}s ({estimated_remaining/60:.1f}min)")
+        
+        # 最良モデルを保存
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_model_state = model.state_dict().copy()
+            print(f"新しい最良モデル (Val Acc: {val_acc:.4f})")
+
+    # 訓練完了時の統計
+    training_end_time = time.time()
+    total_training_time = training_end_time - training_start_time
+    
+    print(f"\n=== 訓練完了! ===")
+    print(f"最良検証精度: {best_val_acc:.4f}")
+    print(f"総訓練時間: {total_training_time:.1f}s ({total_training_time/60:.1f}min)")
+    print(f"平均エポック時間: {np.mean(epoch_times):.2f}s")
+    print(f"最速エポック: {min(epoch_times):.2f}s")
+    print(f"最遅エポック: {max(epoch_times):.2f}s")
+
+    # 最良モデルをロード
+    if best_model_state:
+        model.load_state_dict(best_model_state)
+        
+except Exception as e:
+    print(f"訓練中にエラーが発生しました: {e}")
+    import traceback
+    traceback.print_exc()
+
+# %%
+# 訓練結果の可視化
+plt.figure(figsize=(15, 5))
+
+plt.subplot(1, 3, 1)
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Val Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Training and Validation Loss')
+plt.legend()
+
+plt.subplot(1, 3, 2)
+plt.plot(train_accs, label='Train Acc')
+plt.plot(val_accs, label='Val Acc')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.title('Training and Validation Accuracy')
+plt.legend()
+
+plt.subplot(1, 3, 3)
+# 検証データでの最終評価
+val_loss, val_acc, val_preds, val_targets = mt.evaluate(model, val_loader, criterion, device)
+print(f"最終検証精度: {val_acc:.4f}")
+
+# クラス名とラベルの対応を確認
+class_names = train_dataset.label_encoder.classes_
+print(f"全クラス数: {len(class_names)}")
+print(f"検証データに含まれるユニークなクラス数: {len(set(val_targets))}")
+print(f"予測に含まれるユニークなクラス数: {len(set(val_preds))}")
+
+# 実際に使用されているクラスのみを取得
+unique_labels = sorted(set(val_targets) | set(val_preds))
+actual_class_names = [class_names[i] for i in unique_labels]
+
+print(f"実際に使用されているクラス: {actual_class_names}")
+
+# 分類レポート（実際に使用されているクラスのみ）
+print("\n分類レポート:")
+print(classification_report(
+    val_targets, 
+    val_preds, 
+    labels=unique_labels,
+    target_names=actual_class_names, 
+    zero_division=0
+))
+
+# 追加の統計情報
+print(f"\n詳細統計:")
+print(f"検証データのクラス分布:")
+unique_targets, target_counts = np.unique(val_targets, return_counts=True)
+for label, count in zip(unique_targets, target_counts):
+    class_name = class_names[label]
+    print(f"  {class_name}: {count}サンプル")
+
+plt.tight_layout()
+plt.show()
+
+# %%
+# クラス分布の詳細分析
+print("=== クラス分布の詳細分析 ===")
+
+# 訓練データのクラス分布
+train_labels = [train_dataset.encoded_labels[i] for i in range(len(train_dataset))]
+train_unique, train_counts = np.unique(train_labels, return_counts=True)
+
+print(f"\n訓練データのクラス分布:")
+for label, count in zip(train_unique, train_counts):
+    class_name = class_names[label]
+    print(f"  {class_name}: {count}サンプル")
+
+# 検証データのクラス分布
+val_labels = [val_dataset.encoded_labels[i] for i in range(len(val_dataset))]
+val_unique, val_counts = np.unique(val_labels, return_counts=True)
+
+print(f"\n検証データのクラス分布:")
+for label, count in zip(val_unique, val_counts):
+    class_name = class_names[label]
+    print(f"  {class_name}: {count}サンプル")
+
+# 訓練データにあって検証データにないクラス
+train_only = set(train_unique) - set(val_unique)
+if train_only:
+    print(f"\n訓練データにのみ存在するクラス:")
+    for label in sorted(train_only):
+        print(f"  {class_names[label]}")
+
+# 検証データにあって訓練データにないクラス
+val_only = set(val_unique) - set(train_unique)
+if val_only:
+    print(f"\n検証データにのみ存在するクラス:")
+    for label in sorted(val_only):
+        print(f"  {class_names[label]}")
+
+# %%
+print("タイムステップごとのテスト評価を開始します...")
+timestep_results = ev.evaluate_test_data_timestep(model, test_x, test_y, feature_vocabs, val_dataset, device, criterion)
+
+# 結果の再可視化（英語ラベル）
+print("Re-plotting results with English labels...")
+ev.plot_timestep_results(timestep_results)
+
+# 詳細分析の表示
+ev.print_detailed_timestep_analysis(timestep_results, train_dataset)
+
+# サマリーを表示
+ev.print_test_summary(timestep_results)
+
+# %%
+# 全ての保存処理を実行
+print("=== モデルと結果の保存を開始 ===")
+
+# 1. モデルの保存
+save.save_model_and_training_state(save_dir, best_model_state, model, optimizer, scheduler)
+
+# 2. 設定の保存
+save.save_hyperparameters_and_config(strains, nmax, nmax_per_strain, test_start, ylen, val_ratio,
+                                     feature_idx, train_dataset, val_dataset, model,
+                                     num_epochs, batch_size, train_losses, val_losses,
+                                     train_accs, val_accs, best_val_acc, feature_vocabs,
+                                     device, save_dir)
+
+# 3. 語彙辞書の保存
+save.save_vocabularies(save_dir, feature_vocabs, train_dataset)
+
+# 4. 訓練履歴の保存
+save.save_training_plots(train_losses, val_losses, train_accs, val_accs, scheduler, save_dir)
+
+# 5. テスト結果の保存
+save.save_test_results(timestep_results, save_dir)
+
+# 6. READMEの保存
+save.save_readme(strains, model, train_dataset, val_dataset,
+                  num_epochs, train_accs, val_accs, best_val_acc,
+                  feature_vocabs, save_dir)
+
+print(f"\n=== 全ての保存が完了しました ===")
+print(f"保存先: {os.path.abspath(save_dir)}")
+print(f"保存ファイル数: {len(os.listdir(save_dir))}")
+print("保存されたファイル:")
+for file in sorted(os.listdir(save_dir)):
+    file_path = os.path.join(save_dir, file)
+    size = os.path.getsize(file_path)
+    print(f"  {file}: {size:,} bytes")
+
+# 実験サマリーを保存
+save.save_experiment_summary(strains, train_dataset, val_dataset, model,
+                             num_epochs, train_accs, val_accs, best_val_acc,
+                             timestep_results, save_dir)
+
+print(f"\n=== 修正版での保存が完了しました ===")
+print(f"保存先: {os.path.abspath(save_dir)}")
+
+# 最終的なファイル確認
+if os.path.exists(save_dir):
+    files = os.listdir(save_dir)
+    print(f"保存ファイル数: {len(files)}")
+    print("保存されたファイル:")
+    for file in sorted(files):
+        file_path = os.path.join(save_dir, file)
+        if os.path.isfile(file_path):
+            size = os.path.getsize(file_path)
+            print(f"  {file}: {size:,} bytes")
+    
+    # 保存完了の確認
+    expected_files = [
+        "best_model.pth", "config.json", "feature_vocabularies.pkl", 
+        "label_encoder.pkl", "training_history.png", "test_results.json",
+        "README.md", "experiment_summary.json"
+    ]
+    
+    missing_files = [f for f in expected_files if f not in files]
+    if missing_files:
+        print(f"\n警告: 以下のファイルが見つかりません: {missing_files}")
+    else:
+        print(f"\n✅ 全ての重要ファイルが正常に保存されました")
+else:
+    print(f"❌ 保存ディレクトリが見つかりません: {save_dir}")
+
+# %%
+
+
+

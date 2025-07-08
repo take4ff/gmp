@@ -15,7 +15,7 @@ amino = ["A", "C", "D", "E", "F", "G", "H", "I", "K", "L",
           "M", "N", "P", "Q", "R", "S",
           "T", "V", "W", "Y", "*", "n"]
 amino_mut_name = [f"{a1}>{a2}" for a1 in amino for a2 in amino]
-amino_pos_name = [f"a_{i}" for i in range(1, 30001)]
+amino_pos_name = [f"a_{i}" for i in range(0, 30001)]
 
 mutation_type = ["syno", "non-syno"]
 

@@ -1,10 +1,14 @@
+# 下位互換
 # 機械学習ライブラリのインポート
 import torch
 import torch.nn as nn
 
 class MutationTransformer(nn.Module):
-    def __init__(self, feature_vocabs, d_model=256, nhead=8, num_layers=6, num_classes=36, max_seq_length=100):
+    def __init__(self, feature_vocabs, d_model=256, nhead=8, num_layers=6, num_classes=36, max_seq_length=100, feature_mask=None):
         super(MutationTransformer, self).__init__()
+
+        # 特徴量マスク（どの特徴量を使用するか）
+        self.feature_mask = feature_mask if feature_mask is not None else [True] * (len(feature_vocabs) + 1)
         
         self.d_model = d_model
         self.feature_vocabs = feature_vocabs
@@ -81,14 +85,20 @@ class MutationTransformer(nn.Module):
     def forward(self, categorical_x, count_x, padding_mask=None):
         batch_size, num_features, seq_len = categorical_x.shape
         
-        # カテゴリカル特徴量を埋め込み
+        # カテゴリカル特徴量を埋め込み（マスクを適用）
         embedded_features = []
         for i in range(self.num_categorical_features):
-            embedded = self.categorical_embeddings[i](categorical_x[:, i, :])
+            if self.feature_mask[i]:  # この特徴量を使用する場合
+                embedded = self.categorical_embeddings[i](categorical_x[:, i, :])
+            else:  # この特徴量を無効化する場合
+                embedded = torch.zeros_like(self.categorical_embeddings[i](categorical_x[:, i, :]))
             embedded_features.append(embedded)
         
-        # count特徴量を変換
-        count_embedded = self.count_projection(count_x.unsqueeze(-1))  # [batch, seq_len, embed_dim]
+        # count特徴量を変換（マスクを適用）
+        if self.feature_mask[-1]:  # count特徴量を使用する場合
+            count_embedded = self.count_projection(count_x.unsqueeze(-1))
+        else:  # count特徴量を無効化する場合
+            count_embedded = torch.zeros_like(self.count_projection(count_x.unsqueeze(-1)))
         embedded_features.append(count_embedded)
         
         # 全特徴量を連結

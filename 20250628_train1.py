@@ -12,15 +12,16 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
 import os
 from datetime import datetime
+import time
 
 # %%
 import importlib
 import module.input_mutation_path as imp
 import module.get_feature as gfea
-import module.mutation_transformer as mt
+import module.mutation_transformer2 as mt
 import module.make_dataset as mds
-import module.evaluation as ev
-import module.save as save
+import module.evaluation2 as ev
+import module.save2 as save
 
 # %%
 importlib.reload(imp)
@@ -32,19 +33,19 @@ importlib.reload(save)
 
 # %%
 # 保存ディレクトリの設定
-current_time = datetime.now().strftime("%H%M%S")
-save_dir = "../model/20250628_train1/"
-save_dir_time = os.path.join(save_dir, current_time)
-os.makedirs(save_dir_time, exist_ok=True)
+current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+folder_name = "../model/20250628_train1/"
+save_dir = os.path.join(folder_name, current_time)
+os.makedirs(save_dir, exist_ok=True)
 
 # %%
 num_epochs = 30
+batch_size = 32
 
 # タイムステップとラベルの長さ、検証データの割合を設定
 test_start=36
 ylen=1
 val_ratio=0.2
-batch_size = 32
 
 # タイムステップを含む特徴データの抽出
 feature_idx = 6
@@ -177,6 +178,9 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2, verbose=True)
 
+print(f"実際のd_model: {model.actual_d_model}")
+print(f"実際のnhead: {model.actual_nhead}")
+print(f"実際のnum_layers: {model.actual_num_layers}")
 print(f"モデルのパラメータ数: {sum(p.numel() for p in model.parameters()):,}")
 print(f"クラス数: {train_dataset.num_classes}")
 print(f"最大シーケンス長: {train_dataset.max_length}")
@@ -189,10 +193,14 @@ train_losses = []
 val_losses = []
 train_accs = []
 val_accs = []
+epoch_times = []  # エポック時間を記録
 
 print("訓練を開始します...")
+training_start_time = time.time()  # 全体の開始時間
+
 try:
     for epoch in range(num_epochs):
+        epoch_start_time = time.time()  # エポック開始時間
         print(f"\nEpoch {epoch+1}/{num_epochs}")
         
         # 訓練
@@ -204,14 +212,30 @@ try:
         # スケジューラを更新
         scheduler.step(val_loss)
         
+        # エポック終了時間計算
+        epoch_end_time = time.time()
+        epoch_duration = epoch_end_time - epoch_start_time
+        epoch_times.append(epoch_duration)
+        
         # 結果を記録
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         train_accs.append(train_acc)
         val_accs.append(val_acc)
         
+        # 時間情報を含む出力
         print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
         print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+        print(f"Epoch Time: {epoch_duration:.2f}s ({epoch_duration/60:.1f}min)")
+        
+        # 累積時間と推定残り時間
+        total_elapsed = sum(epoch_times)
+        avg_epoch_time = total_elapsed / len(epoch_times)
+        remaining_epochs = num_epochs - (epoch + 1)
+        estimated_remaining = avg_epoch_time * remaining_epochs
+        
+        print(f"Elapsed: {total_elapsed:.1f}s ({total_elapsed/60:.1f}min), "
+              f"ETA: {estimated_remaining:.1f}s ({estimated_remaining/60:.1f}min)")
         
         # 最良モデルを保存
         if val_acc > best_val_acc:
@@ -219,7 +243,16 @@ try:
             best_model_state = model.state_dict().copy()
             print(f"新しい最良モデル (Val Acc: {val_acc:.4f})")
 
-    print(f"\n訓練完了! 最良検証精度: {best_val_acc:.4f}")
+    # 訓練完了時の統計
+    training_end_time = time.time()
+    total_training_time = training_end_time - training_start_time
+    
+    print(f"\n=== 訓練完了! ===")
+    print(f"最良検証精度: {best_val_acc:.4f}")
+    print(f"総訓練時間: {total_training_time:.1f}s ({total_training_time/60:.1f}min)")
+    print(f"平均エポック時間: {np.mean(epoch_times):.2f}s")
+    print(f"最速エポック: {min(epoch_times):.2f}s")
+    print(f"最遅エポック: {max(epoch_times):.2f}s")
 
     # 最良モデルをロード
     if best_model_state:
