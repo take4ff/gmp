@@ -50,7 +50,7 @@ os.makedirs(save_dir, exist_ok=True)
 # モデルハイパーパラメータ
 model_config = {
     'num_epochs': 30,
-    'batch_size': 64,
+    'batch_size': 128,
     'd_model': 256,
     'nhead': 8,
     'num_layers': 4,
