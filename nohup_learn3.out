@@ -1,0 +1,184 @@
+WARNING: Genome length (29903) does not match target_length (30000). Truncating/padding.
+Loaded genome sequence tensor of shape: torch.Size([30000])
+[INFO] import: ../usher_output/B.1.1.7/0/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/1/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/2/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/3/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/4/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/5/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/6/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/7/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/8/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/9/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/10/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/11/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/12/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/13/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/14/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/15/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/16/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/17/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/18/mutation_paths_B.1.1.7.tsv
+[INFO] import: ../usher_output/B.1.1.7/19/mutation_paths_B.1.1.7.tsv
+[INFO] B.1.1.7のデータを読み込みました: 626393 サンプル
+[INFO] import: ../usher_output/P.1/0/mutation_paths_P.1.tsv
+[INFO] P.1のデータを読み込みました: 19724 サンプル
+[INFO] import: ../usher_output/BA.2/0/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/1/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/2/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/3/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/4/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/5/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/6/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/7/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/8/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/9/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/10/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/11/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/12/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/13/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/14/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/15/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/16/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/17/mutation_paths_BA.2.tsv
+[INFO] import: ../usher_output/BA.2/18/mutation_paths_BA.2.tsv
+[INFO] BA.2のデータを読み込みました: 559457 サンプル
+[INFO] import: ../usher_output/BA.1.1/0/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/1/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/2/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/3/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/4/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/5/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/6/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/7/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/8/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/9/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/10/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/11/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/12/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/13/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/14/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/15/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/16/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/17/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/18/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/19/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/20/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/21/mutation_paths_BA.1.1.tsv
+[INFO] import: ../usher_output/BA.1.1/22/mutation_paths_BA.1.1.tsv
+[INFO] BA.1.1のデータを読み込みました: 647075 サンプル
+[INFO] import: ../usher_output/BA.1/0/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/1/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/2/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/3/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/4/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/5/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/6/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/7/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/8/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/9/mutation_paths_BA.1.tsv
+[INFO] import: ../usher_output/BA.1/10/mutation_paths_BA.1.tsv
+[INFO] BA.1のデータを読み込みました: 309861 サンプル
+[INFO] import: ../usher_output/B.1.617.2/0/mutation_paths_B.1.617.2.tsv
+[INFO] import: ../usher_output/B.1.617.2/1/mutation_paths_B.1.617.2.tsv
+[INFO] import: ../usher_output/B.1.617.2/2/mutation_paths_B.1.617.2.tsv
+[INFO] B.1.617.2のデータを読み込みました: 84867 サンプル
+[INFO] import: ../usher_output/B.1.351/0/mutation_paths_B.1.351.tsv
+[INFO] B.1.351のデータを読み込みました: 8900 サンプル
+[INFO] import: ../usher_output/B.1.1.529/0/mutation_paths_B.1.1.529.tsv
+[INFO] B.1.1.529のデータを読み込みました: 425 サンプル
+[INFO] 全件読み込み完了: 2256702 サンプル
+元データ 2256702
+共起フィルタ 2256339
+ユニークパス 1175439
+keys: [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+--- PyTorchモデル学習開始 ---
+[12:05:54] Epoch 1/30, Train Loss: 11.5955, Val Loss: 11.5560, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[12:05:54] --- Epoch 1: Validation Position Accuracy improved to 0.0111. Saving model to ../model/20250719_learn2/20250723_114657/best_model.pth ---
+[12:05:54] --- Epoch 1 took 822.46 seconds ---
+[12:18:17] Epoch 2/30, Train Loss: 11.5360, Val Loss: 11.5543, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[12:18:17] --- Epoch 2 took 743.25 seconds ---
+[12:30:47] Epoch 3/30, Train Loss: 11.5309, Val Loss: 11.5512, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[12:30:47] --- Epoch 3 took 749.43 seconds ---
+[12:48:47] Epoch 4/30, Train Loss: 11.5279, Val Loss: 11.5514, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[12:48:47] --- Epoch 4 took 1080.90 seconds ---
+[13:04:44] Epoch 5/30, Train Loss: 11.5257, Val Loss: 11.5516, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[13:04:44] --- Epoch 5 took 956.20 seconds ---
+[13:17:01] Epoch 6/30, Train Loss: 11.5245, Val Loss: 11.5508, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[13:17:01] --- Epoch 6 took 737.21 seconds ---
+[13:29:15] Epoch 7/30, Train Loss: 11.5235, Val Loss: 11.5508, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[13:29:15] --- Epoch 7 took 734.61 seconds ---
+[13:41:57] Epoch 8/30, Train Loss: 11.5224, Val Loss: 11.5494, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[13:41:57] --- Epoch 8 took 761.90 seconds ---
+[13:54:28] Epoch 9/30, Train Loss: 11.5217, Val Loss: 11.5501, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[13:54:28] --- Epoch 9 took 750.68 seconds ---
+[14:07:41] Epoch 10/30, Train Loss: 11.5213, Val Loss: 11.5503, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[14:07:41] --- Epoch 10 took 792.92 seconds ---
+[14:21:00] Epoch 11/30, Train Loss: 11.5212, Val Loss: 11.5497, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[14:21:00] --- Epoch 11 took 798.92 seconds ---
+[14:33:33] Epoch 12/30, Train Loss: 11.5206, Val Loss: 11.5523, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[14:33:33] --- Epoch 12 took 753.56 seconds ---
+[14:46:46] Epoch 13/30, Train Loss: 11.5205, Val Loss: 11.5497, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[14:46:46] --- Epoch 13 took 792.68 seconds ---
+[14:59:28] Epoch 14/30, Train Loss: 11.5200, Val Loss: 11.5511, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[14:59:28] --- Epoch 14 took 762.07 seconds ---
+[15:12:02] Epoch 15/30, Train Loss: 11.5199, Val Loss: 11.5493, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[15:12:02] --- Epoch 15 took 753.42 seconds ---
+[15:24:57] Epoch 16/30, Train Loss: 11.5197, Val Loss: 11.5500, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[15:24:57] --- Epoch 16 took 774.98 seconds ---
+[15:38:11] Epoch 17/30, Train Loss: 11.5194, Val Loss: 11.5526, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[15:38:11] --- Epoch 17 took 794.01 seconds ---
+[15:51:02] Epoch 18/30, Train Loss: 11.5194, Val Loss: 11.5490, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[15:51:02] --- Epoch 18 took 771.27 seconds ---
+[16:04:24] Epoch 19/30, Train Loss: 11.5193, Val Loss: 11.5493, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[16:04:24] --- Epoch 19 took 802.44 seconds ---
+[16:18:38] Epoch 20/30, Train Loss: 11.5191, Val Loss: 11.5507, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[16:18:38] --- Epoch 20 took 853.84 seconds ---
+[16:31:40] Epoch 21/30, Train Loss: 11.5191, Val Loss: 11.5505, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[16:31:40] --- Epoch 21 took 781.55 seconds ---
+[16:45:06] Epoch 22/30, Train Loss: 11.5191, Val Loss: 11.5505, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[16:45:06] --- Epoch 22 took 806.31 seconds ---
+[16:58:06] Epoch 23/30, Train Loss: 11.5190, Val Loss: 11.5533, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[16:58:06] --- Epoch 23 took 780.30 seconds ---
+[17:10:56] Epoch 24/30, Train Loss: 11.5191, Val Loss: 11.5496, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[17:10:56] --- Epoch 24 took 769.40 seconds ---
+[17:24:14] Epoch 25/30, Train Loss: 11.5189, Val Loss: 11.5497, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[17:24:14] --- Epoch 25 took 798.26 seconds ---
+[17:37:19] Epoch 26/30, Train Loss: 11.5186, Val Loss: 11.5504, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[17:37:19] --- Epoch 26 took 784.95 seconds ---
+[17:50:33] Epoch 27/30, Train Loss: 11.5189, Val Loss: 11.5500, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[17:50:33] --- Epoch 27 took 794.02 seconds ---
+[18:02:55] Epoch 28/30, Train Loss: 11.5186, Val Loss: 11.5499, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[18:02:55] --- Epoch 28 took 742.33 seconds ---
+[18:15:33] Epoch 29/30, Train Loss: 11.5189, Val Loss: 11.5502, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[18:15:33] --- Epoch 29 took 758.21 seconds ---
+[18:28:34] Epoch 30/30, Train Loss: 11.5189, Val Loss: 11.5509, Val Orig Acc: 0.4870, Val Pos Acc: 0.0111, Val New Acc: 0.5727
+[18:28:34] --- Epoch 30 took 780.13 seconds ---
+
+--- テストデータでの評価 ---
+--- Loaded best model from ../model/20250719_learn2/20250723_114657/best_model.pth for evaluation ---
+[18:38:38] Test Strain 40: Avg Hits in Top-N: 0.15, Strict Match Acc: 0.1489, Recall: 0.1489, Precision: 0.1489, F1-score: 0.1489
+[18:45:36] Test Strain 41: Avg Hits in Top-N: 0.13, Strict Match Acc: 0.1325, Recall: 0.1325, Precision: 0.1325, F1-score: 0.1325
+[18:49:57] Test Strain 42: Avg Hits in Top-N: 0.12, Strict Match Acc: 0.1178, Recall: 0.1178, Precision: 0.1178, F1-score: 0.1178
+[18:52:24] Test Strain 43: Avg Hits in Top-N: 0.09, Strict Match Acc: 0.0929, Recall: 0.0929, Precision: 0.0929, F1-score: 0.0929
+[18:53:59] Test Strain 44: Avg Hits in Top-N: 0.18, Strict Match Acc: 0.1810, Recall: 0.1810, Precision: 0.1810, F1-score: 0.1810
+[18:54:52] Test Strain 45: Avg Hits in Top-N: 0.09, Strict Match Acc: 0.0896, Recall: 0.0896, Precision: 0.0896, F1-score: 0.0896
+[18:58:00] Test Strain 46: Avg Hits in Top-N: 0.21, Strict Match Acc: 0.2059, Recall: 0.2059, Precision: 0.2059, F1-score: 0.2059
+[19:00:01] Test Strain 47: Avg Hits in Top-N: 0.27, Strict Match Acc: 0.2667, Recall: 0.2667, Precision: 0.2667, F1-score: 0.2667
+[19:01:17] Test Strain 48: Avg Hits in Top-N: 0.11, Strict Match Acc: 0.1146, Recall: 0.1146, Precision: 0.1146, F1-score: 0.1146
+[19:01:58] Test Strain 49: Avg Hits in Top-N: 0.18, Strict Match Acc: 0.1765, Recall: 0.1765, Precision: 0.1765, F1-score: 0.1765
+[19:02:13] Test Strain 50: Avg Hits in Top-N: 0.11, Strict Match Acc: 0.1111, Recall: 0.1111, Precision: 0.1111, F1-score: 0.1111
+[19:02:44] Test Strain 51: Avg Hits in Top-N: 0.12, Strict Match Acc: 0.1250, Recall: 0.1250, Precision: 0.1250, F1-score: 0.1250
+[19:02:56] Test Strain 52: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:01] Test Strain 53: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:06] Test Strain 54: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:14] Test Strain 55: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:18] Test Strain 56: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:20] Test Strain 57: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:23] Test Strain 58: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:26] Test Strain 59: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:28] Test Strain 60: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:30] Test Strain 61: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:33] Test Strain 62: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+[19:03:35] Test Strain 63: Avg Hits in Top-N: 0.00, Strict Match Acc: 0.0000, Recall: 0.0000, Precision: 0.0000, F1-score: 0.0000
+{40: {'recall': 0.1489071038251366, 'precision': 0.1489071038251366, 'f1_score': 0.1489071038251366, 'average_hit_count_in_top_n': 0.1489071038251366, 'strict_match_accuracy': 0.1489071038251366}, 41: {'recall': 0.13253012048192772, 'precision': 0.13253012048192772, 'f1_score': 0.13253012048192772, 'average_hit_count_in_top_n': 0.13253012048192772, 'strict_match_accuracy': 0.13253012048192772}, 42: {'recall': 0.1178343949044586, 'precision': 0.1178343949044586, 'f1_score': 0.1178343949044586, 'average_hit_count_in_top_n': 0.1178343949044586, 'strict_match_accuracy': 0.1178343949044586}, 43: {'recall': 0.09289617486338798, 'precision': 0.09289617486338798, 'f1_score': 0.09289617486338798, 'average_hit_count_in_top_n': 0.09289617486338798, 'strict_match_accuracy': 0.09289617486338798}, 44: {'recall': 0.18095238095238095, 'precision': 0.18095238095238095, 'f1_score': 0.18095238095238095, 'average_hit_count_in_top_n': 0.18095238095238095, 'strict_match_accuracy': 0.18095238095238095}, 45: {'recall': 0.08955223880597014, 'precision': 0.08955223880597014, 'f1_score': 0.08955223880597014, 'average_hit_count_in_top_n': 0.08955223880597014, 'strict_match_accuracy': 0.08955223880597014}, 46: {'recall': 0.20588235294117646, 'precision': 0.20588235294117646, 'f1_score': 0.20588235294117646, 'average_hit_count_in_top_n': 0.20588235294117646, 'strict_match_accuracy': 0.20588235294117646}, 47: {'recall': 0.26666666666666666, 'precision': 0.26666666666666666, 'f1_score': 0.26666666666666666, 'average_hit_count_in_top_n': 0.26666666666666666, 'strict_match_accuracy': 0.26666666666666666}, 48: {'recall': 0.11458333333333333, 'precision': 0.11458333333333333, 'f1_score': 0.11458333333333333, 'average_hit_count_in_top_n': 0.11458333333333333, 'strict_match_accuracy': 0.11458333333333333}, 49: {'recall': 0.17647058823529413, 'precision': 0.17647058823529413, 'f1_score': 0.17647058823529413, 'average_hit_count_in_top_n': 0.17647058823529413, 'strict_match_accuracy': 0.17647058823529413}, 50: {'recall': 0.1111111111111111, 'precision': 0.1111111111111111, 'f1_score': 0.1111111111111111, 'average_hit_count_in_top_n': 0.1111111111111111, 'strict_match_accuracy': 0.1111111111111111}, 51: {'recall': 0.125, 'precision': 0.125, 'f1_score': 0.125, 'average_hit_count_in_top_n': 0.125, 'strict_match_accuracy': 0.125}, 52: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 53: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 54: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 55: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 56: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 57: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 58: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 59: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 60: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 61: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 62: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}, 63: {'recall': 0.0, 'precision': 0.0, 'f1_score': 0.0, 'average_hit_count_in_top_n': 0.0, 'strict_match_accuracy': 0.0}}
