@@ -14,7 +14,7 @@ import sys
 
 # モデル保存用のディレクトリとパス
 current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-folder_name = "../model/20250719_learn2/"   #learn3に修正すべき　20250723_114657の移動
+folder_name = "../model/20250719_learn3/"
 MODEL_SAVE_DIR = os.path.join(folder_name, current_time)
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 BEST_MODEL_PATH = os.path.join(MODEL_SAVE_DIR, 'best_model.pth')
