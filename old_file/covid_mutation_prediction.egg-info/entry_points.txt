@@ -1,2 +1,0 @@
-[console_scripts]
-covid-mutation-predict = covid_mutation_prediction.main:main
