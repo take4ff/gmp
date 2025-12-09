@@ -1,3 +1,5 @@
+# git rm -r --cached FolderName
 /meta_data/sequences-241017.csv
-/output/
+/outputs/
 /old_file/
+/wandb/
