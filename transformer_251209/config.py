@@ -58,10 +58,19 @@ TARGET_LEN = 1
 TRAIN_MAX = 40 # TS:1-40を学習に利用(TRAIN_MAX > MAX_SEQ_LEN + TARGET_LEN)
 VALID_NUM = 3
 MAX_CO_OCCURRENCE = 20
-MAX_NUM = None
-MAX_NUM_PER_STRAIN = None
-MAX_STRAIN_NUM = None
 VALID_RATIO = 0.2
+
+# --- サンプリングモード設定 ---
+# 'proportional': 比率サンプリング (MAX_NUM件を各株の比率に応じて抽出)
+# 'fixed_per_strain': 株数×サンプル数制限 (MAX_STRAIN_NUM株からMAX_NUM_PER_STRAIN件ずつ)
+SAMPLING_MODE = 'fixed_per_strain'
+
+# モードA: 比率サンプリング用 (SAMPLING_MODE = 'proportional')
+MAX_NUM = 10000  # 合計サンプル数（各株から比率に応じて抽出）
+
+# モードB: 株数×サンプル数制限用 (SAMPLING_MODE = 'fixed_per_strain')
+MAX_NUM_PER_STRAIN = 50   # 各株からの最大サンプル数
+MAX_STRAIN_NUM = 100      # 使用する株数
 
 # --- ボキャブラリー設定 ---
 BASE_VOCABS = {'A':1, 'T':2, 'C':3, 'G':4, 'N':5, 'n':6, 'PAD':0}
@@ -107,7 +116,7 @@ LOCAL_CONTEXT_KERNEL_SIZE = 7
 # --- 訓練設定 ---
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
-EPOCHS = 20
+EPOCHS = 5
 TOP_K_EVAL = 1 # Top-5でのRecallなども見たい場合はここを変更
 
 LOSS_WEIGHT_REGION = 0.3
@@ -126,6 +135,7 @@ SCHEDULER_ETA_MIN = 1e-6  # 最小学習率
 
 # Weights & Biases: 実験可視化 (Trueで適用)
 USE_WANDB = True
+WANDB_OFFLINE = True  # Trueにするとオフラインモード (長時間処理時の接続切れ対策)
 WANDB_PROJECT_NAME = "viral-mutation-transformer"
 WANDB_RUN_NAME = None # Noneなら自動生成 (例: "run_20251121_...")
 

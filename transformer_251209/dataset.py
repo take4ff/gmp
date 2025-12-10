@@ -109,17 +109,163 @@ def filter_num_per_strain(df, max_num_per_strain):
     force_print(f"[INFO] Samples after filtering: {len(filtered_df)}")
     return filtered_df
 
+def sample_proportionally(df, target_num):
+    """
+    各株の比率を維持しながら指定サンプル数を抽出する（比率サンプリング）
+    
+    Args:
+        df: データフレーム（'strain'列を含む）
+        target_num: 目標サンプル数
+    
+    Returns:
+        サンプリング後のDataFrame
+    """
+    total = len(df)
+    if total <= target_num:
+        force_print(f"[INFO] 比率サンプリング: 全件({total})がtarget_num({target_num})以下のため、全件を使用")
+        return df
+    
+    force_print(f"[INFO] 比率サンプリング: {total}件から{target_num}件を抽出（各株の比率を維持）")
+    
+    # 各株のカウントと比率
+    strain_counts = df['strain'].value_counts()
+    
+    # 各株から抽出するサンプル数を計算（比率に基づく）
+    strain_samples = {}
+    remaining = target_num
+    
+    # 小さい株から順に処理（端数処理のため）
+    sorted_strains = strain_counts.sort_values().index.tolist()
+    
+    for i, strain in enumerate(sorted_strains):
+        count = strain_counts[strain]
+        # 残りの株数
+        remaining_strains = len(sorted_strains) - i
+        
+        # この株から抽出する比率
+        ratio = count / strain_counts[sorted_strains[i:]].sum()
+        samples_from_this = min(count, max(1, int(remaining * ratio)))
+        
+        # 最後の株は残り全てを割り当て
+        if i == len(sorted_strains) - 1:
+            samples_from_this = min(count, remaining)
+        
+        strain_samples[strain] = samples_from_this
+        remaining -= samples_from_this
+    
+    # 各株からサンプリング
+    sampled_dfs = []
+    for strain, n_samples in strain_samples.items():
+        strain_df = df[df['strain'] == strain]
+        if len(strain_df) > n_samples:
+            sampled_df = strain_df.sample(n=n_samples, random_state=config.SEED)
+        else:
+            sampled_df = strain_df
+        sampled_dfs.append(sampled_df)
+    
+    result_df = pd.concat(sampled_dfs).reset_index(drop=True)
+    force_print(f"[INFO] 比率サンプリング完了: {len(result_df)}件, {len(strain_samples)}株")
+    
+    return result_df
+
 def info_import(paths, lengths, over_num):
     force_print(f"[INFO] 全件読み込み完了(共起数フィルタ適用後): {len(paths)} サンプル")
     force_print(f"[INFO] 共起数が最大値を超えたため除外されたサンプル数: {over_num}")
 
-    force_print("\n[INFO] シーケンス長ごとのサンプル数:")
+    print("\n[INFO] シーケンス長ごとのサンプル数:")
     if lengths:
         length_counts = pd.Series(lengths).value_counts().sort_index()
         with pd.option_context('display.max_rows', None):
-            force_print(length_counts)
+            print(length_counts)
     else:
-        force_print("データがありません。")
+        print("データがありません。")
+    
+    # 共起数別の統計
+    if paths:
+        max_cooccur_per_sample = []
+        for path in paths:
+            max_co = max(len(mutations.split(',')) for mutations in path)
+            max_cooccur_per_sample.append(max_co)
+        
+        print("\n[INFO] 最大共起数ごとのサンプル数:")
+        cooccur_counts = pd.Series(max_cooccur_per_sample).value_counts().sort_index()
+        with pd.option_context('display.max_rows', None):
+            print(cooccur_counts)
+
+
+def print_strength_distribution(strains, strain_to_strength):
+    """強度スコアのカテゴリ別サンプル数を表示（動的閾値、1刻みのヒストグラム付き）"""
+    import math
+    from collections import Counter
+    
+    # 全サンプルのスコアを収集
+    scores = [strain_to_strength.get(strain, 0.0) for strain in strains]
+    
+    if not scores:
+        force_print("[INFO] サンプルがありません")
+        return
+    
+    # 最小値・最大値から動的に閾値を計算（整数に丸める）
+    min_score = min(scores)
+    max_score = max(scores)
+    score_range = max_score - min_score
+    
+    # 3等分の閾値を整数で計算
+    low_max = int(min_score + score_range / 3) + 1  # 切り上げ気味
+    med_max = int(min_score + 2 * score_range / 3) + 1  # 切り上げ気味
+    
+    low_count = 0
+    med_count = 0
+    high_count = 0
+    
+    # 1刻みのヒストグラム用
+    score_bins = Counter()
+    
+    for score in scores:
+        if score < low_max:
+            low_count += 1
+        elif score < med_max:
+            med_count += 1
+        else:
+            high_count += 1
+        
+        # 1刻みでビン化（例: 5.3 → 5）
+        bin_key = int(score)
+        score_bins[bin_key] += 1
+    
+    print(f"\n[INFO] 強度スコア別サンプル数 (動的閾値: Low<{low_max}, Medium<{med_max}, High≥{med_max}):")
+    print(f"  スコア範囲: {min_score:.1f} ~ {max_score:.1f}")
+    print(f"  Low: {low_count}")
+    print(f"  Medium: {med_count}")
+    print(f"  High: {high_count}")
+    
+    # 1刻みのヒストグラム表示
+    print(f"\n[INFO] 強度スコア分布 (1刻み):")
+    for bin_key in sorted(score_bins.keys()):
+        count = score_bins[bin_key]
+        print(f"  {bin_key}-{bin_key+1}: {count}")
+
+
+def compute_dynamic_thresholds(strain_to_strength):
+    """
+    全データの強度スコアから動的閾値を計算
+    
+    Returns:
+        (low_max, med_max): 整数の閾値
+    """
+    if not strain_to_strength:
+        return 3, 5  # デフォルト値
+    
+    scores = list(strain_to_strength.values())
+    min_score = min(scores)
+    max_score = max(scores)
+    score_range = max_score - min_score
+    
+    # 3等分の閾値を整数で計算
+    low_max = int(min_score + score_range / 3) + 1
+    med_max = int(min_score + 2 * score_range / 3) + 1
+    
+    return low_max, med_max
 
 def import_strains(usher_dir, max_num=None, max_cooccur=10):
     if not os.path.exists(usher_dir):
@@ -632,6 +778,9 @@ def prepare_all_data():
     """
     全データの読み込み・前処理・分割を一括で行う
     
+    強度スコアは全データベースから計算され、キャッシュ利用時も
+    最新のスコアが適用される。
+    
     Returns:
         train, valid, test: 分割されたデータセット
         data_info: {train_min_len, train_max_len, val_min_len, val_max_len, test_min_len, test_max_len}
@@ -648,7 +797,35 @@ def prepare_all_data():
         'test_min_len': 0, 'test_max_len': 0
     }
     
-    # キャッシュ確認
+    # =================================================================
+    # Step 1: 全件読み込み（キャッシュ有無に関わらず実行）
+    # =================================================================
+    force_print("--- Loading All Data for Statistics and Strength Calculation ---")
+    
+    # 生データのインポート（全件読み込み）
+    all_names, all_lengths, all_paths, all_strains = import_strains(
+        usher_dir=config.DATA_BASE_DIR, 
+        max_num=None,  # 全件読み込み
+        max_cooccur=config.MAX_CO_OCCURRENCE
+    )
+    
+    # 全データで強度スコアを計算
+    force_print("[INFO] Computing strain strength scores from ALL data...")
+    strain_to_strength = compute_strain_strength(all_strains)
+    
+    # 動的閾値を計算して data_info に追加
+    low_max, med_max = compute_dynamic_thresholds(strain_to_strength)
+    data_info['strength_low_max'] = low_max
+    data_info['strength_med_max'] = med_max
+    force_print(f"[INFO] 動的閾値を設定: Low<{low_max}, Medium<{med_max}, High≥{med_max}")
+    
+    # 全データの統計を表示
+    print("\n[INFO] === 全データベースの強度スコア分布 ===")
+    print_strength_distribution(all_strains, strain_to_strength)
+    
+    # =================================================================
+    # Step 2: キャッシュ確認・データ取得
+    # =================================================================
     cached_data = None
     if not config.FORCE_REPROCESS:
         cached_data = load_cache(cache_path)
@@ -656,6 +833,12 @@ def prepare_all_data():
     if cached_data:
         train, valid, test = cached_data
         force_print("[INFO] Loaded split datasets from cache.")
+        
+        # キャッシュから読み込んだデータの強度スコアを全データベースのものに更新
+        force_print("[INFO] Updating strength scores with global database values...")
+        train = _update_strength_scores(train, strain_to_strength)
+        valid = _update_strength_scores(valid, strain_to_strength)
+        test = _update_strength_scores(test, strain_to_strength)
         
         # 長さ情報の取得
         if len(train) > 0:
@@ -667,9 +850,22 @@ def prepare_all_data():
         if len(test) > 0:
             test_lens = [item[2] for item in test]
             data_info['test_min_len'], data_info['test_max_len'] = min(test_lens), max(test_lens)
+        
+        # 使用データの統計を表示
+        train_strains = [item[4] for item in train]
+        valid_strains = [item[4] for item in valid]
+        test_strains = [item[4] for item in test]
+        
+        print("\n[INFO] === Train データの強度スコア分布 ===")
+        print_strength_distribution(train_strains, strain_to_strength)
+        print("\n[INFO] === Validation データの強度スコア分布 ===")
+        print_strength_distribution(valid_strains, strain_to_strength)
+        print("\n[INFO] === Test データの強度スコア分布 ===")
+        print_strength_distribution(test_strains, strain_to_strength)
+        
     else:
         # フルプロセス実行
-        force_print("--- Loading and Preprocessing Data ---")
+        force_print("--- Processing Features (no cache) ---")
         
         # 参照データのロード
         df_freq = pd.read_csv(config.Freq_csv)
@@ -677,19 +873,24 @@ def prepare_all_data():
         df_codon = pd.read_csv(config.Codon_csv)
         df_pam250 = pd.read_csv(config.PAM250_csv, index_col=0)
         
-        # 生データのインポート
-        names, lengths, mutation_paths, strains = import_strains(
-            usher_dir=config.DATA_BASE_DIR, 
-            max_num=config.MAX_NUM, 
-            max_cooccur=config.MAX_CO_OCCURRENCE
-        )
+        # フィルタリング（重複除去）
+        df_unique = filter_unique(all_names, all_lengths, all_paths, all_strains)
         
-        # フィルタリング
-        df_unique = filter_unique(names, lengths, mutation_paths, strains)
-        if config.MAX_STRAIN_NUM is not None:
-            df_unique = sort_strain_by_num_and_filter_strain(df_unique, config.MAX_STRAIN_NUM)
-        if config.MAX_NUM_PER_STRAIN is not None:
-            df_unique = filter_num_per_strain(df_unique, config.MAX_NUM_PER_STRAIN)
+        # サンプリングモードに基づくフィルタリング
+        sampling_mode = getattr(config, 'SAMPLING_MODE', 'proportional')
+        force_print(f"[INFO] サンプリングモード: {sampling_mode}")
+        
+        if sampling_mode == 'proportional':
+            # モードA: 比率サンプリング
+            df_unique = sample_proportionally(df_unique, config.MAX_NUM)
+        elif sampling_mode == 'fixed_per_strain':
+            # モードB: 株数×サンプル数制限
+            if config.MAX_STRAIN_NUM is not None:
+                df_unique = sort_strain_by_num_and_filter_strain(df_unique, config.MAX_STRAIN_NUM)
+            if config.MAX_NUM_PER_STRAIN is not None:
+                df_unique = filter_num_per_strain(df_unique, config.MAX_NUM_PER_STRAIN)
+        else:
+            force_print(f"[WARNING] 不明なサンプリングモード: {sampling_mode}. 全件を使用します。")
         
         # 訓練/評価/テストへの分割
         train_df, valid_df, test_df = split_data_by_length(
@@ -724,12 +925,15 @@ def prepare_all_data():
             df_codon, df_freq, df_dissimilarity, df_pam250
         )
         
-        # 強度スコアの計算
-        force_print("[INFO] Computing strain strength scores...")
-        all_strains = train_df['strain'].tolist() + valid_df['strain'].tolist() + test_df['strain'].tolist()
-        strain_to_strength = compute_strain_strength(all_strains)
+        # 強度スコア別の分布を表示
+        force_print("\n[INFO] === Train データの強度スコア分布 ===")
+        print_strength_distribution(train_df['strain'].tolist(), strain_to_strength)
+        force_print("\n[INFO] === Validation データの強度スコア分布 ===")
+        print_strength_distribution(valid_df['strain'].tolist(), strain_to_strength)
+        force_print("\n[INFO] === Test データの強度スコア分布 ===")
+        print_strength_distribution(test_df['strain'].tolist(), strain_to_strength)
         
-        # 入力(X)と正解(Y)への分割
+        # 入力(X)と正解(Y)への分割（全データベースのstrain_to_strengthを使用）
         force_print("[INFO] Separating X and Y...")
         train = separate_XY(train_feats, train_df['original_len'].tolist(), train_df['path'].tolist(), 
                             train_df['strain'].tolist(), strain_to_strength,
@@ -745,3 +949,22 @@ def prepare_all_data():
         save_cache([train, valid, test], cache_path)
     
     return train, valid, test, data_info
+
+
+def _update_strength_scores(data_list, strain_to_strength):
+    """
+    データリスト内の強度スコアを全データベースのものに更新
+    
+    Args:
+        data_list: list of (x, y_targets, original_len, raw_path, strain, strength_score)
+        strain_to_strength: 全データベースから計算した {strain: strength_score}
+    
+    Returns:
+        更新されたdata_list
+    """
+    updated_list = []
+    for item in data_list:
+        x, y_targets, original_len, raw_path, strain, old_score = item
+        new_score = strain_to_strength.get(strain, old_score)
+        updated_list.append((x, y_targets, original_len, raw_path, strain, new_score))
+    return updated_list

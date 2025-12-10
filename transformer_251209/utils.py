@@ -8,6 +8,7 @@ import hashlib
 import time
 import pandas as pd
 import json
+from tabulate import tabulate
 from . import config
 
 # ==========================================
@@ -20,11 +21,11 @@ def force_print(message):
 
 def print_config():
     """現在の設定値を表示"""
-    force_print("Current Configuration:")
+    force_print("Current Configurations:")
     for attr in dir(config):
         if not attr.startswith("__"):
             value = getattr(config, attr)
-            force_print(f"  {attr}: {value}")
+            print(f"  {attr}: {value}")
 
 def print_sample_structure(sample, sample_idx=0):
     """
@@ -57,7 +58,7 @@ def print_sample_structure(sample, sample_idx=0):
     
     # 入力特徴量 (CSV形式)
     print(f"\n# 入力特徴量 (X)")
-    print("# cat: bef=塩基前, pos=塩基位置, aft=塩基後, c_pos=コドン位置, aa_b=AA前, p_pos=タンパク質位置, aa_a=AA後, region=領域")
+    print("# cat: bef=塩基前, pos=塩基位置, aft=塩基後, c_pos=コドン位置, aa_b=アミノ酸前, p_pos=タンパク質位置, aa_a=アミノ酸後, region=領域")
     print("# num: hydro=疎水性変化, size=サイズ変化, charge=電荷変化, dissim=類似度, pam=PAM250, freq=頻度")
     
     # ヘッダ
@@ -85,14 +86,13 @@ def print_sample_structure(sample, sample_idx=0):
 def get_config_hash():
     """config設定からハッシュを生成（設定変更時にキャッシュを無効化するため）"""
     try:
+        sampling_mode = getattr(config, 'SAMPLING_MODE', 'proportional')
+        
         relevant_configs = [
             str(config.MAX_SEQ_LEN),        # 入力系列長
             str(config.TRAIN_MAX),          # 学習データの期間
             str(config.VALID_NUM),          # 評価期間
             str(config.DATA_BASE_DIR),      # データパス
-            str(config.MAX_NUM),            # 読み込み上限
-            str(config.MAX_STRAIN_NUM),     # 株数上限
-            str(config.MAX_NUM_PER_STRAIN), # 株ごとのサンプル上限
             str(config.TARGET_LEN),         # 予測ターゲット長
             str(config.MAX_CO_OCCURRENCE),  # 共起上限
             str(config.VALID_RATIO),        # 分割比率
@@ -100,7 +100,16 @@ def get_config_hash():
             str(config.NUM_FEATURE_STRING), # 特徴量数
             str(config.NUM_CHEM_FEATURES),  # 特徴量数
             str(config.ABLATION_MASKS),     # マスク設定 (データの中身が変わるため)
+            str(sampling_mode),             # サンプリングモード
         ]
+        
+        # サンプリングモードに応じたパラメータを追加
+        if sampling_mode == 'proportional':
+            relevant_configs.append(str(config.MAX_NUM))  # 比率サンプリング用
+        elif sampling_mode == 'fixed_per_strain':
+            relevant_configs.append(str(config.MAX_STRAIN_NUM))     # 株数上限
+            relevant_configs.append(str(config.MAX_NUM_PER_STRAIN)) # 株ごとのサンプル上限
+        
         config_string = "_".join(relevant_configs)
         return hashlib.md5(config_string.encode('utf-8')).hexdigest()
     except Exception as e:
@@ -358,7 +367,7 @@ def plot_metrics_by_timestep(metrics_by_ts, output_dir, prefix="val"):
         ax.plot(timesteps, [metrics_by_ts[t]['protein_pos_precision'] for t in timesteps], '^-', label='Protein Pos', color=colors['protein'])
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Precision (%)')
-        ax.set_title('Precision (適合率)')
+        ax.set_title('Precision')
         ax.legend()
         ax.grid(True, alpha=0.3)
         
@@ -369,7 +378,7 @@ def plot_metrics_by_timestep(metrics_by_ts, output_dir, prefix="val"):
         ax.plot(timesteps, [metrics_by_ts[t]['protein_pos_recall'] for t in timesteps], '^-', label='Protein Pos', color=colors['protein'])
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Recall (%)')
-        ax.set_title('Recall (再現率)')
+        ax.set_title('Recall')
         ax.legend()
         ax.grid(True, alpha=0.3)
         
@@ -423,7 +432,7 @@ def plot_category_metrics(cat_metrics, output_dir, prefix="val"):
         categories = ['low', 'medium', 'high']
         colors = {'low': '#e74c3c', 'medium': '#f39c12', 'high': '#27ae60'}
         
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        fig, axes = plt.subplots(3, 2, figsize=(14, 15))
         fig.suptitle(f'{prefix.upper()} - Metrics by Strength Category', fontsize=14)
         
         # 1. Region Hit Rate by Category
@@ -437,19 +446,30 @@ def plot_category_metrics(cat_metrics, output_dir, prefix="val"):
         ax.legend()
         ax.grid(True, alpha=0.3)
         
-        # 2. Position Hit Rate by Category
+        # 2. Base Position Hit Rate by Category
         ax = axes[0, 1]
         for cat in categories:
             values = [cat_metrics[t][cat]['position_hit_rate'] for t in timesteps]
             ax.plot(timesteps, values, 's-', label=cat.capitalize(), color=colors[cat])
         ax.set_xlabel('Timestep')
         ax.set_ylabel('Hit Rate (%)')
-        ax.set_title('Position Hit Rate by Category')
+        ax.set_title('Base Position Hit Rate by Category')
         ax.legend()
         ax.grid(True, alpha=0.3)
         
-        # 3. Strength MAE by Category
+        # 3. Protein Position Hit Rate by Category
         ax = axes[1, 0]
+        for cat in categories:
+            values = [cat_metrics[t][cat]['protein_pos_hit_rate'] for t in timesteps]
+            ax.plot(timesteps, values, '^-', label=cat.capitalize(), color=colors[cat])
+        ax.set_xlabel('Timestep')
+        ax.set_ylabel('Hit Rate (%)')
+        ax.set_title('Protein Position Hit Rate by Category')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # 4. Strength MAE by Category
+        ax = axes[1, 1]
         for cat in categories:
             values = [cat_metrics[t][cat]['strength_mae'] for t in timesteps]
             ax.plot(timesteps, values, 'D-', label=cat.capitalize(), color=colors[cat])
@@ -459,8 +479,8 @@ def plot_category_metrics(cat_metrics, output_dir, prefix="val"):
         ax.legend()
         ax.grid(True, alpha=0.3)
         
-        # 4. Sample Distribution (Stacked Bar)
-        ax = axes[1, 1]
+        # 5. Sample Distribution (Stacked Bar)
+        ax = axes[2, 0]
         width = 0.6
         bottom = np.zeros(len(timesteps))
         for cat in categories:
@@ -472,6 +492,10 @@ def plot_category_metrics(cat_metrics, output_dir, prefix="val"):
         ax.set_title('Sample Distribution by Category')
         ax.legend()
         ax.grid(True, alpha=0.3, axis='y')
+        
+        # 6. 空のプロット（または将来の拡張用）
+        ax = axes[2, 1]
+        ax.axis('off')
         
         plt.tight_layout()
         path = os.path.join(output_dir, f'{prefix}_category_plot.png')
@@ -488,11 +512,17 @@ def plot_category_metrics(cat_metrics, output_dir, prefix="val"):
 
 def init_wandb():
     """WandB初期化"""
+    import os
     import types
     from datetime import datetime
     try:
         import wandb
         if config.USE_WANDB:
+            # オフラインモード設定
+            if getattr(config, 'WANDB_OFFLINE', False):
+                os.environ["WANDB_MODE"] = "offline"
+                force_print("[INFO] WandB: オフラインモードで起動")
+            
             config_dict = {
                 k: v for k, v in vars(config).items() 
                 if not k.startswith('__') and not isinstance(v, types.ModuleType)
@@ -507,18 +537,69 @@ def init_wandb():
         force_print("[WARNING] wandb not available")
     return None
 
+
+def finish_wandb(wandb_module):
+    """
+    WandBセッションを終了し、オフラインモードの場合は自動でsyncを実行
+    
+    Args:
+        wandb_module: init_wandb()で返されたwandbモジュール
+    """
+    if wandb_module is None or not config.USE_WANDB:
+        return
+    
+    try:
+        import subprocess
+        import os
+        
+        # 現在のランのディレクトリを取得
+        run_dir = None
+        if wandb_module.run is not None:
+            run_dir = wandb_module.run.dir
+        
+        # セッションを終了
+        wandb_module.finish()
+        force_print("[INFO] WandB: セッション終了")
+        
+        # オフラインモードの場合は自動sync
+        if getattr(config, 'WANDB_OFFLINE', False) and run_dir:
+            # run_dirは .../wandb/run-xxx/files なので、親ディレクトリを取得
+            run_path = os.path.dirname(run_dir)  # wandb/run-xxx
+            
+            force_print(f"[INFO] WandB: オフラインデータを同期中... ({run_path})")
+            
+            try:
+                result = subprocess.run(
+                    ['wandb', 'sync', run_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=300  # 5分タイムアウト
+                )
+                if result.returncode == 0:
+                    force_print("[INFO] WandB: 同期完了")
+                else:
+                    force_print(f"[WARNING] WandB sync failed: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                force_print("[WARNING] WandB sync timed out (5 min). Run manually: wandb sync ./wandb/run-*")
+            except Exception as e:
+                force_print(f"[WARNING] WandB sync error: {e}")
+                
+    except Exception as e:
+        force_print(f"[WARNING] WandB finish error: {e}")
+
 # ==========================================
 # 6. 階層的評価レポート (4部構成)
 # ==========================================
 
 
-def print_combined_report(val_details, test_details):
+def print_combined_report(val_details, test_details, strength_thresholds=None):
     """
-    ValidationとTestを統合した階層的評価レポート
+    ValidationとTestを統合した階層的評価レポート (pandas DataFrame使用)
     
     Args:
         val_details: Validation評価の詳細結果リスト
         test_details: Test評価の詳細結果リスト
+        strength_thresholds: (low_max, med_max) の動的閾値タプル。Noneの場合はconfigの値を使用
     """
     import numpy as np
     
@@ -528,9 +609,6 @@ def print_combined_report(val_details, test_details):
     
     df_val = pd.DataFrame(val_details) if val_details else pd.DataFrame()
     df_test = pd.DataFrame(test_details) if test_details else pd.DataFrame()
-    
-    # 全データを結合して強度閾値を計算
-    df_all = pd.concat([df_val, df_test], ignore_index=True) if len(df_val) > 0 or len(df_test) > 0 else pd.DataFrame()
     
     print("\n" + "=" * 100)
     print("【統合評価レポート - Validation vs Test】")
@@ -545,12 +623,12 @@ def print_combined_report(val_details, test_details):
     
     def calc_summary(df):
         if len(df) == 0:
-            return {'count': 0, 'region': 0, 'pos': 0, 'prot': 0}
+            return {'サンプル': '-', 'タンパク質': '-', '塩基位置': '-', 'アミノ酸': '-'}
         return {
-            'count': len(df),
-            'region': df['hit_region'].mean() * 100,
-            'pos': df['hit_position'].mean() * 100,
-            'prot': df['hit_protein_pos'].mean() * 100
+            'サンプル': len(df),
+            'タンパク質': f"{df['hit_region'].mean() * 100:.1f}%",
+            '塩基位置': f"{df['hit_position'].mean() * 100:.1f}%",
+            'アミノ酸': f"{df['hit_protein_pos'].mean() * 100:.1f}%"
         }
     
     def get_strength_category(score, low_max, med_max):
@@ -561,21 +639,31 @@ def print_combined_report(val_details, test_details):
         else:
             return 'high'
     
-    # 閾値を使用してカテゴリ分け
-    low_max = config.STRENGTH_CATEGORY_LOW_MAX
-    med_max = config.STRENGTH_CATEGORY_MED_MAX
+    # 動的閾値の設定
+    if strength_thresholds is not None:
+        low_max, med_max = strength_thresholds
+    else:
+        low_max = config.STRENGTH_CATEGORY_LOW_MAX
+        med_max = config.STRENGTH_CATEGORY_MED_MAX
     
-    print(f"\n  閾値: Low(<{low_max}), Medium(<{med_max}), High(≥{med_max})")
-    print("\n  Category |  Val Count | Val Reg | Val Pos | Val Prot ||  Test Count | Test Reg | Test Pos | Test Prot")
-    print("  " + "-" * 105)
+    print(f"\n  閾値: Low(<{low_max}), Medium(<{med_max}), High(≥{med_max})\n")
     
+    # カテゴリ毎のサマリーを作成
+    summary_rows = []
     for category in ['high', 'medium', 'low']:
+        row = {'カテゴリ': category}
+        
         # Validation
         if len(df_val) > 0:
             df_val['strength_cat'] = df_val['strength_score'].apply(lambda x: get_strength_category(x, low_max, med_max))
             v_cat = df_val[df_val['strength_cat'] == category]
         else:
             v_cat = pd.DataFrame()
+        v_s = calc_summary(v_cat)
+        row['Val_サンプル'] = v_s['サンプル']
+        row['Val_タンパク質'] = v_s['タンパク質']
+        row['Val_塩基位置'] = v_s['塩基位置']
+        row['Val_アミノ酸'] = v_s['アミノ酸']
         
         # Test
         if len(df_test) > 0:
@@ -583,29 +671,93 @@ def print_combined_report(val_details, test_details):
             t_cat = df_test[df_test['strength_cat'] == category]
         else:
             t_cat = pd.DataFrame()
-        
-        v_s = calc_summary(v_cat)
         t_s = calc_summary(t_cat)
+        row['Test_サンプル'] = t_s['サンプル']
+        row['Test_タンパク質'] = t_s['タンパク質']
+        row['Test_塩基位置'] = t_s['塩基位置']
+        row['Test_アミノ酸'] = t_s['アミノ酸']
         
-        v_str = f"{v_s['count']:>10} | {v_s['region']:>5.1f}%  | {v_s['pos']:>5.1f}%  | {v_s['prot']:>6.1f}%" if v_s['count'] > 0 else "         - |      -  |      -  |       -"
-        t_str = f"{t_s['count']:>11} | {t_s['region']:>6.1f}%  | {t_s['pos']:>6.1f}%  | {t_s['prot']:>7.1f}%" if t_s['count'] > 0 else "          - |       -  |       -  |        -"
-        
-        marker = " ★" if category == 'high' else ""
-        print(f"  {category:8s} | {v_str} || {t_str}{marker}")
+        summary_rows.append(row)
     
-    # 全体サマリー（Generalizationセクション用）
-    val_s = calc_summary(df_val)
-    test_s = calc_summary(df_test)
+    df_summary = pd.DataFrame(summary_rows)
+    print(tabulate(df_summary, headers='keys', tablefmt='simple', showindex=False))
     
     # =================================================================
-    # 2. Biological Analysis (領域別分析) - 適合率・再現率・F1追加
+    # 2. 予測対象別メトリクスサマリー (適合率・再現率・F1)
     # =================================================================
-    print("\n" + "-" * 85)
-    print("=== 2. Biological Analysis (タンパク質領域別) ===")
-    print("-" * 85)
+    print("\n" + "-" * 100)
+    print("=== 2. Prediction Metrics Summary (予測対象別: 適合率/再現率/F1) ===")
+    print("-" * 100 + "\n")
+    
+    def calc_label_metrics(df, targets_key, preds_key):
+        """ラベル種別ごとに全体の適合率・再現率・F1を計算"""
+        if len(df) == 0:
+            return {'適合率': '-', '再現率': '-', 'F1': '-', 'サンプル': '-'}
+        
+        total_tp = 0
+        total_fp = 0
+        total_fn = 0
+        
+        for _, row in df.iterrows():
+            targets = set(row[targets_key])
+            preds = set(row[preds_key])
+            
+            tp = len(targets & preds)
+            fp = len(preds - targets)
+            fn = len(targets - preds)
+            
+            total_tp += tp
+            total_fp += fp
+            total_fn += fn
+        
+        precision = total_tp / (total_tp + total_fp) * 100 if (total_tp + total_fp) > 0 else 0
+        recall = total_tp / (total_tp + total_fn) * 100 if (total_tp + total_fn) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        
+        return {
+            'サンプル': len(df),
+            '適合率': f"{precision:.1f}%",
+            '再現率': f"{recall:.1f}%",
+            'F1': f"{f1:.1f}%"
+        }
+    
+    label_types = [
+        ('タンパク質領域', 'targets_region', 'preds_region'),
+        ('塩基位置', 'targets_position', 'preds_position'),
+        ('アミノ酸位置', 'targets_protein_pos', 'preds_protein_pos'),
+    ]
+    
+    metrics_rows = []
+    for label_name, targets_key, preds_key in label_types:
+        row = {'予測対象': label_name}
+        
+        # Validation
+        v_m = calc_label_metrics(df_val, targets_key, preds_key)
+        row['Val_サンプル'] = v_m['サンプル']
+        row['Val_適合率'] = v_m['適合率']
+        row['Val_再現率'] = v_m['再現率']
+        row['Val_F1'] = v_m['F1']
+        
+        # Test
+        t_m = calc_label_metrics(df_test, targets_key, preds_key)
+        row['Test_サンプル'] = t_m['サンプル']
+        row['Test_適合率'] = t_m['適合率']
+        row['Test_再現率'] = t_m['再現率']
+        row['Test_F1'] = t_m['F1']
+        
+        metrics_rows.append(row)
+    
+    df_metrics = pd.DataFrame(metrics_rows)
+    print(tabulate(df_metrics, headers='keys', tablefmt='simple', showindex=False))
+    
+    # =================================================================
+    # 3. Biological Analysis (領域別分析)
+    # =================================================================
+    print("\n" + "-" * 100)
+    print("=== 3. Biological Analysis (タンパク質領域別) ===")
+    print("-" * 100 + "\n")
     
     def calc_region_metrics(df):
-        """領域別の詳細メトリクスを計算"""
         region_stats = {}
         for _, row in df.iterrows():
             for reg_id in row['targets_region']:
@@ -616,7 +768,6 @@ def print_combined_report(val_details, test_details):
                     region_stats[reg_id]['tp'] += 1
                 else:
                     region_stats[reg_id]['fn'] += 1
-            # FP: 予測したが正解でない
             for pred_id in row['preds_region']:
                 if pred_id not in row['targets_region']:
                     if pred_id not in region_stats:
@@ -626,72 +777,84 @@ def print_combined_report(val_details, test_details):
     
     val_regions = calc_region_metrics(df_val) if len(df_val) > 0 else {}
     test_regions = calc_region_metrics(df_test) if len(df_test) > 0 else {}
-    
-    # 全領域をマージ
     all_regions = set(val_regions.keys()) | set(test_regions.keys())
     region_names = {v: k for k, v in config.PROTEIN_VOCABS.items()}
     
-    print("\n  Region     |  Val Count |  Val Prec |  Val Rec  |  Val F1   || Test Count | Test Prec | Test Rec  | Test F1")
-    print("  " + "-" * 110)
-    
-    # 合計Count順でソート
     def total_count(reg_id):
         return val_regions.get(reg_id, {}).get('count', 0) + test_regions.get(reg_id, {}).get('count', 0)
     
     sorted_regs = sorted(all_regions, key=total_count, reverse=True)[:10]
     
+    region_rows = []
     for reg_id in sorted_regs:
         name = region_names.get(reg_id, f"ID:{reg_id}")[:10]
+        row = {'領域': name}
         
         # Validation
         vs = val_regions.get(reg_id, {'tp': 0, 'fp': 0, 'fn': 0, 'count': 0})
         v_prec = vs['tp'] / (vs['tp'] + vs['fp']) * 100 if (vs['tp'] + vs['fp']) > 0 else 0
         v_rec = vs['tp'] / (vs['tp'] + vs['fn']) * 100 if (vs['tp'] + vs['fn']) > 0 else 0
         v_f1 = 2 * v_prec * v_rec / (v_prec + v_rec) if (v_prec + v_rec) > 0 else 0
+        row['Val_サンプル'] = vs['count']
+        row['Val_適合率'] = f"{v_prec:.1f}%"
+        row['Val_再現率'] = f"{v_rec:.1f}%"
+        row['Val_F1'] = f"{v_f1:.1f}%"
         
         # Test
         ts = test_regions.get(reg_id, {'tp': 0, 'fp': 0, 'fn': 0, 'count': 0})
         t_prec = ts['tp'] / (ts['tp'] + ts['fp']) * 100 if (ts['tp'] + ts['fp']) > 0 else 0
         t_rec = ts['tp'] / (ts['tp'] + ts['fn']) * 100 if (ts['tp'] + ts['fn']) > 0 else 0
         t_f1 = 2 * t_prec * t_rec / (t_prec + t_rec) if (t_prec + t_rec) > 0 else 0
+        row['Test_サンプル'] = ts['count']
+        row['Test_適合率'] = f"{t_prec:.1f}%"
+        row['Test_再現率'] = f"{t_rec:.1f}%"
+        row['Test_F1'] = f"{t_f1:.1f}%"
         
-        marker = " ★" if name == 'S' else ""
-        print(f"  {name:10s} | {vs['count']:>10} | {v_prec:>7.1f}% | {v_rec:>7.1f}% | {v_f1:>7.1f}% || {ts['count']:>10} | {t_prec:>7.1f}% | {t_rec:>7.1f}% | {t_f1:>7.1f}%{marker}")
+        region_rows.append(row)
+    
+    df_regions = pd.DataFrame(region_rows)
+    print(tabulate(df_regions, headers='keys', tablefmt='simple', showindex=False))
     
     # =================================================================
-    # 3. Temporal Dynamics (パス長別) - 長さ1刻み
+    # 4. Temporal Dynamics (パス長別)
     # =================================================================
-    print("\n" + "-" * 85)
-    print("=== 3. Temporal Dynamics (パス長別 - 長さ1刻み) ===")
-    print("-" * 85)
+    print("\n" + "-" * 100)
+    print("=== 4. Temporal Dynamics (パス長別 - 長さ1刻み) ===")
+    print("-" * 100 + "\n")
     
-    all_lengths = set()
+    length_rows = []
+    
+    # Validation データを追加
     if len(df_val) > 0:
-        all_lengths |= set(df_val['len'].unique())
+        for length in sorted(df_val['len'].unique()):
+            v_df = df_val[df_val['len'] == length]
+            v_n = len(v_df)
+            if v_n > 0:
+                length_rows.append({
+                    '種別': 'Val',
+                    'パス長': length,
+                    'サンプル': v_n,
+                    'タンパク質': f"{v_df['hit_region'].mean() * 100:.1f}%",
+                    '塩基位置': f"{v_df['hit_position'].mean() * 100:.1f}%",
+                    'アミノ酸': f"{v_df['hit_protein_pos'].mean() * 100:.1f}%"
+                })
+    
+    # Test データを追加
     if len(df_test) > 0:
-        all_lengths |= set(df_test['len'].unique())
+        for length in sorted(df_test['len'].unique()):
+            t_df = df_test[df_test['len'] == length]
+            t_n = len(t_df)
+            if t_n > 0:
+                length_rows.append({
+                    '種別': 'Test',
+                    'パス長': length,
+                    'サンプル': t_n,
+                    'タンパク質': f"{t_df['hit_region'].mean() * 100:.1f}%",
+                    '塩基位置': f"{t_df['hit_position'].mean() * 100:.1f}%",
+                    'アミノ酸': f"{t_df['hit_protein_pos'].mean() * 100:.1f}%"
+                })
     
-    print("\n  Length |  Val n | Val Reg | Val Pos | Val Prot ||  Test n | Test Reg | Test Pos | Test Prot")
-    print("  " + "-" * 100)
+    df_lengths = pd.DataFrame(length_rows)
+    print(tabulate(df_lengths, headers='keys', tablefmt='simple', showindex=False))
     
-    for length in sorted(all_lengths):
-        v_df = df_val[df_val['len'] == length] if len(df_val) > 0 else pd.DataFrame()
-        t_df = df_test[df_test['len'] == length] if len(df_test) > 0 else pd.DataFrame()
-        
-        v_n = len(v_df)
-        t_n = len(t_df)
-        
-        v_reg = v_df['hit_region'].mean() * 100 if v_n > 0 else 0
-        v_pos = v_df['hit_position'].mean() * 100 if v_n > 0 else 0
-        v_prot = v_df['hit_protein_pos'].mean() * 100 if v_n > 0 else 0
-        
-        t_reg = t_df['hit_region'].mean() * 100 if t_n > 0 else 0
-        t_pos = t_df['hit_position'].mean() * 100 if t_n > 0 else 0
-        t_prot = t_df['hit_protein_pos'].mean() * 100 if t_n > 0 else 0
-        
-        v_str = f"{v_n:>6} | {v_reg:>5.1f}%  | {v_pos:>5.1f}%  | {v_prot:>6.1f}%" if v_n > 0 else "     - |      -  |      -  |       -"
-        t_str = f"{t_n:>7} | {t_reg:>6.1f}%  | {t_pos:>6.1f}%  | {t_prot:>7.1f}%" if t_n > 0 else "      - |       -  |       -  |        -"
-        
-        print(f"  {length:>6} | {v_str} || {t_str}")
-    
-    print("\n" + "=" * 85 + "\n")
+    print("\n" + "=" * 100 + "\n")

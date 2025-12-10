@@ -20,7 +20,7 @@ from .utils import (
     save_training_log, save_prediction_results, save_strain_info,
     save_metrics_csv, save_category_metrics_csv,
     plot_metrics_by_timestep, plot_category_metrics,
-    init_wandb, print_combined_report
+    init_wandb, finish_wandb, print_combined_report
 )
 
 def set_seed(seed):
@@ -112,7 +112,9 @@ def main():
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
         
-        val_loss, val_metrics, _, _ = evaluate(model, val_loader, loss_fn)
+        # 動的閾値を取得
+        strength_thresholds = (data_info.get('strength_low_max', 3), data_info.get('strength_med_max', 5))
+        val_loss, val_metrics, _, _ = evaluate(model, val_loader, loss_fn, strength_thresholds)
         
         epoch_time = time.time() - epoch_start_time
         force_print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | LR: {current_lr:.6f} | Time: {epoch_time:.1f}s")
@@ -156,7 +158,9 @@ def main():
     
     # Validation評価
     force_print(f"Final evaluation on Validation Set...")
-    final_val_loss, final_val_metrics, val_details, val_cat_metrics = evaluate(model, val_loader, loss_fn)
+    # 動的閾値を使用
+    strength_thresholds = (data_info.get('strength_low_max', 3), data_info.get('strength_med_max', 5))
+    final_val_loss, final_val_metrics, val_details, val_cat_metrics = evaluate(model, val_loader, loss_fn, strength_thresholds)
     
     if config.SAVE_PREDICTIONS:
         save_prediction_results(val_details, run_output_dir, prefix="valid")
@@ -169,7 +173,7 @@ def main():
     test_loss, test_metrics, test_cat_metrics = 0.0, None, None
     if len(test_loader) > 0:
         force_print(f"Final evaluation on Test Set...")
-        test_loss, test_metrics, test_details, test_cat_metrics = evaluate(model, test_loader, loss_fn)
+        test_loss, test_metrics, test_details, test_cat_metrics = evaluate(model, test_loader, loss_fn, strength_thresholds)
         
         if config.SAVE_PREDICTIONS:
             save_prediction_results(test_details, run_output_dir, prefix="test")
@@ -178,10 +182,13 @@ def main():
         plot_metrics_by_timestep(test_metrics, run_output_dir, prefix="test")
         plot_category_metrics(test_cat_metrics, run_output_dir, prefix="test")
     
-    # 統合レポート (Validation vs Test)
-    print_combined_report(val_details, test_details if len(test_loader) > 0 else None)
+    # 統合レポート (Validation vs Test) - 動的閾値を使用
+    print_combined_report(val_details, test_details if len(test_loader) > 0 else None, strength_thresholds)
     
     force_print(f"[INFO] Process completed. Results saved to {run_output_dir}")
+    
+    # WandB終了（オフラインモードの場合は自動sync）
+    finish_wandb(wandb)
 
 if __name__ == "__main__":
     main()

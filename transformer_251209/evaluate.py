@@ -4,10 +4,24 @@ from collections import defaultdict
 from .utils import calculate_metrics
 from . import config
 
-def evaluate(model, dataloader, loss_fn):
+def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
+    """
+    Args:
+        model: 評価対象のモデル
+        dataloader: データローダー
+        loss_fn: 損失関数
+        strength_thresholds: (low_max, med_max) の動的閾値タプル。Noneの場合はconfigの値を使用
+    """
     model.eval()
     total_epoch_loss = 0
     batches_processed = 0
+    
+    # 動的閾値の設定
+    if strength_thresholds is not None:
+        low_max, med_max = strength_thresholds
+    else:
+        low_max = config.STRENGTH_CATEGORY_LOW_MAX
+        med_max = config.STRENGTH_CATEGORY_MED_MAX
     
     # タイムステップ別の集計用 (タンパク質位置追加)
     results_by_timestep = defaultdict(lambda: {
@@ -33,10 +47,10 @@ def evaluate(model, dataloader, loss_fn):
     filtered_samples = 0
     
     def get_strength_category(strength_score):
-        """強度スコアからカテゴリを判定"""
-        if strength_score < config.STRENGTH_CATEGORY_LOW_MAX:
+        """強度スコアからカテゴリを判定（動的閾値を使用）"""
+        if strength_score < low_max:
             return 'low'
-        elif strength_score < config.STRENGTH_CATEGORY_MED_MAX:
+        elif strength_score < med_max:
             return 'medium'
         else:
             return 'high'
