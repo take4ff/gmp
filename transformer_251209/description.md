@@ -55,6 +55,28 @@ ValidationとTestを統合した4部構成のレポートを実装：
 
 **main.py**: 463行 → 187行 に簡素化
 
+### 7. サンプリングモードの柔軟化 (2025/12/10追加)
+2つのサンプリングモードを `SAMPLING_MODE` で切り替え可能：
+
+| モード | 説明 |
+|--------|------|
+| `proportional` | 全データから比率ベースでサンプリング (`MAX_NUM` 件) |
+| `fixed_per_strain` | 株数制限 (`MAX_STRAIN_NUM`) × 株ごとサンプル上限 (`MAX_NUM_PER_STRAIN`) |
+
+### 8. WandBオフラインモード対応 (2025/12/10追加)
+- `WANDB_OFFLINE = True` でオフライン実行
+- `finish_wandb()` で自動 `wandb sync` を実行
+
+### 9. 動的強度スコア閾値 (2025/12/10追加)
+- 全データの強度スコア分布からLow/Medium/Highの閾値を自動計算
+- 3等分の整数閾値を使用（データ依存）
+- `data_info['strength_low_max']`, `data_info['strength_med_max']` で取得可能
+
+### 10. 統合レポートの改善 (2025/12/10追加)
+- ヘッダー名を簡潔化: 「タンパク質」「塩基位置」「アミノ酸位置」
+- Prediction Metrics Summary セクション追加（適合率/再現率/F1を予測対象別に表示）
+- 動的閾値をレポートに表示
+
 ---
 
 ## 設定パラメータ (`config.py`)
