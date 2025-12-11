@@ -26,16 +26,6 @@ STRENGTH_CATEGORY_LOW_MAX = 3.0      # 小: 0 ~ 3.0 (サンプル数 ~20)
 STRENGTH_CATEGORY_MED_MAX = 5.0      # 中: 3.0 ~ 5.0 (サンプル数 ~150)
                                      # 大: 5.0~ (サンプル数 150+)
 
-# --- キャッシュ・効率化設定 ---
-CACHE_DIR = './cache'
-BATCH_SIZE_FEATURE_GEN = 5000
-FORCE_REPROCESS = False
-ENABLE_LRU_CACHE = True
-ENABLE_PARALLEL_PROCESSING = True
-CACHE_MAX_SIZE = 10000
-EARLY_STOPPING_PATIENCE = 5
-WEIGHT_DECAY = 0.01
-
 # --- パス設定 ---
 DATA_BASE_DIR = '../usher_output/'
 Codon_csv = "meta_data/codon_mutation4.csv"
@@ -43,10 +33,20 @@ Freq_csv = "outputs/table_heatmap/251031/table_set/table_set.csv"
 Disimilarity_csv = "meta_data/aa_properties/dissimilarity_metrics.csv"
 PAM250_csv = "meta_data/aa_properties/PAM250.csv"
 
-OUTPUT_DIR = './outputs/transformer_251209/'
+OUTPUT_DIR = 'outputs/transformer_251209/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
 RESULT_SAVE_DIR = OUTPUT_DIR + 'results'
 INCREMENTAL_CACHE_DIR = OUTPUT_DIR + 'cache/incremental_features'
+
+# --- キャッシュ・効率化設定 ---
+CACHE_DIR = OUTPUT_DIR + 'cache/dataset'
+BATCH_SIZE_FEATURE_GEN = 5000
+FORCE_REPROCESS = False
+ENABLE_LRU_CACHE = True
+ENABLE_PARALLEL_PROCESSING = True
+CACHE_MAX_SIZE = 10000
+EARLY_STOPPING_PATIENCE = 5
+WEIGHT_DECAY = 0.01
 
 # --- 保存・ログ設定 ---
 SAVE_PREDICTIONS = True         # 予測結果の詳細をファイルに出力するか
