@@ -3,3 +3,5 @@
 /outputs/
 /old_file/
 /wandb/
+/cache/
+*.pkl
