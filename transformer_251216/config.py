@@ -33,7 +33,7 @@ Freq_csv = "outputs/table_heatmap/251031/table_set/table_set.csv"
 Disimilarity_csv = "meta_data/aa_properties/dissimilarity_metrics.csv"
 PAM250_csv = "meta_data/aa_properties/PAM250.csv"
 
-OUTPUT_DIR = 'outputs/transformer_251209/'
+OUTPUT_DIR = 'outputs/transformer_251216/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
 RESULT_SAVE_DIR = OUTPUT_DIR + 'results'
 INCREMENTAL_CACHE_DIR = OUTPUT_DIR + 'cache/incremental_features'
@@ -69,7 +69,7 @@ SAMPLING_MODE = 'fixed_per_strain'
 MAX_NUM = 10000  # 合計サンプル数（各株から比率に応じて抽出）
 
 # モードB: 株数×サンプル数制限用 (SAMPLING_MODE = 'fixed_per_strain')
-MAX_NUM_PER_STRAIN = 50   # 各株からの最大サンプル数
+MAX_NUM_PER_STRAIN = 10000   # 各株からの最大サンプル数
 MAX_STRAIN_NUM = 100      # 使用する株数
 
 # --- ボキャブラリー設定 ---
@@ -117,6 +117,12 @@ DROPOUT = 0.1
 # Falseの場合: Conv1D層をスキップ（ベースラインとの比較用）
 USE_LOCAL_CONV1D = True
 LOCAL_CONTEXT_KERNEL_SIZE = 7
+
+# --- Origin Attentionの有無（Ablation Study用） ---
+# Trueの場合: 原点（Wuhan株）を常に参照するCross-Attentionを使用
+# Falseの場合: Origin Attentionをスキップ
+USE_ORIGIN_ATTENTION = True
+ORIGIN_ATTENTION_HEADS = 4  # Origin Attentionのヘッド数
 
 # --- 訓練設定 ---
 BATCH_SIZE = 64

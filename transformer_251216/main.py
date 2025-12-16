@@ -1,4 +1,4 @@
-# python -m transformer_251209.main
+# python -m transformer_251216.main
 # --- main.py ---
 # シンプル化されたメイン処理
 import torch

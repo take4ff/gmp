@@ -102,6 +102,41 @@ class CausalConv1d(nn.Module):
         x = x.permute(0, 2, 1)
         return x
 
+class OriginAttention(nn.Module):
+    """
+    現在の時系列(Query)から、初期状態(Key/Value)を参照するCross-Attention
+    これにより、モデルは「現在の変異」が「原点（Wuhan株）」からどれくらい離れているかを常に計算できる
+    """
+    def __init__(self):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(
+            embed_dim=config.FEATURE_DIM,
+            num_heads=getattr(config, 'ORIGIN_ATTENTION_HEADS', 4),
+            dropout=config.DROPOUT,
+            batch_first=True
+        )
+        self.norm = nn.LayerNorm(config.FEATURE_DIM)
+        self.dropout = nn.Dropout(config.DROPOUT)
+
+    def forward(self, x_seq, x_origin):
+        """
+        x_seq:    [Batch, Time, Dim] (現在の変異パス)
+        x_origin: [Batch, 1, Dim]    (初期盤面/Wuhan株)
+        
+        Returns:
+            attn_out: [Batch, Time, Dim] (原点との比較情報、残差結合は呼び出し側で行う)
+        """
+        # x_origin を Key と Value に使う
+        # output: [Batch, Time, Dim]
+        attn_out, _ = self.attn(
+            query=x_seq,
+            key=x_origin,
+            value=x_origin
+        )
+        
+        # 純粋なAttention出力のみを返す（残差結合は呼び出し側で行う）
+        return self.norm(self.dropout(attn_out))
+
 class HierarchicalTransformer(nn.Module):
     def __init__(self):
         super().__init__()
@@ -119,6 +154,19 @@ class HierarchicalTransformer(nn.Module):
             )
         else:
             self.local_feature_extractor = None
+        
+        # Origin Attention: 原点（Wuhan株）を常に参照 (Ablation Study用に切り替え可能)
+        self.use_origin_attention = getattr(config, 'USE_ORIGIN_ATTENTION', True)
+        if self.use_origin_attention:
+            self.origin_attn = OriginAttention()
+            # 学習可能なOrigin埋め込み（「変異なし」の原点を表す専用ベクトル）
+            # データセットから渡す必要がなく、モデルが「原点の意味」を自動学習
+            self.origin_embedding = nn.Parameter(
+                torch.randn(1, 1, config.FEATURE_DIM) * 0.02
+            )
+        else:
+            self.origin_attn = None
+            self.origin_embedding = None
         
         self.pos_encoder = PositionalEncoding(config.FEATURE_DIM, config.DROPOUT)
         
@@ -150,11 +198,21 @@ class HierarchicalTransformer(nn.Module):
         # 3. 局所特徴抽出 (文脈情報) - Ablation Study用に条件分岐
         if self.use_local_conv and self.local_feature_extractor is not None:
             x_context = self.local_feature_extractor(x_agg)
-            # 4. 残差結合 (ベース + 文脈)
+            # 残差結合 (ベース + 文脈)
             x_combined = x_agg + x_context
         else:
             # Conv1D層をスキップ
             x_combined = x_agg
+        
+        # 4. Origin Attention: 原点との比較情報を注入 - Ablation Study用に条件分岐
+        if self.use_origin_attention and self.origin_attn is not None:
+            # 学習可能なOrigin埋め込みをバッチサイズに拡張
+            batch_size = x_combined.size(0)
+            origin_emb = self.origin_embedding.expand(batch_size, -1, -1)  # [B, 1, Dim]
+            # 「原点の記憶」を取得
+            origin_context = self.origin_attn(x_seq=x_combined, x_origin=origin_emb)
+            # 残差結合: 「現在の文脈」+「原点との比較情報」
+            x_combined = x_combined + origin_context
         
         # 5. Transformer (大局的文脈)
         x = self.pos_encoder(x_combined)
