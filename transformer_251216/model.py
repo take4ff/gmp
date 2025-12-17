@@ -183,10 +183,42 @@ class HierarchicalTransformer(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layer, num_layers=config.N_LAYERS)
         
         # 予測ヘッド (4タスク)
-        self.output_head = nn.Linear(config.FEATURE_DIM, config.NUM_REGIONS)           # Region予測
-        self.position_head = nn.Linear(config.FEATURE_DIM, config.VOCAB_SIZE_POSITION) # 塩基位置予測
-        self.protein_pos_head = nn.Linear(config.FEATURE_DIM, config.VOCAB_SIZE_PROTEIN_POS) # タンパク質位置予測
-        self.strength_head = nn.Linear(config.FEATURE_DIM, 1)                          # 強度スコア予測 (回帰)
+        # 1. Region予測ヘッド
+        self.output_head = nn.Sequential(
+            nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM), # 一度特徴量空間で変換
+            nn.GELU(),                                         # 非線形活性化
+            nn.LayerNorm(config.FEATURE_DIM),                  # 安定化のためのNorm
+            nn.Dropout(config.DROPOUT),                        # 過学習抑制
+            nn.Linear(config.FEATURE_DIM, config.NUM_REGIONS)  # 最終出力
+        )
+
+        # 2. 塩基位置予測ヘッド
+        self.position_head = nn.Sequential(
+            nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
+            nn.GELU(),
+            nn.LayerNorm(config.FEATURE_DIM),
+            nn.Dropout(config.DROPOUT),
+            nn.Linear(config.FEATURE_DIM, config.VOCAB_SIZE_POSITION)
+        )
+
+        # 3. タンパク質位置予測ヘッド
+        self.protein_pos_head = nn.Sequential(
+            nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
+            nn.GELU(),
+            nn.LayerNorm(config.FEATURE_DIM),
+            nn.Dropout(config.DROPOUT),
+            nn.Linear(config.FEATURE_DIM, config.VOCAB_SIZE_PROTEIN_POS)
+        )
+
+        # 4. 強度スコア予測ヘッド (回帰)
+        # 特に回帰は分類と性質が違うため、専用の層を持つ効果が高いです
+        self.strength_head = nn.Sequential(
+            nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
+            nn.GELU(),
+            nn.LayerNorm(config.FEATURE_DIM),
+            nn.Dropout(config.DROPOUT),
+            nn.Linear(config.FEATURE_DIM, 1)
+        )
 
     def forward(self, x_cat, x_num, src_mask=None, src_key_padding_mask=None):
         # 1. 入力埋め込み

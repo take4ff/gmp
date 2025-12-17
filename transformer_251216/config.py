@@ -20,7 +20,7 @@ USE_STRENGTH_FILTER = False          # 評価時に強度フィルタを適用 (
 STRENGTH_THRESHOLD = 0.0             # 強度スコアのしきい値 (0.0=フィルタなし)
 # 強度スコアは log(1 + sample_count) で計算される
 
-# 強度カテゴリの閾値 (log(1+x)スケール)
+# 強度カテゴリの閾値 (log(1+x)スケール)、自動設定機能がない場合は手動で設定
 # 例: log(1+10)=2.4, log(1+100)=4.6, log(1+1000)=6.9
 STRENGTH_CATEGORY_LOW_MAX = 3.0      # 小: 0 ~ 3.0 (サンプル数 ~20)
 STRENGTH_CATEGORY_MED_MAX = 5.0      # 中: 3.0 ~ 5.0 (サンプル数 ~150)
@@ -36,10 +36,10 @@ PAM250_csv = "meta_data/aa_properties/PAM250.csv"
 OUTPUT_DIR = 'outputs/transformer_251216/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
 RESULT_SAVE_DIR = OUTPUT_DIR + 'results'
-INCREMENTAL_CACHE_DIR = OUTPUT_DIR + 'cache/incremental_features'
+INCREMENTAL_CACHE_DIR = 'cache/incremental_features'
 
 # --- キャッシュ・効率化設定 ---
-CACHE_DIR = OUTPUT_DIR + 'cache/dataset'
+CACHE_DIR = 'cache/dataset'
 BATCH_SIZE_FEATURE_GEN = 5000
 FORCE_REPROCESS = False
 ENABLE_LRU_CACHE = True
@@ -57,20 +57,20 @@ MAX_SEQ_LEN = 39
 TARGET_LEN = 1
 TRAIN_MAX = 40 # TS:1-40を学習に利用(TRAIN_MAX > MAX_SEQ_LEN + TARGET_LEN)
 VALID_NUM = 3
-MAX_CO_OCCURRENCE = 20
+MAX_CO_OCCURRENCE = 5
 VALID_RATIO = 0.2
 
 # --- サンプリングモード設定 ---
 # 'proportional': 比率サンプリング (MAX_NUM件を各株の比率に応じて抽出)
 # 'fixed_per_strain': 株数×サンプル数制限 (MAX_STRAIN_NUM株からMAX_NUM_PER_STRAIN件ずつ)
-SAMPLING_MODE = 'fixed_per_strain'
+SAMPLING_MODE = 'proportional'
 
 # モードA: 比率サンプリング用 (SAMPLING_MODE = 'proportional')
-MAX_NUM = 10000  # 合計サンプル数（各株から比率に応じて抽出）
+MAX_NUM = 2000000  # 合計サンプル数（各株から比率に応じて抽出）
 
 # モードB: 株数×サンプル数制限用 (SAMPLING_MODE = 'fixed_per_strain')
-MAX_NUM_PER_STRAIN = 10000   # 各株からの最大サンプル数
-MAX_STRAIN_NUM = 100      # 使用する株数
+MAX_NUM_PER_STRAIN = 20000   # 各株からの最大サンプル数
+MAX_STRAIN_NUM = 10      # 使用する株数
 
 # --- ボキャブラリー設定 ---
 BASE_VOCABS = {'A':1, 'T':2, 'C':3, 'G':4, 'N':5, 'n':6, 'PAD':0}
@@ -106,17 +106,17 @@ EMBED_DIM_REGION = 128
 EMBED_DIM_CODON_POS = 16
 EMBED_DIM_PROTEIN_POS = 128
 
-FEATURE_DIM = 768
+FEATURE_DIM = 256
 HIDDEN_DIM = FEATURE_DIM
-N_HEADS = 8
-N_LAYERS = 8
+N_HEADS = 4
+N_LAYERS = 4
 DROPOUT = 0.1
 
 # --- Conv1D局所特徴抽出の有無（Ablation Study用） ---
 # Trueの場合: Conv1D層を使用して局所的な文脈情報を抽出
 # Falseの場合: Conv1D層をスキップ（ベースラインとの比較用）
 USE_LOCAL_CONV1D = True
-LOCAL_CONTEXT_KERNEL_SIZE = 7
+LOCAL_CONTEXT_KERNEL_SIZE = 3
 
 # --- Origin Attentionの有無（Ablation Study用） ---
 # Trueの場合: 原点（Wuhan株）を常に参照するCross-Attentionを使用
@@ -125,15 +125,15 @@ USE_ORIGIN_ATTENTION = True
 ORIGIN_ATTENTION_HEADS = 4  # Origin Attentionのヘッド数
 
 # --- 訓練設定 ---
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 LEARNING_RATE = 1e-4
-EPOCHS = 5
+EPOCHS = 20
 TOP_K_EVAL = 1 # Top-5でのRecallなども見たい場合はここを変更
 
-LOSS_WEIGHT_REGION = 0.3
-LOSS_WEIGHT_POSITION = 0.3
-LOSS_WEIGHT_PROTEIN_POS = 0.2    # タンパク質位置の損失重み
-LOSS_WEIGHT_STRENGTH = 0.2       # 強度スコア予測の損失重み (回帰)
+LOSS_WEIGHT_REGION = 0.14         # 基因領域の損失重み
+LOSS_WEIGHT_POSITION = 0.7        # 塩基位置の損失重み
+LOSS_WEIGHT_PROTEIN_POS = 0.14    # タンパク質位置の損失重み
+LOSS_WEIGHT_STRENGTH = 0.02       # 強度スコア予測の損失重み (回帰)
 
 # --- 高度な学習設定 (追加) ---
 # Label Smoothing: 過学習抑制 (Trueで適用)
@@ -153,4 +153,4 @@ WANDB_RUN_NAME = None # Noneなら自動生成 (例: "run_20251121_...")
 # MultiTaskLoss 設定
 # Trueの場合、config.LOSS_WEIGHT_REGION/POSITION は無視され、自動調整される
 # 最終的な重みを表示？
-USE_MULTITASK_LOSS = True
+USE_MULTITASK_LOSS = False

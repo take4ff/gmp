@@ -62,7 +62,7 @@ def print_sample_structure(sample, sample_idx=0):
     print("# num: hydro=疎水性変化, size=サイズ変化, charge=電荷変化, dissim=類似度, pam=PAM250, freq=頻度")
     
     # ヘッダ
-    print("timestep,co_occur,bef,pos,aft,c_pos,aa_b,p_pos,aa_a,region,hydro,size,charge,dissim,pam,freq")
+    print("timestep,co_occur,bef,pos,aft,c_pos,aa_b,p_pos,aa_a,region,freq,hydro,charge,size,dissim,pam")
     
     # 全タイムステップを出力
     for t_idx, timestep in enumerate(x):

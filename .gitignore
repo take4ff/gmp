@@ -5,3 +5,5 @@
 /wandb/
 /cache/
 *.pkl
+nohup*.out
+*/__pycache__/
