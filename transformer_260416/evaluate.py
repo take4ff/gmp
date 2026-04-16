@@ -95,6 +95,11 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
             topk_indices_codon_pos = safe_topk(predictions_codon_pos, config.TOP_K_EVAL)
             topk_indices_synonymous= safe_topk(predictions_synonymous,config.TOP_K_EVAL)
 
+            # 確率の計算
+            probs_region = torch.nn.functional.softmax(predictions_region, dim=-1)
+            probs_position = torch.nn.functional.softmax(predictions_position, dim=-1)
+            probs_aa_pos = torch.nn.functional.softmax(predictions_aa_pos, dim=-1)
+
             # 損失計算 (utils/losses.py 共通ロジック)
             losses = compute_task_losses(
                 predictions_tuple, y_batch_list, loss_fn, batch_strength_scores
@@ -132,6 +137,16 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 pred_set_synonymous= set(topk_indices_synonymous[i].cpu().tolist())
                 target_set_synonymous= set(t[4] for t in targets_tuples)
 
+                # Top-1予測の確率を抽出
+                top1_reg_idx = topk_indices_region[i, 0] if topk_indices_region.size(1) > 0 else 0
+                pred_prob_region = probs_region[i, top1_reg_idx].item()
+
+                top1_pos_idx = topk_indices_position[i, 0] if topk_indices_position.size(1) > 0 else 0
+                pred_prob_position = probs_position[i, top1_pos_idx].item()
+
+                top1_aa_idx = topk_indices_aa_pos[i, 0] if topk_indices_aa_pos.size(1) > 0 else 0
+                pred_prob_aa_pos = probs_aa_pos[i, top1_aa_idx].item()
+
                 hit_region     = len(pred_set_region.intersection(target_set_region)) > 0
                 hit_position   = len(pred_set_position.intersection(target_set_position)) > 0
                 hit_aa_pos     = len(pred_set_aa_pos.intersection(target_set_aa_pos)) > 0
@@ -144,9 +159,9 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                     'len': ts_len, 'strain': strain,
                     'strength_score': strength_score, 'pred_strength': pred_strength,
                     'raw_path': full_path,
-                    'targets_region': target_set_region,   'preds_region': pred_set_region,   'hit_region': hit_region,
-                    'targets_position': target_set_position,'preds_position': pred_set_position,'hit_position': hit_position,
-                    'targets_aa_pos': target_set_aa_pos,   'preds_aa_pos': pred_set_aa_pos,   'hit_aa_pos': hit_aa_pos,
+                    'targets_region': target_set_region,   'preds_region': pred_set_region, 'pred_prob_region': pred_prob_region,  'hit_region': hit_region,
+                    'targets_position': target_set_position,'preds_position': pred_set_position, 'pred_prob_position': pred_prob_position, 'hit_position': hit_position,
+                    'targets_aa_pos': target_set_aa_pos,   'preds_aa_pos': pred_set_aa_pos, 'pred_prob_aa_pos': pred_prob_aa_pos,  'hit_aa_pos': hit_aa_pos,
                     'targets_codon_pos': target_set_codon_pos,'preds_codon_pos': pred_set_codon_pos,'hit_codon_pos': hit_codon_pos,
                     'targets_synonymous': target_set_synonymous,'preds_synonymous': pred_set_synonymous,'hit_synonymous': hit_synonymous,
                 })

@@ -63,31 +63,106 @@ class DBIterableDataset(IterableDataset):
             query += " AND path_length <= ?"
             params.append(self.max_length)
 
-        # raw_pathも取得してPython側でユニーク化判定を行う
-        query = query.replace("SELECT sample_id", "SELECT sample_id, raw_path")
-        query += " ORDER BY sample_id"
+        # raw_path, strain_nameも取得してPython側でサンプリング・ユニーク化判定を行う
+        query = query.replace("SELECT sample_id", "SELECT s.sample_id, s.raw_path, st.strain_name")
+        query = query.replace("FROM samples", "FROM samples s JOIN strains st ON s.strain_id = st.strain_id")
+        query = query.replace(" AND split_type", " AND s.split_type")
+        query = query.replace(" AND max_cooccurrence", " AND s.max_cooccurrence")
+        query = query.replace(" AND path_length", " AND s.path_length")
+        
+        query += " ORDER BY s.sample_id"
 
         result = con.execute(query, params).fetchall()
+
+        # データ全体のサンプル数を取得 (現在適用されている全体フィルタと同条件だが、split_typeは問わない)
+        query_all = "SELECT COUNT(*) FROM samples WHERE 1=1"
+        params_all = []
+        if self.max_cooccurrence is not None:
+            query_all += " AND max_cooccurrence <= ?"
+            params_all.append(self.max_cooccurrence)
+        if self.min_length is not None:
+            query_all += " AND path_length >= ?"
+            params_all.append(self.min_length)
+        if self.max_length is not None:
+            query_all += " AND path_length <= ?"
+            params_all.append(self.max_length)
+        
+        global_total_count = con.execute(query_all, params_all).fetchone()[0]
         con.close()
 
         total_count = len(result)
         split_name = {0: 'Train', 1: 'Valid', 2: 'Test'}.get(self.split_type, 'Unknown')
-        print(f"[INFO] {split_name} data - Initial sample count: {total_count:,}")
+        print(f"[INFO] {split_name} data - Initial sample count: {total_count:,} (Global Total: {global_total_count:,})")
+
+        if total_count == 0:
+            return []
+
+        import pandas as pd
+        df = pd.DataFrame(result, columns=['sample_id', 'raw_path', 'strain'])
 
         if getattr(config, 'USE_UNIQUE_FILTER', False):
-            seen_paths = set()
-            unique_ids = []
-            for sample_id, raw_path in result:
-                if raw_path not in seen_paths:
-                    seen_paths.add(raw_path)
-                    unique_ids.append(sample_id)
+            df['path_tuple'] = df['raw_path'].apply(lambda x: tuple(x.split('>')))
+            df = df.drop_duplicates(subset='path_tuple', keep='first')
+            df = df.drop(columns=['path_tuple'])
+            unique_count = len(df)
+            print(f"[INFO] {split_name} data - After unique filter: {unique_count:,} (Removed {total_count - unique_count:,} duplicates)")
 
-            unique_count = len(unique_ids)
-            diff = total_count - unique_count
-            print(f"[INFO] {split_name} data - After unique filter: {unique_count:,} (Removed {diff:,} duplicates)")
-            return unique_ids
-        else:
-            return [r[0] for r in result]
+        # サンプリングの適用
+        if getattr(config, 'MAX_STRAIN_NUM', None) is not None:
+            strain_counts = df['strain'].value_counts()
+            top_strains = strain_counts.nlargest(config.MAX_STRAIN_NUM).index.tolist()
+            df = df[df['strain'].isin(top_strains)]
+            print(f"[INFO] {split_name} data - After top {config.MAX_STRAIN_NUM} strain filter: {len(df):,}")
+
+        sampling_mode = getattr(config, 'SAMPLING_MODE', 'proportional')
+        
+        if sampling_mode == 'proportional' and getattr(config, 'MAX_NUM', None) is not None:
+            # 合計が MAX_NUM になるように、全体に占める現在のsplitの割合で target_num を割り当てる
+            split_ratio = total_count / max(1, global_total_count)
+            target_num = max(1, int(config.MAX_NUM * split_ratio))
+            
+            if len(df) > target_num:
+                print(f"[INFO] {split_name} data - 比率サンプリング: {len(df):,}件から{target_num:,}件を抽出 (全体割当: {config.MAX_NUM:,} * {split_ratio*100:.1f}%)")
+                strain_counts = df['strain'].value_counts()
+                strain_samples = {}
+                remaining = target_num
+                sorted_strains = strain_counts.sort_values().index.tolist()
+                
+                for i, strain in enumerate(sorted_strains):
+                    count = strain_counts[strain]
+                    ratio = count / strain_counts[sorted_strains[i:]].sum()
+                    samples_from_this = min(count, max(1, int(remaining * ratio)))
+                    if i == len(sorted_strains) - 1:
+                        samples_from_this = min(count, remaining)
+                    strain_samples[strain] = samples_from_this
+                    remaining -= samples_from_this
+                
+                sampled_dfs = []
+                for strain, n_samples in strain_samples.items():
+                    strain_df = df[df['strain'] == strain]
+                    if len(strain_df) > n_samples:
+                        sampled_dfs.append(strain_df.sample(n=n_samples, random_state=config.SEED))
+                    else:
+                        sampled_dfs.append(strain_df)
+                df = pd.concat(sampled_dfs)
+                print(f"[INFO] {split_name} data - 比率サンプリング完了: {len(df):,}件")
+
+        elif sampling_mode == 'fixed_per_strain' and getattr(config, 'MAX_NUM_PER_STRAIN', None) is not None:
+            max_num_per_strain = config.MAX_NUM_PER_STRAIN
+            print(f"[INFO] {split_name} data - Filtering to max {max_num_per_strain} per strain...")
+            sampled_dfs = []
+            for _, group in df.groupby('strain'):
+                if len(group) > max_num_per_strain:
+                    sampled_dfs.append(group.sample(n=max_num_per_strain, random_state=config.SEED))
+                else:
+                    sampled_dfs.append(group)
+            df = pd.concat(sampled_dfs)
+            print(f"[INFO] {split_name} data - After filtering: {len(df):,}件")
+
+        # ランダムソートによる順序シャッフル（後でDataLoader側でも必要に応じてやるが、行を保持しておく）
+        df = df.sort_values('sample_id')
+
+        return df['sample_id'].tolist()
 
     def __len__(self):
         return self._length

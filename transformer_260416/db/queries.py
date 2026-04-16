@@ -202,3 +202,68 @@ def get_next_ids(con):
         return sample_id, feature_id, label_id
     except Exception:
         return 0, 0, 0
+
+
+def get_train_class_counts(db_path=None):
+    """学習データの各タスクごとのクラス頻度(n_t)を計算・キャッシュする。
+
+    Returns:
+        dict: {'region': Tensor, 'position': Tensor, 'aa_pos': Tensor, 'codon_pos': Tensor, 'synonymous': Tensor}
+    """
+    import os
+    import torch
+    import pickle
+    from .. import config
+
+    if db_path is None:
+        db_path = get_db_path()
+
+    os.makedirs(config.CACHE_DIR, exist_ok=True)
+    cache_file = os.path.join(config.CACHE_DIR, 'class_counts.pkl')
+
+    if getattr(config, 'FORCE_REPROCESS', False) == False and os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'rb') as f:
+                counts = pickle.load(f)
+            print(f"[INFO] Loaded class counts from {cache_file}")
+            return counts
+        except Exception as e:
+            print(f"[WARNING] Failed to load class counts cache: {e}. Recomputing...")
+
+    print("[INFO] Computing training class counts (n_t)... This may take a moment.")
+    con = connect_db(db_path, read_only=True)
+
+    # 必要なすべてのサンプルのラベルを取得 (Trainのみ)
+    query = """
+        SELECT l.targets 
+        FROM labels l
+        JOIN samples s ON l.sample_id = s.sample_id
+        WHERE s.split_type = 0
+    """
+    rows = con.execute(query).fetchall()
+    con.close()
+
+    counts = {
+        'region': torch.zeros(config.NUM_REGIONS, dtype=torch.long),
+        'position': torch.zeros(config.VOCAB_SIZE_POSITION, dtype=torch.long),
+        'aa_pos': torch.zeros(config.VOCAB_SIZE_AA_POS, dtype=torch.long),
+        'codon_pos': torch.zeros(config.VOCAB_SIZE_CODON_POS, dtype=torch.long),
+        'synonymous': torch.zeros(config.VOCAB_SIZE_SYNONYMOUS, dtype=torch.long),
+    }
+
+    from tqdm import tqdm
+    for row in tqdm(rows, desc="Accumulating class counts"):
+        targets = pickle.loads(row[0])
+        for t in targets:
+            # t: (region, position, aa_pos, codon_pos, synonymous)
+            if t[0] < config.NUM_REGIONS: counts['region'][t[0]] += 1
+            if t[1] < config.VOCAB_SIZE_POSITION: counts['position'][t[1]] += 1
+            if t[2] < config.VOCAB_SIZE_AA_POS: counts['aa_pos'][t[2]] += 1
+            if t[3] < config.VOCAB_SIZE_CODON_POS: counts['codon_pos'][t[3]] += 1
+            if t[4] < config.VOCAB_SIZE_SYNONYMOUS: counts['synonymous'][t[4]] += 1
+
+    with open(cache_file, 'wb') as f:
+        pickle.dump(counts, f)
+    
+    print(f"[INFO] Saved class counts to {cache_file}")
+    return counts

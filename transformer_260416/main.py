@@ -1,6 +1,6 @@
 # --- main.py ---
 # DuckDB対応版メイン処理
-# Usage: python -m transformer_260416.main
+# Usage: nohup python -m transformer_260416.main > nohup0.out & 
 
 import torch
 import torch.optim as optim
@@ -125,11 +125,11 @@ def prepare_data():
 # 3. モデル・損失・最適化器の構築
 # ──────────────────────────────────────────────
 
-def build_components():
+def build_components(class_counts_dict=None):
     """モデル・損失関数・最適化器・スケジューラを構築して返す。
 
     Returns:
-        Tuple[nn.Module, nn.Module, Optional[MultiTaskLoss], Optimizer, Optional[Scheduler]]
+        Tuple[nn.Module, nn.Module/dict, Optional[MultiTaskLoss], Optimizer, Optional[Scheduler]]
     """
     model = HierarchicalTransformer().to(config.DEVICE)
 
@@ -145,7 +145,7 @@ def build_components():
             f"SYNONYMOUS={config.LOSS_WEIGHT_SYNONYMOUS}, Strength={config.LOSS_WEIGHT_STRENGTH}"
         )
 
-    loss_fn = build_loss_fn()
+    loss_fn = build_loss_fn(class_counts_dict)
 
     params = (
         list(model.parameters()) + list(loss_wrapper.parameters())
@@ -179,7 +179,8 @@ def run_training(model, train_loader, val_loader, loss_fn, loss_wrapper,
     Returns:
         Tuple[list, str]: (training_log, best_model_path)
     """
-    best_model_path = os.path.join(run_output_dir, "best_model.pth")
+    best_model_path = os.path.join(run_output_dir, "models", "best_model.pth")
+    os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
     early_stop_metric = getattr(config, "EARLY_STOPPING_METRIC", "val_loss")
     early_stop_mode   = getattr(config, "EARLY_STOPPING_MODE", "min")
 
@@ -358,7 +359,7 @@ def run_visualization(model, run_output_dir, val_loader=None, test_loader=None):
     # 変異位置分布プロット
     if config.SAVE_PREDICTIONS:
         for prefix in ('valid', 'test'):
-            csv_path = os.path.join(run_output_dir, f'{prefix}_predictions.csv')
+            csv_path = os.path.join(run_output_dir, "csv", f'{prefix}_predictions.csv')
             if os.path.exists(csv_path):
                 force_print(f"[INFO] Plotting mutation dist: {csv_path}")
                 plot_mutation_dist(csv_path)
@@ -372,7 +373,7 @@ def run_visualization(model, run_output_dir, val_loader=None, test_loader=None):
             force_print(f"[WARNING] Attention heatmap skipped: {e}")
 
     # 語彙ネットワーク可視化
-    best_model_path = os.path.join(run_output_dir, "best_model.pth")
+    best_model_path = os.path.join(run_output_dir, "models", "best_model.pth")
     if not os.path.exists(best_model_path):
         return
 
@@ -415,7 +416,12 @@ def main():
         print_sample_structure(train[0], sample_idx=0)
 
     # 2. モデル・損失・最適化器の構築
-    model, loss_fn, loss_wrapper, optimizer, scheduler = build_components()
+    class_counts_dict = None
+    if getattr(config, 'LOSS_FUNCTION_TYPE', 'ce').lower() in ['wce', 'cbce', 'cb_focal']:
+        from .db.queries import get_train_class_counts
+        class_counts_dict = get_train_class_counts()
+
+    model, loss_fn, loss_wrapper, optimizer, scheduler = build_components(class_counts_dict)
 
     # 出力ディレクトリ設定
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

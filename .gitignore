@@ -13,3 +13,5 @@ nohup*.out
 /usher_old/
 /db/
 /data/
+transformer_260416/db/__pycache__/
+transformer_260416/utils/__pycache__/

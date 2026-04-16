@@ -5,6 +5,13 @@ import os
 from . import logging as _log
 
 
+def _get_plot_path(output_dir, filename):
+    """主力先を plots/ に振り分け"""
+    target_dir = os.path.join(output_dir, 'plots')
+    os.makedirs(target_dir, exist_ok=True)
+    return os.path.join(target_dir, filename)
+
+
 def plot_training_curve(training_log, output_dir):
     """学習曲線（train_loss / val_loss）をプロットして保存する。"""
     try:
@@ -37,7 +44,7 @@ def plot_training_curve(training_log, output_dir):
         ax.scatter([epochs[min_val_idx]], [val_losses[min_val_idx]], color='green', s=100, zorder=5)
 
         plt.tight_layout()
-        path = os.path.join(output_dir, 'training_curve.png')
+        path = _get_plot_path(output_dir, 'training_curve.png')
         plt.savefig(path, dpi=150, bbox_inches='tight')
         plt.close()
         _log.force_print(f"[INFO] Training curve saved to {path}")
@@ -126,7 +133,7 @@ def plot_metrics_by_timestep(metrics_by_ts, output_dir, prefix="val"):
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        path = os.path.join(output_dir, f'{prefix}_metrics_plot.png')
+        path = _get_plot_path(output_dir, f'{prefix}_metrics_plot.png')
         plt.savefig(path, dpi=150, bbox_inches='tight')
         plt.close()
         _log.force_print(f"[INFO] Metrics plot saved to {path}")
@@ -220,7 +227,7 @@ def plot_category_metrics(cat_metrics, output_dir, prefix="val"):
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        path = os.path.join(output_dir, f'{prefix}_category_plot.png')
+        path = _get_plot_path(output_dir, f'{prefix}_category_plot.png')
         plt.savefig(path, dpi=150, bbox_inches='tight')
         plt.close()
         _log.force_print(f"[INFO] Category plot saved to {path}")
@@ -274,7 +281,7 @@ def plot_combined_val_test_metrics(val_metrics, test_metrics, output_dir):
             ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        path = os.path.join(output_dir, 'combined_val_test_metrics.png')
+        path = _get_plot_path(output_dir, 'combined_val_test_metrics.png')
         plt.savefig(path, dpi=150, bbox_inches='tight')
         plt.close()
         _log.force_print(f"[INFO] Combined Val/Test metrics plot saved to {path}")
@@ -372,7 +379,7 @@ def plot_combined_category_comparison(val_details, test_details, strength_thresh
                             xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8)
 
         plt.tight_layout()
-        path = os.path.join(output_dir, 'combined_category_comparison.png')
+        path = _get_plot_path(output_dir, 'combined_category_comparison.png')
         plt.savefig(path, dpi=150, bbox_inches='tight')
         plt.close()
         _log.force_print(f"[INFO] Combined category comparison plot saved to {path}")
@@ -483,88 +490,142 @@ def print_combined_report(val_details, test_details, strength_thresholds=None):
 # 5. 変異位置分布 (plot_mutation_dist)
 # ==========================================
 
+def _plot_generic_dist(df, target_col, pred_col, prob_col, title, xlabel, out_path, max_x=None, is_categorical=False, vocab_map=None):
+    import matplotlib.pyplot as plt
+    # 正解ラベルが共起（複数変異）のものは除外
+    df_single = df[df[target_col].apply(len) == 1].copy()
+    
+    if len(df_single) == 0:
+        return
+
+    df_single['target_pos_val'] = df_single[target_col].apply(lambda x: x[0])
+    df_single['pred_pos_val'] = df_single[pred_col].apply(lambda x: x[0] if len(x) > 0 else -1)
+
+    target_counts = df_single['target_pos_val'].value_counts().sort_index()
+    pred_counts = df_single['pred_pos_val'].value_counts().sort_index()
+
+    fig, ax1 = plt.subplots(figsize=(15, 10))
+    plt.rcParams.update({'font.size': 16})
+
+    if is_categorical:
+        # Categorical variable (like regions) usually better plotted as bars or points, but step is also fine
+        # We might want to fix the x-ticks to be region names
+        all_x = sorted(list(set(target_counts.index.tolist() + [x for x in pred_counts.index.tolist() if x != -1])))
+        if max_x is not None and len(all_x) > 0 and max(all_x) < max_x:
+            all_x = list(range(max_x))
+            
+        t_vals = [target_counts.get(x, 0) for x in all_x]
+        p_vals = [pred_counts.get(x, 0) for x in all_x]
+        
+        ax1.bar([x - 0.2 for x in all_x], t_vals, width=0.4, label='Ground Truth (Single Target)', color='blue', alpha=0.6)
+        ax1.bar([x + 0.2 for x in all_x], p_vals, width=0.4, label='Prediction (Top-1)', color='red', alpha=0.6)
+        if vocab_map:
+            ax1.set_xticks(all_x)
+            ax1.set_xticklabels([vocab_map.get(x, str(x)) for x in all_x], rotation=45, ha='right')
+    else:
+        ax1.step(target_counts.index, target_counts.values, label='Ground Truth (Single Target)', color='blue', alpha=0.6, where='mid', linewidth=1.5)
+        ax1.step(pred_counts.index, pred_counts.values, label='Prediction (Top-1)', color='red', alpha=0.6, where='mid', linewidth=1.5)
+        if max_x is not None:
+            ax1.set_xlim(0, max_x)
+
+    ax1.set_title(title, fontsize=22, fontweight='bold', pad=20)
+    ax1.set_xlabel(xlabel, fontsize=18, fontweight='bold')
+    ax1.set_ylabel('Frequency (Count)', fontsize=18, fontweight='bold')
+    ax1.tick_params(axis='x', labelsize=14)
+    ax1.tick_params(axis='y', labelsize=14)
+    ax1.grid(True, linestyle='--', alpha=0.5)
+
+    if prob_col in df_single.columns:
+        ax2 = ax1.twinx()
+        valid_preds = df_single[df_single['pred_pos_val'] != -1]
+        pred_probs = valid_preds.groupby('pred_pos_val')[prob_col].mean().sort_index()
+
+        ax2.scatter(
+            pred_probs.index, pred_probs.values,
+            label='Mean Pred Probability',
+            color='purple', alpha=0.4, s=15, marker='x'
+        )
+        ax2.set_ylabel('Output Probability (Softmax)', fontsize=18, fontweight='bold', color='purple')
+        ax2.tick_params(axis='y', labelsize=14, labelcolor='purple')
+        ax2.set_ylim(-0.05, 1.05)
+        
+        lines_1, labels_1 = ax1.get_legend_handles_labels()
+        lines_2, labels_2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines_1 + lines_2, labels_1 + labels_2, fontsize=16, prop={'weight': 'bold'})
+    else:
+        ax1.legend(fontsize=16, prop={'weight': 'bold'})
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    plt.close()
+
+
 def plot_mutation_dist(csv_path: str, out_path: str = None):
-    """評価CSVから変異位置の頻度分布（Ground Truth vs Prediction）をプロットして保存する。
-
-    正解ラベルが共起変異（複数）のサンプルは除外し、単一変異のみを対象にする。
-
-    Args:
-        csv_path: evaluate()が出力した *_predictions.csv のパス
-        out_path: 保存先パス。Noneの場合は csv_path と同じディレクトリに
-                  "_mutation_dist.png" サフィックスで保存
-    """
+    """塩基、アミノ酸、タンパク質領域の頻度分布プロットを一括で生成して保存する。"""
     try:
         import ast
         import matplotlib
         matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
         import pandas as pd
+        from .. import config
 
         if not os.path.exists(csv_path):
             _log.force_print(f"[ERROR] File not found: {csv_path}")
             return
 
-        _log.force_print(f"[INFO] Loading {csv_path}...")
+        _log.force_print(f"[INFO] Loading {csv_path} for distribution plots...")
         df = pd.read_csv(csv_path)
 
         def parse_list(x):
             try:
-                return ast.literal_eval(x)
+                return ast.literal_eval(x) if pd.notnull(x) else []
             except Exception:
                 return []
 
-        df['target_position'] = df['target_position'].apply(parse_list)
-        df['pred_position'] = df['pred_position'].apply(parse_list)
+        # Generate Base Position Dist
+        if 'target_position' in df.columns:
+            df['target_position'] = df['target_position'].apply(parse_list)
+            df['pred_position'] = df['pred_position'].apply(parse_list)
+            base_dir = os.path.dirname(os.path.dirname(csv_path)) if 'csv' in os.path.basename(os.path.dirname(csv_path)) else os.path.dirname(csv_path)
+            plots_dir = os.path.join(base_dir, 'plots')
+            os.makedirs(plots_dir, exist_ok=True)
+            filename = os.path.basename(csv_path).replace('.csv', '_mutation_dist.png')
+            out_file = out_path if out_path else os.path.join(plots_dir, filename)
+            _plot_generic_dist(
+                df, 'target_position', 'pred_position', 'pred_prob_position',
+                f'Mutation Position Frequency & Probability\n({os.path.basename(csv_path)}, Excl. Co-occurrence)',
+                'Genomic Position', out_file, max_x=30000, is_categorical=False
+            )
+            _log.force_print(f"[INFO] Base Mutation dist plot saved to: {out_file}")
 
-        # 正解ラベルが共起（複数変異）のものは除外
-        df_single = df[df['target_position'].apply(len) == 1].copy()
-        _log.force_print(
-            f"[INFO] Filtered samples (single-target only): {len(df_single)} / {len(df)}"
-        )
+        # Generate AA Position Dist
+        if 'target_aa_pos' in df.columns:
+            df['target_aa_pos'] = df['target_aa_pos'].apply(parse_list)
+            df['pred_aa_pos'] = df['pred_aa_pos'].apply(parse_list)
+            filename_aa = os.path.basename(csv_path).replace('.csv', '_aa_mutation_dist.png')
+            aa_out_file = os.path.join(plots_dir, filename_aa)
+            _plot_generic_dist(
+                df, 'target_aa_pos', 'pred_aa_pos', 'pred_prob_aa_pos',
+                f'AA Position Frequency & Probability\n({os.path.basename(csv_path)}, Excl. Co-occurrence)',
+                'Amino Acid Position', aa_out_file, max_x=12000, is_categorical=False
+            )
+            _log.force_print(f"[INFO] AA Mutation dist plot saved to: {aa_out_file}")
 
-        df_single['target_pos_val'] = df_single['target_position'].apply(lambda x: x[0])
-        df_single['pred_pos_val'] = df_single['pred_position'].apply(
-            lambda x: x[0] if len(x) > 0 else -1
-        )
-
-        target_counts = df_single['target_pos_val'].value_counts().sort_index()
-        pred_counts = df_single['pred_pos_val'].value_counts().sort_index()
-
-        plt.figure(figsize=(15, 10))
-        plt.rcParams.update({'font.size': 16})
-
-        plt.step(
-            target_counts.index, target_counts.values,
-            label='Ground Truth (Single Mutation)',
-            color='blue', alpha=0.6, where='mid', linewidth=1.5
-        )
-        plt.step(
-            pred_counts.index, pred_counts.values,
-            label='Prediction (Top-1)',
-            color='red', alpha=0.6, where='mid', linewidth=1.5
-        )
-
-        plt.title(
-            f'Mutation Position Frequency: Ground Truth vs Prediction\n'
-            f'({os.path.basename(csv_path)}, Excl. Co-occurrence)',
-            fontsize=22, fontweight='bold', pad=20
-        )
-        plt.xlabel('Genomic Position', fontsize=18, fontweight='bold')
-        plt.ylabel('Frequency (Count)', fontsize=18, fontweight='bold')
-        plt.legend(fontsize=16, prop={'weight': 'bold'})
-        plt.xticks(fontsize=14, fontweight='bold')
-        plt.yticks(fontsize=14, fontweight='bold')
-        plt.grid(True, linestyle='--', alpha=0.5)
-        plt.xlim(0, 30000)
-        plt.tight_layout()
-
-        out_file = out_path if out_path else csv_path.replace('.csv', '_mutation_dist.png')
-        plt.savefig(out_file, dpi=300)
-        plt.close()
-        _log.force_print(f"[INFO] Mutation dist plot saved to: {out_file}")
+        # Generate Region Dist
+        if 'target_region' in df.columns:
+            df['target_region'] = df['target_region'].apply(parse_list)
+            df['pred_region'] = df['pred_region'].apply(parse_list)
+            region_out_file = csv_path.replace('.csv', '_region_dist.png')
+            region_map = {v: k for k, v in config.PROTEIN_VOCABS.items()} if hasattr(config, 'PROTEIN_VOCABS') else None
+            _plot_generic_dist(
+                df, 'target_region', 'pred_region', 'pred_prob_region',
+                f'Protein Region Frequency & Probability\n({os.path.basename(csv_path)}, Excl. Co-occurrence)',
+                'Protein Region', region_out_file, max_x=None, is_categorical=True, vocab_map=region_map
+            )
+            _log.force_print(f"[INFO] Region dist plot saved to: {region_out_file}")
 
     except ImportError as e:
-        _log.force_print(f"[WARNING] Required library not available: {e}")
+        _log.force_print(f"[WARNING] Required library not available or error in plotting: {e}")
 
 
 def run_mutation_dist_plot():
@@ -729,7 +790,7 @@ def plot_base_embedding_network(model, cfg, output_dir: str, version: str = "",
         ax.set_title(title, fontsize=16, fontweight='bold', color='white', pad=20)
         ax.axis('off')
         plt.tight_layout()
-        net_path = os.path.join(output_dir, f'vocab_network_base_{version}.png')
+        net_path = _get_plot_path(output_dir, f'vocab_network_base_{version}.png')
         plt.savefig(net_path, dpi=200, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close()
         _log.force_print(f"[INFO] Base network saved: {net_path}")
@@ -753,7 +814,7 @@ def plot_base_embedding_network(model, cfg, output_dir: str, version: str = "",
         ax.set_title(f'Base Nucleotide Embedding — Cosine Similarity ({version})',
                      fontsize=14, fontweight='bold', color='white', pad=15)
         plt.tight_layout()
-        hm_path = os.path.join(output_dir, f'vocab_heatmap_base_{version}.png')
+        hm_path = _get_plot_path(output_dir, f'vocab_heatmap_base_{version}.png')
         plt.savefig(hm_path, dpi=200, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close()
         _log.force_print(f"[INFO] Base heatmap saved: {hm_path}")
@@ -868,7 +929,7 @@ def plot_position_threshold_network(model, pos_to_region: dict, output_dir: str,
                      fontsize=14, fontweight='bold', color='white', pad=20)
         ax.axis('off')
         plt.tight_layout()
-        out_path = os.path.join(output_dir, f'pos_network_threshold_{version}.png')
+        out_path = _get_plot_path(output_dir, f'pos_network_threshold_{version}.png')
         plt.savefig(out_path, dpi=200, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close()
         _log.force_print(f"[INFO] Threshold network saved: {out_path}")
@@ -929,7 +990,7 @@ def plot_position_tsne(model, pos_to_region: dict, output_dir: str,
         ax.set_xlabel('t-SNE 1', color='#aaaaaa', fontsize=10)
         ax.set_ylabel('t-SNE 2', color='#aaaaaa', fontsize=10)
         plt.tight_layout()
-        out_path = os.path.join(output_dir, f'pos_tsne_{version}.png')
+        out_path = _get_plot_path(output_dir, f'pos_tsne_{version}.png')
         plt.savefig(out_path, dpi=200, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close()
         _log.force_print(f"[INFO] t-SNE plot saved: {out_path}")
@@ -1034,7 +1095,7 @@ def plot_position_cluster_network(model, pos_to_region: dict, output_dir: str,
                      fontsize=14, fontweight='bold', color='white', pad=20)
         ax.axis('off')
         plt.tight_layout()
-        out_path = os.path.join(output_dir, f'pos_cluster_network_{version}.png')
+        out_path = _get_plot_path(output_dir, f'pos_cluster_network_{version}.png')
         plt.savefig(out_path, dpi=200, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close()
         _log.force_print(f"[INFO] Cluster network saved: {out_path}")
@@ -1173,7 +1234,7 @@ def plot_major_mutation_network(model, pos_to_region: dict, freq_csv: str,
         )
         ax.axis('off')
         plt.tight_layout()
-        out_path = os.path.join(output_dir, f'pos_major_mutations_{version}.png')
+        out_path = _get_plot_path(output_dir, f'pos_major_mutations_{version}.png')
         plt.savefig(out_path, dpi=200, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close()
         _log.force_print(f"[INFO] Major mutation network saved: {out_path}")
@@ -1322,7 +1383,7 @@ def plot_strength_calibration(details, output_dir, prefix="test"):
     ax.legend(framealpha=0.3, labelcolor='white')
 
     plt.tight_layout()
-    path = os.path.join(output_dir, f'{prefix}_strength_calibration.png')
+    path = _get_plot_path(output_dir, f'{prefix}_strength_calibration.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close()
     print(f"[INFO] Strength calibration plot saved to {path}")
@@ -1381,7 +1442,7 @@ def plot_per_position_recall(details, output_dir, prefix="test", top_n=40):
         spine.set_edgecolor('#444')
 
     plt.tight_layout()
-    path = os.path.join(output_dir, f'{prefix}_per_position_recall.png')
+    path = _get_plot_path(output_dir, f'{prefix}_per_position_recall.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close()
     print(f"[INFO] Per-position recall plot saved to {path}")
@@ -1435,7 +1496,7 @@ def plot_topk_precision(topk_results, output_dir, prefix="test"):
     ax2.legend(framealpha=0.3, labelcolor='white')
 
     plt.tight_layout()
-    path = os.path.join(output_dir, f'{prefix}_topk_precision.png')
+    path = _get_plot_path(output_dir, f'{prefix}_topk_precision.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close()
     print(f"[INFO] Top-K precision plot saved to {path}")
@@ -1519,7 +1580,7 @@ def plot_attention_heatmap(model, sample_batch, output_dir, prefix="test"):
 
     fig.suptitle(f'Attention Weights ({prefix.upper()})', color='white', fontsize=13)
     plt.tight_layout()
-    path = os.path.join(output_dir, f'{prefix}_attention_heatmap.png')
+    path = _get_plot_path(output_dir, f'{prefix}_attention_heatmap.png')
     plt.savefig(path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close()
     print(f"[INFO] Attention heatmap saved to {path}")

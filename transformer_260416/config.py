@@ -70,16 +70,18 @@ MAX_CO_OCCURRENCE = 5
 VALID_RATIO = 0.2
 
 # --- サンプリングモード設定 ---
-# 'proportional': 比率サンプリング (MAX_NUM件を各株の比率に応じて抽出)
-# 'fixed_per_strain': 株数×サンプル数制限 (MAX_STRAIN_NUM株からMAX_NUM_PER_STRAIN件ずつ)
+# (両モード共通) 頻出上位 MAX_STRAIN_NUM 株のデータのみを使用対象とする
+MAX_STRAIN_NUM = 10000       # 共通: 使用する上位株数
+
+# 'proportional': 対象株のデータ比率を維持しつつ、合計 MAX_NUM 件になるように抽出
+# 'fixed_per_strain': 対象の各株からそれぞれ最大 MAX_NUM_PER_STRAIN 件ずつ抽出
 SAMPLING_MODE = 'proportional'
 
 # モードA: 比率サンプリング用 (SAMPLING_MODE = 'proportional')
-MAX_NUM = 200000000  # 合計サンプル数（各株から比率に応じて抽出）
+MAX_NUM = 10000  # 全体での抽出合計サンプル数の上限
 
-# モードB: 株数×サンプル数制限用 (SAMPLING_MODE = 'fixed_per_strain')
-MAX_NUM_PER_STRAIN = 20000   # 各株からの最大サンプル数
-MAX_STRAIN_NUM = 10      # 使用する株数
+# モードB: 各株の上限数制限用 (SAMPLING_MODE = 'fixed_per_strain')
+MAX_NUM_PER_STRAIN = 20000   # 各株ごとの最大抽出サンプル数
 
 # --- ボキャブラリー設定 ---
 BASE_VOCABS = {'A':1, 'T':2, 'C':3, 'G':4, 'N':5, 'n':6, 'PAD':0}
@@ -153,10 +155,13 @@ LOSS_WEIGHT_STRENGTH = 0.02       # 流行度予測の損失重み (回帰)
 USE_LABEL_SMOOTHING = True
 LABEL_SMOOTHING_FACTOR = 0.1
 
-# Focal Loss: クラス不均衡対策 (Trueで適用)
-# 難しいサンプル（低確信度）に重点を置いた学習を行う
-USE_FOCAL_LOSS = True            # TrueでFocal Lossを使用、FalseでCrossEntropyLoss
-FOCAL_LOSS_GAMMA = 1.0           # focusing parameter (0で通常のCE、大きいほど難サンプル重視)
+# --- 損失関数設定 (新規追加・統合) ---
+# 選択肢: 'ce', 'focal', 'wce', 'cbce', 'cb_focal'
+LOSS_FUNCTION_TYPE = 'focal'
+FOCAL_LOSS_GAMMA = 1.0           # focal, cb_focal用 (0で通常のCE相当、大きいほど難サンプル重視)
+FOCAL_LOSS_ALPHA = None          # focal用 (floatで指定可能, 例: 0.25, Noneで無効)
+CLASS_BALANCED_BETA = 0.9999     # Class-Balanced用のパラメータ (通常0.99～0.9999)
+NORMALIZE_LOSS_WEIGHTS = True    # 頻度が少ないクラスでの損失爆発を防ぐため重みを正規化する
 
 # Scheduler: 学習率の自動調整 (Trueで適用)
 USE_SCHEDULER = True

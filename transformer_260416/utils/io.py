@@ -99,6 +99,20 @@ def save_batch_cache(data, path):
         _log.force_print(f"[WARNING] Failed to save batch cache: {e}")
 
 
+def _get_save_path(output_dir, filename):
+    """出力先をファイルの種類に応じて csv/, plots/, models/ に振り分ける"""
+    if filename.endswith('.csv') or filename.endswith('.txt') and 'strains.txt' in filename:
+        target_dir = os.path.join(output_dir, 'csv')
+    elif filename.endswith('.png'):
+        target_dir = os.path.join(output_dir, 'plots')
+    elif filename.endswith('.pth') or filename.endswith('summary.txt') or 'config' in filename or filename.endswith('.json'):
+        target_dir = os.path.join(output_dir, 'models')
+    else:
+        target_dir = output_dir
+
+    os.makedirs(target_dir, exist_ok=True)
+    return os.path.join(target_dir, filename)
+
 # ==========================================
 # 2. 結果保存関連
 # ==========================================
@@ -106,7 +120,7 @@ def save_batch_cache(data, path):
 def save_training_log(log_data, output_dir):
     """学習経過をCSVに保存する。"""
     df = pd.DataFrame(log_data)
-    path = os.path.join(output_dir, 'training_log.csv')
+    path = _get_save_path(output_dir, 'training_log.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Training log saved to {path}")
 
@@ -129,9 +143,11 @@ def save_prediction_results(results, output_dir, prefix="test"):
             'pred_strength': r.get('pred_strength', 0.0),
             'target_region': str(list(r['targets_region'])),
             'pred_region': str(list(r['preds_region'])),
+            'pred_prob_region': r.get('pred_prob_region', 0.0),
             'hit_region': r['hit_region'],
             'target_position': str(list(r['targets_position'])),
             'pred_position': str(list(r['preds_position'])),
+            'pred_prob_position': r.get('pred_prob_position', 0.0),
             'hit_position': r['hit_position'],
         }
         if 'targets_aa_pos' in r:
@@ -149,14 +165,14 @@ def save_prediction_results(results, output_dir, prefix="test"):
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_predictions.csv')
+    path = _get_save_path(output_dir, f'{prefix}_predictions.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Prediction results saved to {path}")
 
 
 def save_strain_info(strains, output_dir, prefix="train"):
     """使用した株のリストをテキストファイルに保存する。"""
-    path = os.path.join(output_dir, f'{prefix}_strains.txt')
+    path = _get_save_path(output_dir, f'{prefix}_strains.txt')
     with open(path, 'w') as f:
         for s in sorted(list(set(strains))):
             f.write(f"{s}\n")
@@ -166,7 +182,7 @@ def save_strain_info(strains, output_dir, prefix="train"):
 def save_config_copy(output_dir):
     """config.pyのコピーを保存する（再現性のため）。"""
     config_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.py')
-    config_dst = os.path.join(output_dir, 'config_snapshot.py')
+    config_dst = _get_save_path(output_dir, 'config_snapshot.py')
     try:
         shutil.copy2(config_src, config_dst)
         _log.force_print(f"[INFO] Config snapshot saved to {config_dst}")
@@ -203,7 +219,7 @@ def save_synonymous_distribution_csv(train_data, valid_data, test_data, output_d
             })
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, 'synonymous_distribution.csv')
+    path = _get_save_path(output_dir, 'synonymous_distribution.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Synonymous distribution saved to {path}")
 
@@ -218,7 +234,7 @@ def save_metrics_csv(metrics_by_ts, output_dir, prefix="val"):
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_metrics_by_timestep.csv')
+    path = _get_save_path(output_dir, f'{prefix}_metrics_by_timestep.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Metrics saved to {path}")
     return df
@@ -235,7 +251,7 @@ def save_category_metrics_csv(cat_metrics, output_dir, prefix="val"):
             rows.append(row)
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_metrics_by_category.csv')
+    path = _get_save_path(output_dir, f'{prefix}_metrics_by_category.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Category metrics saved to {path}")
     return df
@@ -277,7 +293,7 @@ def save_random_baseline_csv(details, output_dir, prefix="test"):
         })
 
     result_df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_random_baseline.csv')
+    path = _get_save_path(output_dir, f'{prefix}_random_baseline.csv')
     result_df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Random baseline comparison saved to {path}")
 
@@ -326,7 +342,7 @@ def save_region_metrics_csv(details, output_dir, prefix="test"):
         })
 
     result_df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_region_metrics.csv')
+    path = _get_save_path(output_dir, f'{prefix}_region_metrics.csv')
     result_df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Region metrics saved to {path}")
 
@@ -360,7 +376,7 @@ def save_prediction_distribution_csv(details, output_dir, prefix="test"):
         })
 
     result_df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_prediction_distribution.csv')
+    path = _get_save_path(output_dir, f'{prefix}_prediction_distribution.csv')
     result_df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Prediction distribution saved to {path}")
 
@@ -394,7 +410,7 @@ def save_confusion_matrix_csv(details, output_dir, prefix="test"):
         })
 
     result_df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_confusion_matrix.csv')
+    path = _get_save_path(output_dir, f'{prefix}_confusion_matrix.csv')
     result_df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Confusion matrix saved to {path}")
 
@@ -447,7 +463,7 @@ def save_recall_summary_csv(metrics_by_ts, output_dir, prefix="test"):
             summary_row[f'{task_key}_macro_recall'] = m_avg
         ts_df = pd.concat([ts_df, pd.DataFrame([summary_row])], ignore_index=True)
 
-    path = os.path.join(output_dir, f'{prefix}_recall_summary.csv')
+    path = _get_save_path(output_dir, f'{prefix}_recall_summary.csv')
     ts_df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Recall summary saved to {path}")
 
@@ -483,7 +499,7 @@ def save_per_position_recall_csv(details, output_dir, prefix="test"):
         for pos_id, cnt in sorted(pos_cnt.items())
     ]
     df = pd.DataFrame(rows).sort_values('total_targets', ascending=False)
-    path = os.path.join(output_dir, f'{prefix}_per_position_recall.csv')
+    path = _get_save_path(output_dir, f'{prefix}_per_position_recall.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Per-position recall saved to {path}")
     return df
@@ -521,7 +537,7 @@ def save_val_test_gap_csv(val_metrics, test_metrics, output_dir):
         })
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, 'val_test_gap.csv')
+    path = _get_save_path(output_dir, 'val_test_gap.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Val-Test generalization gap saved to {path}")
     return df
@@ -550,7 +566,7 @@ def save_error_analysis_csv(details, output_dir, prefix="test"):
     } for r in hard_cases]
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_error_analysis.csv')
+    path = _get_save_path(output_dir, f'{prefix}_error_analysis.csv')
     df.to_csv(path, index=False)
     _log.force_print(
         f"[INFO] Error analysis: {len(hard_cases)}/{len(details)} complete miss "
@@ -590,7 +606,7 @@ def save_strain_metrics_csv(details, output_dir, prefix="test"):
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_strain_metrics.csv')
+    path = _get_save_path(output_dir, f'{prefix}_strain_metrics.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Strain metrics saved to {path} ({len(rows)} strains)")
     return df
@@ -618,7 +634,7 @@ def save_early_stopping_json(training_log, best_model_path, output_dir, max_epoc
         'total_training_time_s': round(sum(r['time_seconds'] for r in training_log), 1),
     }
 
-    path = os.path.join(output_dir, 'early_stopping_info.json')
+    path = _get_save_path(output_dir, 'early_stopping_info.json')
     with open(path, 'w') as f:
         json.dump(info, f, indent=2, ensure_ascii=False)
     _log.force_print(
@@ -645,7 +661,7 @@ def save_model_summary_txt(model, output_dir):
         "=" * 70,
     ]
 
-    path = os.path.join(output_dir, 'model_summary.txt')
+    path = _get_save_path(output_dir, 'model_summary.txt')
     with open(path, 'w') as f:
         f.write('\n'.join(lines))
     _log.force_print(f"[INFO] Model summary saved to {path} (total params: {total_params:,})")
@@ -669,7 +685,7 @@ def save_topk_precision_csv(topk_results, output_dir, prefix="test"):
             })
 
     df = pd.DataFrame(rows)
-    path = os.path.join(output_dir, f'{prefix}_topk_precision.csv')
+    path = _get_save_path(output_dir, f'{prefix}_topk_precision.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Top-K precision summary saved to {path}")
 
