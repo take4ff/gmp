@@ -1,17 +1,31 @@
-# git rm -r --cached FolderName
-/meta_data/sequences-241017.csv
-/outputs/
-/old_file/
-/wandb/
+# ==========================================
+# Python Bytecode & Cache
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
 /cache/
 *.pkl
-nohup*.out
-*/__pycache__/
+
+# ==========================================
+# Data & Database
+# ==========================================
+/data/
+/db/
+/meta_data/sequences-241017.csv
 /meta_data/problematic_sites_sarsCov2.vcf
 /meta_data/public-2024-10-17.all.masked.pb
+
+# ==========================================
+# Outputs & Logs
+# ==========================================
+/outputs/
+/wandb/
+nohup*.out
+
+# ==========================================
+# Old Files & Third-party
+# ==========================================
+/old_file/
 /usher/
 /usher_old/
-/db/
-/data/
-transformer_260416/db/__pycache__/
-transformer_260416/utils/__pycache__/
