@@ -4,175 +4,256 @@
 
 ## 📖 Overview
 
-**Gemp** は、ウイルスの遺伝子変異を「言語」として捉え、Transformerモデルを用いて\*\*「次に出現する危険な変異」**と**「その流行規模（Strength）」\*\*を予測するAIフレームワークです。
+**Gemp** は、ウイルスの遺伝子変異を「言語」として捉え、Transformerモデルを用いて
+**「次に出現する危険な変異」** と **「その流行規模（Strength）」** を予測するAIフレームワークです。
 
-既存のワクチン開発が「変異が起きてから対応する（後手）」のに対し、本モデルは過去の変異文脈から将来のダイナミクスを予測し、\*\*「変異が起きる前に先回りして対策する（先手）」\*\*ことを目指して開発されました。
+既存のワクチン開発が「変異が起きてから対応する（後手）」のに対し、本モデルは過去の変異文脈から将来のダイナミクスを予測し、
+**「変異が起きる前に先回りして対策する（先手）」** ことを目指して開発されました。
 
 ### Key Capabilities
 
-1.  **時系列ダイナミクスの学習:** 単なるパターン認識ではなく、変異の順序（文脈）を学習し、未知の期間における変異傾向を予測。
-2.  **流行強度の予測:** 変異の内容だけでなく、その株がパンデミックを起こすリスク（Strength Score）を回帰予測。
-3.  **マルチタスク学習:** 塩基レベル・アミノ酸レベルの位置予測を同時に行うことで、生物学的に妥当な予測を実現。
+1. **時系列ダイナミクスの学習:** 単なるパターン認識ではなく、変異の順序（文脈）を学習し、未知の期間における変異傾向を予測。
+2. **流行強度の予測:** 変異の内容だけでなく、その株がパンデミックを起こすリスク（Strength Score）を回帰予測。
+3. **マルチタスク学習:** 塩基レベル・アミノ酸レベルの位置予測を同時に行うことで、生物学的に妥当な予測を実現。
+4. **DuckDBによる高効率データ管理:** 大規模ゲノムデータをDuckDBに格納し、メモリ効率良くストリーミングロードする。
 
------
+---
 
 ## 🚀 Features
 
-  * **Hierarchical Transformer:**
-      * **Co-occurrence Attention:** 同時に発生する変異（共起）の関係性を集約。
-      * **Causal Conv1d:** 局所的な文脈と短期的な依存関係を抽出。
-      * **Positional Encoding & Encoder:** 大局的な時系列変化を捉える。
-  * **Multi-Task Prediction Heads:**
-      * `Region`: 変異が発生するタンパク質領域 (例: Spike, NSP12)
-      * `Position`: 塩基配列上の絶対位置 (Nucleotide Position)
-      * `Protein Position`: アミノ酸残基レベルでの位置 (AA Position)
-      * `Strength`: 流行規模スコア (Log-scale Regression)
-  * **Uncertainty Weighting Loss:**
-      * Alex Kendall et al. の手法に基づき、タスク間の損失重みを自動調整する `MultiTaskLoss` を実装。
-  * **Rigorous Evaluation:**
-      * パス長（時間ステップ）に基づき、学習データ(Known)とテストデータ(Unknown)を厳密に分離して汎化性能を評価。
+- **Hierarchical Transformer:**
+  - **Co-occurrence Attention:** 同時に発生する変異（共起）の関係性を集約。
+  - **Causal Conv1d (Optional):** 局所的な文脈と短期的な依存関係を抽出（`USE_LOCAL_CONV1D`）。
+  - **Origin Attention (Optional):** 原点（Wuhan株）を常に参照するCross-Attention（`USE_ORIGIN_ATTENTION`）。
+  - **Transformer Encoder:** 大局的な時系列変化を捉える。
 
------
+- **Multi-Task Prediction Heads (6タスク):**
+  | タスク | 内容 | 損失重み |
+  |---|---|---|
+  | `Region` | タンパク質領域（37クラス） | 0.14 |
+  | `Position` | 塩基配列上の絶対位置（~30000クラス） | 0.70 |
+  | `AA Position` | アミノ酸残基レベルの位置（~10000クラス） | 0.10 |
+  | `Codon Position` | コドン内の位置（1/2/3の3クラス） | 0.04 |
+  | `Synonymous` | 同義/非同義変異の区別（2クラス） | 0.02 |
+  | `Strength` | 流行規模スコア（Log-scale 回帰） | 0.02 |
+
+- **高度な学習設定:**
+  - `Focal Loss` によるクラス不均衡対策
+  - `Label Smoothing` による過学習抑制
+  - `CosineAnnealingLR` スケジューラ
+  - `MultiTaskLoss`（Kendall et al.）による損失重みの自動調整（オプション）
+
+- **豊富な評価指標:**
+  - Hit Rate / Precision / Recall / F1（タイムステップ別・流行度カテゴリ別）
+  - **Weighted Recall@1** / **Macro Recall@1**（クラス単位の公平な評価）
+  - 流行度カテゴリ（Low/Medium/High）別比較
+  - ランダムベースラインとの比較
+  - タンパク質領域別・混同行列出力
+
+- **可視化:**
+  - 学習曲線、タイムステップ別・カテゴリ別メトリクスグラフ
+  - 変異位置分布比較（Ground Truth vs Prediction）
+  - 語彙埋め込みネットワーク（塩基・位置・クラスタ・t-SNE）
+
+---
 
 ## 🛠️ Architecture
 
-Gempは、ウイルス変異パス（時系列データ）を入力とし、次のタイムステップで起こる事象を予測します。
-
 ```mermaid
 graph TD
-    Input[Input Sequence （Mutations, Properties, Time）] --> Embed[Embedding Layer]
-    Embed --> CoAttn[Co-occurrence Attention]
-    CoAttn --> Conv[Causal Conv1d Local Context]
-    Conv --> Transformer[Transformer Encoder Global Dynamics]
-    Transformer --> Heads{Prediction Heads}
-    Heads --> Out1[Region Class]
-    Heads --> Out2[Nucleotide Pos Class]
-    Heads --> Out3[Protein Pos Class]
-    Heads --> Out4[Strength Score Regression]
+    Input["Input Sequence (Mutations, Properties, Time)"] --> Embed["Embedding Layer\n(Base, Position, AA, Region, CodonPos, Synonymous)"]
+    Embed --> CoAttn["Co-occurrence Attention\n(共起変異の集約)"]
+    CoAttn --> Conv["Causal Conv1d\n(局所文脈 / Optional)"]
+    Conv --> OriAttn["Origin Attention\n(Wuhan株参照 / Optional)"]
+    OriAttn --> Transformer["Transformer Encoder\n(大局的時系列)"]
+    Transformer --> Heads{"Prediction Heads"}
+    Heads --> Out1["Region Class (37)"]
+    Heads --> Out2["Nucleotide Pos (~30K)"]
+    Heads --> Out3["AA Pos (~10K)"]
+    Heads --> Out4["Codon Pos (3)"]
+    Heads --> Out5["Synonymous (2)"]
+    Heads --> Out6["Strength Score (回帰)"]
 ```
 
------
+---
 
 ## 📂 Directory Structure
 
 ```text
-Gemp/
-├── config.py           # ハイパーパラメータ、ファイルパス設定
-├── dataset.py          # データ読み込み、前処理、キャッシュ機構
-├── model.py            # Hierarchical Transformer & MultiTaskLoss 定義
-├── train.py            # 学習ループ
-├── evaluate.py         # 評価・推論ロジック
-├── utils.py            # ログ、可視化、レポート作成
-├── main.py             # 実行エントリポイント
-└── README.md           # ドキュメント
+gmp/
+├── README.md
+├── meta_data/                    # ゲノムアノテーション・アミノ酸特性
+│   ├── codon_mutation4.csv       # コドン変異テーブル（位置→遺伝子領域マッピング）
+│   └── aa_properties/            # アミノ酸理化学特性（疎水性・電荷・PAM250等）
+│
+├── transformer_260416/           # 現行メインパッケージ
+│   ├── config.py                 # ハイパーパラメータ・ファイルパス設定
+│   ├── model.py                  # HierarchicalTransformer / MultiTaskLoss
+│   ├── train.py                  # 学習ループ（1エポック分）
+│   ├── evaluate.py               # 評価・推論ロジック（全メトリクス計算）
+│   ├── preprocess.py             # DuckDB構築用前処理スクリプト
+│   ├── main.py                   # 実行エントリポイント
+│   │
+│   ├── db/                       # DuckDB データアクセス層
+│   │   ├── connection.py         # DB接続・存在確認・統計表示
+│   │   ├── dataset.py            # DB対応 DataLoader
+│   │   └── queries.py            # SQLクエリ集
+│   │
+│   ├── utils/                    # ユーティリティパッケージ
+│   │   ├── logging.py            # ログ出力・calculate_metrics・calculate_weighted_macro_recall
+│   │   ├── io.py                 # 結果保存（CSV/pickle/キャッシュ）
+│   │   └── plotting.py           # 可視化（学習曲線・メトリクス・語彙ネットワーク・変異分布）
+│   │
+│   └── legacy/                   # pickle キャッシュ方式（旧互換）
+│       └── dataset.py
+│
+├── transformer_260224/           # 前バージョン（参照用）
+│
+├── outputs/
+│   └── transformer_260416/
+│       └── results/<timestamp>/  # 1実行ごとの出力先
+│           ├── best_model.pth
+│           ├── config_snapshot.py
+│           ├── training_log.csv
+│           ├── training_curve.png
+│           ├── valid_predictions.csv
+│           ├── valid_metrics_by_timestep.csv
+│           ├── valid_recall_summary.csv       ← Weighted/Macro Recall@1
+│           ├── valid_region_metrics.csv
+│           ├── valid_confusion_matrix.csv
+│           ├── valid_random_baseline.csv
+│           ├── valid_metrics_plot.png
+│           ├── valid_category_plot.png
+│           ├── valid_predictions_mutation_dist.png
+│           ├── test_* (同上)
+│           ├── combined_val_test_metrics.png
+│           ├── combined_category_comparison.png
+│           ├── vocab_network_base_<ts>.png    ← 塩基埋め込みネットワーク
+│           ├── vocab_heatmap_base_<ts>.png
+│           ├── pos_network_threshold_<ts>.png
+│           ├── pos_tsne_<ts>.png
+│           ├── pos_cluster_network_<ts>.png
+│           └── pos_major_mutations_<ts>.png
+│
+└── db/                           # DuckDBデータベースファイル格納先
 ```
 
------
+---
 
 ## ⚙️ Installation & Usage
 
-### 1\. Requirements
+### 1. Requirements
 
-Python 3.8+ 環境にて、必要なライブラリをインストールしてください。
+Python 3.10+ 環境にて、必要なライブラリをインストールしてください。
 
 ```bash
-pip install torch pandas numpy tqdm matplotlib wandb
+pip install torch pandas numpy matplotlib scikit-learn networkx duckdb wandb tabulate
 ```
 
-### 2\. Configuration
+### 2. Configuration
 
-`config.py` にて、データパスや学習パラメータを設定可能です。
+`transformer_260416/config.py` にて、データパスや学習パラメータを設定します。
 
 ```python
-# config.py example
-EPOCHS = 20
-BATCH_SIZE = 64
-USE_MULTITASK_LOSS = True  # 自動重み付け調整
+# 主要設定項目
+EPOCHS = 15
+BATCH_SIZE = 512
+USE_DB = True               # DuckDB使用（推奨）
+USE_FOCAL_LOSS = True       # Focal Loss
+USE_LABEL_SMOOTHING = True  # Label Smoothing
+USE_LOCAL_CONV1D = True     # 局所Conv1d
+USE_ORIGIN_ATTENTION = True # Origin Attention
+TOP_K_EVAL = 1              # Top-K評価（1でRecall@1）
 ```
 
-### 3\. Training
+### 3. Preprocessing（初回のみ）
 
-以下のコマンドで学習および評価を実行します。
+DuckDB にゲノムデータを格納します（`USE_DB = True` の場合）。
 
 ```bash
-python -m main
+python -m transformer_260416.preprocess
 ```
 
-実行後、`outputs/` ディレクトリにモデルの重み、予測結果CSV、精度推移グラフが自動保存されます。
+### 4. Training & Evaluation
 
------
+```bash
+python -m transformer_260416.main
+```
 
-## 📊 Evaluation Report
+実行後、`outputs/transformer_260416/results/<timestamp>/` に全出力が保存されます。
 
-Gempは、\*\*「既知の過去データ(Validation)」**と**「未知の未来データ(Test)」\*\*に対する精度を並列で比較する統合レポートを出力します。
+---
 
-### Output Example
+## 📊 Evaluation Metrics
+
+### Hit Rate（サンプル単位）
+
+各サンプルについて「Top-K予測の中に正解が含まれるか」を判定するマクロ平均。
+共起（複数正解）の場合、いずれか1つに正解すればヒット。
+
+### Weighted Recall@1 / Macro Recall@1（クラス単位）
+
+クラス不均衡が大きい位置予測タスクの公平な評価指標。
+
+| 指標 | 計算式 | 特性 |
+|---|---|---|
+| **Weighted Recall@1** | `Σ(tp_c) / Σ(count_c)` | 出現頻度の高いクラスを重視 |
+| **Macro Recall@1** | `mean_c(tp_c / count_c)` | 稀なクラスを均等に評価 |
+
+`valid_recall_summary.csv` および `test_recall_summary.csv` に保存されます。
+
+### 流行度カテゴリ（Strength Category）
+
+変異株の流行規模を `log(1 + sample_count)` スケールで3分類：
+
+| カテゴリ | 閾値（デフォルト） | 概算サンプル数 |
+|---|---|---|
+| Low | < 3.0 | ~20 |
+| Medium | 3.0 ~ 5.0 | ~20〜150 |
+| High | ≥ 5.0 | 150+ |
+
+### Output Example（コンソール）
 
 ```text
-=====================================================================================
-【統合評価レポート - Validation vs Test】
-=====================================================================================
-
-----------------------------------------------------------------------------------------------------
-=== 1. Executive Summary (強度スコア別: High/Medium/Low) ===
-----------------------------------------------------------------------------------------------------
-
-  閾値: Low(<10), Medium(<12), High(≥12)
-
-カテゴリ      Val_サンプル  Val_タンパク質    Val_塩基位置    Val_アミノ酸      Test_サンプル  Test_タンパク質    Test_塩基位置    Test_アミノ酸
-----------  --------------  ----------------  --------------  --------------  ---------------  -----------------  ---------------  ---------------
-high                     9  66.7%             55.6%           55.6%                        28  35.7%              14.3%            14.3%
-medium                  43  48.8%             30.2%           30.2%                       200  40.0%              18.0%            19.5%
-low                    143  36.4%             24.5%           23.1%                       613  39.3%              25.4%            25.1%
-  (※ 未知の強毒株に対しても、高い精度で変異領域と位置を特定できていることを示す)
-
-----------------------------------------------------------------------------------------------------
-=== 2. Prediction Metrics Summary (予測対象別: 適合率/再現率/F1) ===
-----------------------------------------------------------------------------------------------------
-
-予測対象          Val_サンプル  Val_適合率    Val_再現率    Val_F1      Test_サンプル  Test_適合率    Test_再現率    Test_F1
---------------  --------------  ------------  ------------  --------  ---------------  -------------  -------------  ---------
-タンパク質領域             195  40.5%         32.4%         36.0%                 841  39.4%          28.5%          33.0%
-塩基位置                   195  27.2%         20.5%         23.4%                 841  23.3%          16.1%          19.0%
-アミノ酸位置               195  26.2%         19.8%         22.6%                 841  23.4%          16.3%          19.2%
-
-----------------------------------------------------------------------------------------------------
-=== 3. Biological Analysis (タンパク質領域別) ===
-----------------------------------------------------------------------------------------------------
-
-領域      Val_サンプル  Val_適合率    Val_再現率    Val_F1      Test_サンプル  Test_適合率    Test_再現率    Test_F1
-------  --------------  ------------  ------------  --------  ---------------  -------------  -------------  ---------
-S                   82  48.2%         82.9%         61.0%                 321  40.4%          91.6%          56.1%
-nsp3                26  20.4%         42.3%         27.5%                 163  32.7%          22.7%          26.8%
-N                   21  0.0%          0.0%          0.0%                   74  0.0%           0.0%           0.0%
-nsp2                10  0.0%          0.0%          0.0%                   53  0.0%           0.0%           0.0%
-nsp12               11  0.0%          0.0%          0.0%                   52  0.0%           0.0%           0.0%
-nsp13               10  0.0%          0.0%          0.0%                   50  0.0%           0.0%           0.0%
-nsp4                 9  0.0%          0.0%          0.0%                   45  0.0%           0.0%           0.0%
-ORF3a                7  0.0%          0.0%          0.0%                   47  0.0%           0.0%           0.0%
-nsp14                5  0.0%          0.0%          0.0%                   35  0.0%           0.0%           0.0%
-nsp15                7  0.0%          0.0%          0.0%                   29  0.0%           0.0%           0.0%
-
-----------------------------------------------------------------------------------------------------
-=== 4. Temporal Dynamics (パス長別 - 長さ1刻み) ===
-----------------------------------------------------------------------------------------------------
-
-種別      パス長    サンプル  タンパク質    塩基位置    アミノ酸
-------  --------  ----------  ------------  ----------  ----------
-Val           38          75  48.0%         33.3%       32.0%
-Val           39          74  32.4%         20.3%       18.9%
-Val           40          46  41.3%         28.3%       28.3%
-Test          41         252  39.7%         24.6%       24.6%
-Test          42         174  38.5%         25.3%       25.3%
-  (※ 時間経過に伴う精度の劣化（Generalization Gap）を可視化)
+=== Recall@1 Summary (TEST) ===
+  Task                    WeightedRecall@1   MacroRecall@1
+  ---------------------------------------------------------
+  タンパク質領域                    52.34%          38.21%
+  塩基配列位置                      31.05%          12.44%
+  アミノ酸配列位置                  29.88%          11.92%
+  コドン位置                        61.20%          58.73%
+  シノニマス                        72.10%          71.45%
 ```
 
------
+---
+
+## 🔬 Ablation Study
+
+`config.py` の以下のフラグで各コンポーネントの有効/無効を切り替えられます：
+
+```python
+USE_LOCAL_CONV1D = False         # Conv1d局所特徴抽出を無効化
+USE_ORIGIN_ATTENTION = False     # Origin Attentionを無効化
+USE_FOCAL_LOSS = False           # 通常のCrossEntropyLossに切り替え
+USE_LABEL_SMOOTHING = False      # Label Smoothingを無効化
+
+# 数値特徴量の個別マスク（再構築不要）
+ABLATION_MASKS = {
+    'FREQ': False,    # 変異頻度
+    'HYDRO': False,   # 疎水性差
+    'CHARGE': False,  # 電荷差
+    'SIZE': False,    # サイズ差
+    'BLSM': False,    # BLOSUM62
+    'PAM250': False,  # PAM250
+}
+```
+
+---
 
 ## 📝 License
 
 [MIT License / Research Use Only]
 
------
+---
 
-**Author:** [Takeru Aiba]
+**Author:** Takeru Aiba

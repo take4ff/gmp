@@ -5,22 +5,26 @@ import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SEED = 42
 
-# --- Ablation実験用マスク設定 (★追加) ---
-# Trueにすると、その特徴量を強制的に0（または無効値）にして学習・推論を行う
-# 注: PROTEIN_POSは予測ターゲットのためマスク対象外
+# --- Ablation実験用マスク設定 ---
+# Trueにすると、その数値特徴量を強制的に0にして学習・推論を行う
 ABLATION_MASKS = {
-    'CHEM_FEATURES': False,     # 数値特徴量（疎水性など）を無効化
-    'CO_OCCURRENCE': False,     # 共起情報を無視（共起数1として扱う、またはAttention無効化）
-    'AA_MUTATION': False,       # アミノ酸変異 (Before/After) をマスク
-    'CODON_POS': False,         # コドン位置をマスク
+    'FREQ': False,       # 変異頻度を無効化
+    'HYDRO': False,      # 疎水性差 (Eisenberg-Weiss) を無効化
+    'CHARGE': False,     # 電荷差を無効化
+    'SIZE': False,       # サイズ差を無効化
+    'BLSM': False,       # BLOSUM62差を無効化
+    'PAM250': False,     # PAM250スコアを無効化
 }
 
-# --- 強度スコア設定 (株別サンプル数ベース) ---
-USE_STRENGTH_FILTER = False          # 評価時に強度フィルタを適用 (Falseでカテゴリ分析を使用)
-STRENGTH_THRESHOLD = 0.0             # 強度スコアのしきい値 (0.0=フィルタなし)
-# 強度スコアは log(1 + sample_count) で計算される
+# --- データロード設定 ---
+USE_UNIQUE_FILTER = True        # 学習時にパス重複(raw_path)を除外するか（ユニーク化）
 
-# 強度カテゴリの閾値 (log(1+x)スケール)、自動設定機能がない場合は手動で設定
+# --- 流行度設定 (株別サンプル数ベース) ---
+USE_STRENGTH_FILTER = False          # 評価時に流行度フィルタを適用 (Falseでカテゴリ分析を使用)
+STRENGTH_THRESHOLD = 0.0             # 流行度のしきい値 (0.0=フィルタなし)
+# 流行度は log(1 + sample_count) で計算される
+
+# 流行度カテゴリの閾値 (log(1+x)スケール)、自動設定機能がない場合は手動で設定
 # 例: log(1+10)=2.4, log(1+100)=4.6, log(1+1000)=6.9
 STRENGTH_CATEGORY_LOW_MAX = 3.0      # 小: 0 ~ 3.0 (サンプル数 ~20)
 STRENGTH_CATEGORY_MED_MAX = 5.0      # 中: 3.0 ~ 5.0 (サンプル数 ~150)
@@ -33,10 +37,15 @@ Freq_csv = "outputs/table_heatmap/251031/table_set/table_set.csv"
 Disimilarity_csv = "meta_data/aa_properties/dissimilarity_metrics.csv"
 PAM250_csv = "meta_data/aa_properties/PAM250.csv"
 
-OUTPUT_DIR = 'outputs/transformer_251216/'
+OUTPUT_DIR = 'outputs/transformer_260224/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
 RESULT_SAVE_DIR = OUTPUT_DIR + 'results'
 INCREMENTAL_CACHE_DIR = 'cache/incremental_features'
+
+# --- DuckDB データベース設定 ---
+DB_DIR = 'db'
+USE_DB = True  # Trueの場合、pickleキャッシュの代わりにDuckDBを使用
+MIN_SEQ_LEN = 10  # 最小シーケンス長
 
 # --- キャッシュ・効率化設定 ---
 CACHE_DIR = 'cache/dataset'
@@ -66,7 +75,7 @@ VALID_RATIO = 0.2
 SAMPLING_MODE = 'proportional'
 
 # モードA: 比率サンプリング用 (SAMPLING_MODE = 'proportional')
-MAX_NUM = 2000000  # 合計サンプル数（各株から比率に応じて抽出）
+MAX_NUM = 200000000  # 合計サンプル数（各株から比率に応じて抽出）
 
 # モードB: 株数×サンプル数制限用 (SAMPLING_MODE = 'fixed_per_strain')
 MAX_NUM_PER_STRAIN = 20000   # 各株からの最大サンプル数
@@ -89,14 +98,15 @@ PROTEIN_VOCABS = {
 }
 
 # --- モデルアーキテクチャ設定 ---
-NUM_FEATURE_STRING = 8
+NUM_FEATURE_STRING = 9  # 8から9に変更（シノニマス特徴量追加）
 NUM_CHEM_FEATURES = 6
 
 VOCAB_SIZE_POSITION = 30006
 VOCAB_SIZE_BASE = 7
 VOCAB_SIZE_AA = 23
 VOCAB_SIZE_CODON_POS = 6
-VOCAB_SIZE_PROTEIN_POS = 10001
+VOCAB_SIZE_AA_POS = 10001
+VOCAB_SIZE_SYNONYMOUS = 2      # 0: ノンシノニマス, 1: シノニマス
 NUM_REGIONS = 37
 
 EMBED_DIM_POS = 128
@@ -104,7 +114,8 @@ EMBED_DIM_BASE = 32
 EMBED_DIM_AA = 64
 EMBED_DIM_REGION = 128
 EMBED_DIM_CODON_POS = 16
-EMBED_DIM_PROTEIN_POS = 128
+EMBED_DIM_AA_POS = 128
+EMBED_DIM_SYNONYMOUS = 8  # シノニマス用Embedding (2クラス: 0=非同義, 1=同義)
 
 FEATURE_DIM = 256
 HIDDEN_DIM = FEATURE_DIM
@@ -125,20 +136,27 @@ USE_ORIGIN_ATTENTION = True
 ORIGIN_ATTENTION_HEADS = 4  # Origin Attentionのヘッド数
 
 # --- 訓練設定 ---
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 LEARNING_RATE = 1e-4
-EPOCHS = 20
+EPOCHS = 15
 TOP_K_EVAL = 1 # Top-5でのRecallなども見たい場合はここを変更
 
 LOSS_WEIGHT_REGION = 0.14         # 基因領域の損失重み
 LOSS_WEIGHT_POSITION = 0.7        # 塩基位置の損失重み
-LOSS_WEIGHT_PROTEIN_POS = 0.14    # タンパク質位置の損失重み
-LOSS_WEIGHT_STRENGTH = 0.02       # 強度スコア予測の損失重み (回帰)
+LOSS_WEIGHT_AA_POS = 0.10         # アミノ酸配列位置の損失重み
+LOSS_WEIGHT_CODON_POS = 0.04      # コドン位置の損失重み (1,2,3の3クラス)
+LOSS_WEIGHT_SYNONYMOUS = 0.02    # シノニマス/ノンシノニマスの損失重み (2クラス)
+LOSS_WEIGHT_STRENGTH = 0.02       # 流行度予測の損失重み (回帰)
 
 # --- 高度な学習設定 (追加) ---
 # Label Smoothing: 過学習抑制 (Trueで適用)
 USE_LABEL_SMOOTHING = True
 LABEL_SMOOTHING_FACTOR = 0.1
+
+# Focal Loss: クラス不均衡対策 (Trueで適用)
+# 難しいサンプル（低確信度）に重点を置いた学習を行う
+USE_FOCAL_LOSS = True            # TrueでFocal Lossを使用、FalseでCrossEntropyLoss
+FOCAL_LOSS_GAMMA = 1.0           # focusing parameter (0で通常のCE、大きいほど難サンプル重視)
 
 # Scheduler: 学習率の自動調整 (Trueで適用)
 USE_SCHEDULER = True

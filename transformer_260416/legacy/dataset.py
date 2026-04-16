@@ -1,4 +1,6 @@
-# --- dataset.py ---
+# --- legacy/dataset.py ---
+# 旧実装（pickleキャッシュ方式）の参照用コピー
+# transformer_260224/dataset.py から移植
 import os
 import time
 import pickle
@@ -12,8 +14,9 @@ from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 
 # ローカルモジュール
-from . import config
-from .utils import force_print,get_config_hash, get_batch_cache_path, load_batch_cache, save_batch_cache
+from .. import config
+from ..utils.logging import force_print
+from ..utils.io import get_config_hash, get_batch_cache_path, load_batch_cache, save_batch_cache
 
 # ==========================================
 # 1. 定数・ヘルパーデータ
@@ -194,7 +197,7 @@ def info_import(paths, lengths, over_num):
 
 
 def print_strength_distribution(strains, strain_to_strength):
-    """強度スコアのカテゴリ別サンプル数を表示（動的閾値、1刻みのヒストグラム付き）"""
+    """流行度のカテゴリ別サンプル数を表示（動的閾値、1刻みのヒストグラム付き）"""
     import math
     from collections import Counter
     
@@ -233,22 +236,56 @@ def print_strength_distribution(strains, strain_to_strength):
         bin_key = int(score)
         score_bins[bin_key] += 1
     
-    print(f"\n[INFO] 強度スコア別サンプル数 (動的閾値: Low<{low_max}, Medium<{med_max}, High≥{med_max}):")
+    print(f"\n[INFO] 流行度別サンプル数 (動的閾値: Low<{low_max}, Medium<{med_max}, High≥{med_max}):")
     print(f"  スコア範囲: {min_score:.1f} ~ {max_score:.1f}")
     print(f"  Low: {low_count}")
     print(f"  Medium: {med_count}")
     print(f"  High: {high_count}")
     
     # 1刻みのヒストグラム表示
-    print(f"\n[INFO] 強度スコア分布 (1刻み):")
+    print(f"\n[INFO] 流行度分布 (1刻み):")
     for bin_key in sorted(score_bins.keys()):
         count = score_bins[bin_key]
         print(f"  {bin_key}-{bin_key+1}: {count}")
 
 
+def print_synonymous_distribution(data_list, dataset_name="Data"):
+    """
+    シノニマス/ノンシノニマスの分布を表示
+    
+    Args:
+        data_list: list of (x, y_targets, original_len, raw_path, strain, strength_score)
+                   y_targets: list of (region_id, position_id, aa_pos_id, codon_pos_id, is_synonymous)
+        dataset_name: 表示用のデータセット名
+    """
+    synonymous_count = 0
+    non_synonymous_count = 0
+    
+    for item in data_list:
+        y_targets = item[1]  # (region_id, position_id, aa_pos_id, codon_pos_id, is_synonymous)
+        for target in y_targets:
+            is_synonymous = target[4]  # is_synonymous
+            if is_synonymous == 1:
+                synonymous_count += 1
+            else:
+                non_synonymous_count += 1
+    
+    total = synonymous_count + non_synonymous_count
+    if total > 0:
+        syn_ratio = synonymous_count / total * 100
+        non_syn_ratio = non_synonymous_count / total * 100
+    else:
+        syn_ratio = non_syn_ratio = 0
+    
+    print(f"\n[INFO] {dataset_name} - シノニマス/ノンシノニマス分布:")
+    print(f"  シノニマス (同義変異):     {synonymous_count:>8} ({syn_ratio:.1f}%)")
+    print(f"  ノンシノニマス (非同義変異): {non_synonymous_count:>8} ({non_syn_ratio:.1f}%)")
+    print(f"  合計:                      {total:>8}")
+
+
 def compute_dynamic_thresholds(strain_to_strength):
     """
-    全データの強度スコアから動的閾値を計算
+    全データの流行度から動的閾値を計算
     
     Returns:
         (low_max, med_max): 整数の閾値
@@ -311,18 +348,19 @@ def import_strains(usher_dir, max_num=None, max_cooccur=10):
 # 3. 特徴量計算ロジック (Pandas排除・高速化)
 # ==========================================
 
-def preprocess_static_data(df_codon, df_freq, df_dissimilarity, df_pam250):
+def preprocess_static_data(df_codon, df_freq, df_dissimilarity, df_pam250, silent=False):
     """
     DataFrameを高速アクセス可能なPythonネイティブ型(Dict, List)に変換する
     """
-    force_print("[INFO] Converting DataFrames to optimized structures...")
+    if not silent:
+        force_print("[INFO] Converting DataFrames to optimized structures...")
     
     # 1. Codon Data (更新用Stateの初期値)
     # 各カラムをリストとして保持 (インデックスアクセス用)
     codon_data = {
         'base': df_codon['base'].tolist(),
         'protein': df_codon['protein'].tolist(),
-        'protein_pos': df_codon['protein_pos'].tolist(),
+        'aa_pos': df_codon['protein_pos'].tolist(),  # CSVカラム名は 'protein_pos'
         'codon': df_codon['codon'].tolist(),
         'codon_pos': df_codon['codon_pos'].tolist()
     }
@@ -369,7 +407,7 @@ def Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_
     # 状態取得 (リストアクセスは爆速)
     base = str(codon_state['base'][idx])
     protein = str(codon_state['protein'][idx])
-    protein_pos = int(codon_state['protein_pos'][idx])
+    aa_pos = int(codon_state['aa_pos'][idx])
     codon = str(codon_state['codon'][idx])
     codon_pos = int(codon_state['codon_pos'][idx])
 
@@ -417,7 +455,7 @@ def Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_
     
     pam250 = pam250_dict.get((bef_aa, aft_aa), 0.0)
 
-    return codon, new_codon, codon_pos, protein, protein_pos, freq, hydro, charge, size, blsm, pam250
+    return codon, new_codon, codon_pos, protein, aa_pos, freq, hydro, charge, size, blsm, pam250
 
 def Mutation_features_fast(mutations_str, codon_state, freq_dict, dissim_dict, pam250_dict):
     """高速版特徴量生成"""
@@ -428,7 +466,7 @@ def Mutation_features_fast(mutations_str, codon_state, freq_dict, dissim_dict, p
         aft = mutation[-1]
 
         # 高速版関数を呼び出し
-        codon, new_codon, codon_pos, protein, protein_pos, freq, hydro, charge, size, blsm, pam250 = \
+        codon, new_codon, codon_pos, protein, aa_pos, freq, hydro, charge, size, blsm, pam250 = \
             Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_dict)
         
         if codon == 'none': codon = 'nnn'
@@ -439,9 +477,12 @@ def Mutation_features_fast(mutations_str, codon_state, freq_dict, dissim_dict, p
         aa_bef_token = config.AA_VOCABS.get(DNA2Protein.get(codon, 'n'), config.AA_VOCABS['n'])
         aa_aft_token = config.AA_VOCABS.get(DNA2Protein.get(new_codon, 'n'), config.AA_VOCABS['n'])
         protein_token = config.PROTEIN_VOCABS.get(protein, config.PROTEIN_VOCABS['PAD'])
+        
+        # シノニマス判定: 変異前後のアミノ酸が同じなら1, 異なれば0
+        is_synonymous = 1 if aa_bef_token == aa_aft_token else 0
 
         cat_feat = [bef_token, base_pos, aft_token, codon_pos, 
-                    aa_bef_token, protein_pos, aa_aft_token, protein_token]
+                    aa_bef_token, aa_pos, aa_aft_token, protein_token, is_synonymous]
         num_feat = [freq, hydro, charge, size, blsm, pam250]
 
         features.append((cat_feat, num_feat))
@@ -458,12 +499,12 @@ def Feature_path_fast(mutation_path, codon_state_template, freq_dict, dissim_dic
     local_state = {
         'base': codon_state_template['base'][:],
         'protein': codon_state_template['protein'], # 変更されないなら参照でもいいが、念のためコピー推奨
-        'protein_pos': codon_state_template['protein_pos'],
+        'aa_pos': codon_state_template['aa_pos'],
         'codon': codon_state_template['codon'][:], # コドンは更新されるのでコピー必須
         'codon_pos': codon_state_template['codon_pos']
     }
     
-    # protein, protein_pos, codon_pos はロジック上更新されないなら
+    # protein, aa_pos, codon_pos はロジック上更新されないなら
     # コピーせず参照渡しにすればさらに高速化可能 (上記は安全策)
 
     path_features = []
@@ -563,12 +604,12 @@ def get_mutation_data(names, lengths, paths, df_codon, df_freq, df_dissimilarity
     return names, lengths, all_features_paths
 
 # ==========================================
-# 5. 強度スコア計算
+# 5. 流行度計算
 # ==========================================
 
 def compute_strain_strength(strains):
     """
-    株別サンプル数から強度スコア (log(1 + count)) を計算する
+    株別サンプル数から流行度 (log(1 + count)) を計算する
     Returns: strain_to_strength dict
     """
     from collections import Counter
@@ -612,14 +653,14 @@ def split_data_by_length(df, train_len, valid_num, valid_ratio, seed):
 
 def separate_XY(feature_paths, original_lengths, raw_paths, strain_names, strain_to_strength, max_x_len, ylen=1):
     """
-    シーケンスを特徴量(X)とラベル(Y)に分割し、メタデータ(Strain, 強度スコア等)も保持する
+    シーケンスを特徴量(X)とラベル(Y)に分割し、メタデータ(Strain, 流行度等)も保持する
     
     Args:
         strain_to_strength: {strain_name: strength_score} の辞書
     
     Returns:
         list of (x, y_targets, original_len, raw_path, strain, strength_score)
-        y_targets: list of (region_id, position_id, protein_pos_id)
+        y_targets: list of (region_id, position_id, aa_pos_id, codon_pos_id)
     """
     x_y_len_list = []
     
@@ -640,13 +681,16 @@ def separate_XY(feature_paths, original_lengths, raw_paths, strain_names, strain
                 cat_features = event[0]
                 region_id = cat_features[7]        # タンパク質領域
                 position_id = cat_features[1]      # 塩基位置
-                protein_pos_id = cat_features[5]   # タンパク質位置
-                y_targets.append((region_id, position_id, protein_pos_id))
+                aa_pos_id = cat_features[5]        # アミノ酸配列位置
+                codon_pos_id = cat_features[3]     # コドン位置 (1, 2, 3)
+                # シノニマス判定: aa_before(4) == aa_after(6) なら同義変異
+                is_synonymous = 1 if cat_features[4] == cat_features[6] else 0
+                y_targets.append((region_id, position_id, aa_pos_id, codon_pos_id, is_synonymous))
 
-            # 強度スコアを取得
+            # 流行度を取得
             strength_score = strain_to_strength.get(strain, 0.0)
             
-            # Strain情報と強度スコアもタプルに追加
+            # Strain情報と流行度もタプルに追加
             x_y_len_list.append((x, y_targets, original_len, raw_path, strain, strength_score))
             
     return x_y_len_list
@@ -711,28 +755,12 @@ class ViralDataset(Dataset):
                 cat = list(cat_origin) 
                 num = list(num_origin)
 
-                # cat構造: [bef(0), pos(1), aft(2), c_pos(3), aa_b(4), p_pos(5), aa_a(6), region(7)]
-                # 注: p_pos(5)はタンパク質位置で予測対象のためマスク対象外
-                
-                # 1. コドン位置のマスク
-                if config.ABLATION_MASKS['CODON_POS']:
-                    cat[3] = 0 # PAD
-                
-                # 2. アミノ酸変異(前後)のマスク
-                if config.ABLATION_MASKS['AA_MUTATION']:
-                    cat[4] = 0 # PAD
-                    cat[6] = 0 # PAD
-                
-                # 3. 数値特徴量のマスク
-                if config.ABLATION_MASKS['CHEM_FEATURES']:
-                    num = [0.0] * len(num)
-
-                # 4. 共起情報のマスク
-                # (共起変異がある場合、2つ目以降(c>0)を強制的にパディング扱いにすることで無視する)
-                if config.ABLATION_MASKS['CO_OCCURRENCE'] and c > 0:
-                    # 全て0にすればEmbeddingも0になり、パディングと同じ扱いになる
-                    cat = [0] * len(cat)
-                    num = [0.0] * len(num)
+                # 数値特徴量の個別マスク
+                # num構造: [freq(0), hydro(1), charge(2), size(3), blsm(4), pam250(5)]
+                mask_keys = ['FREQ', 'HYDRO', 'CHARGE', 'SIZE', 'BLSM', 'PAM250']
+                for i, key in enumerate(mask_keys):
+                    if config.ABLATION_MASKS[key]:
+                        num[i] = 0.0
 
                 padded_cat[target_idx, c] = cat
                 padded_num[target_idx, c] = num
@@ -777,14 +805,14 @@ def prepare_all_data():
     """
     全データの読み込み・前処理・分割を一括で行う
     
-    強度スコアは全データベースから計算され、キャッシュ利用時も
+    流行度は全データベースから計算され、キャッシュ利用時も
     最新のスコアが適用される。
     
     Returns:
         train, valid, test: 分割されたデータセット
         data_info: {train_min_len, train_max_len, val_min_len, val_max_len, test_min_len, test_max_len}
     """
-    from .utils import load_cache, save_cache, get_config_hash
+    from ..utils.io import load_cache, save_cache, get_config_hash
     
     config_hash = get_config_hash()
     cache_path = os.path.join(config.CACHE_DIR, f"data_cache_{config_hash}.pkl")
@@ -808,7 +836,7 @@ def prepare_all_data():
         max_cooccur=config.MAX_CO_OCCURRENCE
     )
     
-    # 全データで強度スコアを計算
+    # 全データで流行度を計算
     force_print("[INFO] Computing strain strength scores from ALL data...")
     strain_to_strength = compute_strain_strength(all_strains)
     
@@ -819,7 +847,7 @@ def prepare_all_data():
     force_print(f"[INFO] 動的閾値を設定: Low<{low_max}, Medium<{med_max}, High≥{med_max}")
     
     # 全データの統計を表示
-    print("\n[INFO] === 全データベースの強度スコア分布 ===")
+    print("\n[INFO] === 全データベースの流行度分布 ===")
     print_strength_distribution(all_strains, strain_to_strength)
     
     # =================================================================
@@ -833,7 +861,7 @@ def prepare_all_data():
         train, valid, test = cached_data
         force_print("[INFO] Loaded split datasets from cache.")
         
-        # キャッシュから読み込んだデータの強度スコアを全データベースのものに更新
+        # キャッシュから読み込んだデータの流行度を全データベースのものに更新
         force_print("[INFO] Updating strength scores with global database values...")
         train = _update_strength_scores(train, strain_to_strength)
         valid = _update_strength_scores(valid, strain_to_strength)
@@ -855,22 +883,30 @@ def prepare_all_data():
         valid_strains = [item[4] for item in valid]
         test_strains = [item[4] for item in test]
         
-        print("\n[INFO] === Train データの強度スコア分布 ===")
+        print("\n[INFO] === Train データの流行度分布 ===")
         print_strength_distribution(train_strains, strain_to_strength)
-        print("\n[INFO] === Validation データの強度スコア分布 ===")
+        print("\n[INFO] === Validation データの流行度分布 ===")
         print_strength_distribution(valid_strains, strain_to_strength)
-        print("\n[INFO] === Test データの強度スコア分布 ===")
+        print("\n[INFO] === Test データの流行度分布 ===")
         print_strength_distribution(test_strains, strain_to_strength)
+        
+        # キャッシュからのロード時もシノニマス分布を表示
+        print("\n" + "=" * 60)
+        print("[INFO] シノニマス/ノンシノニマス分布 (ラベルデータ)")
+        print("=" * 60)
+        print_synonymous_distribution(train, "Train")
+        print_synonymous_distribution(valid, "Validation")
+        print_synonymous_distribution(test, "Test")
         
     else:
         # フルプロセス実行
         force_print("--- Processing Features (no cache) ---")
         
         # 参照データのロード
-        df_freq = pd.read_csv(config.Freq_csv)
-        df_dissimilarity = pd.read_csv(config.Disimilarity_csv)
-        df_codon = pd.read_csv(config.Codon_csv)
-        df_pam250 = pd.read_csv(config.PAM250_csv, index_col=0)
+        df_freq = pd.read_csv(config.FREQ_CSV)
+        df_dissimilarity = pd.read_csv(config.DISSIMILARITY_CSV)
+        df_codon = pd.read_csv(config.CODON_CSV)
+        df_pam250 = pd.read_csv(config.PAM250_CSV, index_col=0)
         
         # フィルタリング（重複除去）
         df_unique = filter_unique(all_names, all_lengths, all_paths, all_strains)
@@ -924,12 +960,12 @@ def prepare_all_data():
             df_codon, df_freq, df_dissimilarity, df_pam250
         )
         
-        # 強度スコア別の分布を表示
-        force_print("\n[INFO] === Train データの強度スコア分布 ===")
+        # 流行度別の分布を表示
+        force_print("\n[INFO] === Train データの流行度分布 ===")
         print_strength_distribution(train_df['strain'].tolist(), strain_to_strength)
-        force_print("\n[INFO] === Validation データの強度スコア分布 ===")
+        force_print("\n[INFO] === Validation データの流行度分布 ===")
         print_strength_distribution(valid_df['strain'].tolist(), strain_to_strength)
-        force_print("\n[INFO] === Test データの強度スコア分布 ===")
+        force_print("\n[INFO] === Test データの流行度分布 ===")
         print_strength_distribution(test_df['strain'].tolist(), strain_to_strength)
         
         # 入力(X)と正解(Y)への分割（全データベースのstrain_to_strengthを使用）
@@ -944,6 +980,14 @@ def prepare_all_data():
                            test_df['strain'].tolist(), strain_to_strength,
                            config.MAX_SEQ_LEN, config.TARGET_LEN)
         
+        # シノニマス分布を表示
+        print("\n" + "=" * 60)
+        print("[INFO] シノニマス/ノンシノニマス分布 (ラベルデータ)")
+        print("=" * 60)
+        print_synonymous_distribution(train, "Train")
+        print_synonymous_distribution(valid, "Validation")
+        print_synonymous_distribution(test, "Test")
+        
         # キャッシュ保存
         save_cache([train, valid, test], cache_path)
     
@@ -952,7 +996,7 @@ def prepare_all_data():
 
 def _update_strength_scores(data_list, strain_to_strength):
     """
-    データリスト内の強度スコアを全データベースのものに更新
+    データリスト内の流行度を全データベースのものに更新
     
     Args:
         data_list: list of (x, y_targets, original_len, raw_path, strain, strength_score)
