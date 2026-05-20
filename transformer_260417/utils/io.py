@@ -1,0 +1,709 @@
+# --- utils/io.py ---
+# ファイル操作・キャッシュ・結果保存
+
+import os
+import pickle
+import hashlib
+import shutil
+import pandas as pd
+from . import logging as _log
+from .. import config
+
+
+# ==========================================
+# 1. キャッシュ関連
+# ==========================================
+
+def get_config_hash():
+    """config設定からハッシュを生成（設定変更時にキャッシュを無効化するため）。"""
+    try:
+        sampling_mode = getattr(config, 'SAMPLING_MODE', 'proportional')
+
+        relevant_configs = [
+            str(config.MAX_SEQ_LEN),
+            str(config.TRAIN_MAX),
+            str(config.VALID_NUM),
+            str(config.DATA_BASE_DIR),
+            str(config.TARGET_LEN),
+            str(config.MAX_CO_OCCURRENCE),
+            str(config.VALID_RATIO),
+            str(config.SEED),
+            str(config.NUM_FEATURE_STRING),
+            str(config.NUM_CHEM_FEATURES),
+            str(config.ABLATION_MASKS),
+            str(sampling_mode),
+        ]
+
+        if sampling_mode == 'proportional':
+            relevant_configs.append(str(config.MAX_NUM))
+        elif sampling_mode == 'fixed_per_strain':
+            relevant_configs.append(str(config.MAX_STRAIN_NUM))
+            relevant_configs.append(str(config.MAX_NUM_PER_STRAIN))
+
+        config_string = "_".join(relevant_configs)
+        return hashlib.md5(config_string.encode('utf-8')).hexdigest()
+    except Exception as e:
+        print(f"[WARNING] config.py からハッシュを生成できませんでした: {e}")
+        return "default_cache"
+
+
+def load_cache(cache_path):
+    """メインキャッシュをロードする。"""
+    if os.path.exists(cache_path):
+        print(f"[INFO] Loading data from cache: {cache_path}")
+        try:
+            with open(cache_path, 'rb') as f:
+                return pickle.load(f)
+        except Exception as e:
+            print(f"[WARNING] Failed to load cache: {e}. Re-processing data.")
+            return None
+    print("[INFO] Cache not found. Processing data...")
+    return None
+
+
+def save_cache(data, cache_path):
+    """メインキャッシュを保存する。"""
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        _log.force_print(f"[INFO] Saving data to cache: {cache_path}")
+        with open(cache_path, 'wb') as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as e:
+        _log.force_print(f"[WARNING] Failed to save cache: {e}")
+
+
+def get_batch_cache_path(batch_idx, total_batches, config_hash):
+    """インクリメンタルキャッシュ用のパスを生成する。"""
+    filename = f"feat_batch_{config_hash}_{batch_idx}_of_{total_batches}.pkl"
+    return os.path.join(config.INCREMENTAL_CACHE_DIR, filename)
+
+
+def load_batch_cache(path):
+    """バッチキャッシュをロードする。"""
+    if os.path.exists(path):
+        try:
+            with open(path, 'rb') as f:
+                return pickle.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def save_batch_cache(data, path):
+    """バッチキャッシュを保存する。"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as e:
+        _log.force_print(f"[WARNING] Failed to save batch cache: {e}")
+
+
+def _get_save_path(output_dir, filename):
+    """出力先をファイルの種類に応じて csv/, plots/, models/ に振り分ける"""
+    if filename.endswith('.csv') or filename.endswith('.txt') and 'strains.txt' in filename:
+        target_dir = os.path.join(output_dir, 'csv')
+    elif filename.endswith('.png'):
+        target_dir = os.path.join(output_dir, 'plots')
+    elif filename.endswith('.pth') or filename.endswith('summary.txt') or 'config' in filename or filename.endswith('.json'):
+        target_dir = os.path.join(output_dir, 'models')
+    else:
+        target_dir = output_dir
+
+    os.makedirs(target_dir, exist_ok=True)
+    return os.path.join(target_dir, filename)
+
+# ==========================================
+# 2. 結果保存関連
+# ==========================================
+
+def save_training_log(log_data, output_dir):
+    """学習経過をCSVに保存する。"""
+    df = pd.DataFrame(log_data)
+    path = _get_save_path(output_dir, 'training_log.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Training log saved to {path}")
+
+
+def save_prediction_results(results, output_dir, prefix="test"):
+    """予測結果の詳細をCSVに保存する。
+
+    Args:
+        results: evaluate()から返されるdetailed_resultsリスト
+        output_dir: 保存先ディレクトリ
+        prefix: ファイル名プレフィックス ("valid" or "test")
+    """
+    rows = []
+    for r in results:
+        row = {
+            'original_len': r['len'],
+            'raw_path': r['raw_path'],
+            'strain': r['strain'],
+            'strength_score': r.get('strength_score', 0.0),
+            'pred_strength': r.get('pred_strength', 0.0),
+            'target_region': str(list(r['targets_region'])),
+            'pred_region': str(list(r['preds_region'])),
+            'pred_prob_region': r.get('pred_prob_region', 0.0),
+            'hit_region': r['hit_region'],
+            'target_position': str(list(r['targets_position'])),
+            'pred_position': str(list(r['preds_position'])),
+            'pred_prob_position': r.get('pred_prob_position', 0.0),
+            'hit_position': r['hit_position'],
+        }
+        if 'targets_aa_pos' in r:
+            row['target_aa_pos'] = str(list(r['targets_aa_pos']))
+            row['pred_aa_pos'] = str(list(r['preds_aa_pos']))
+            row['hit_aa_pos'] = r['hit_aa_pos']
+        if 'targets_codon_pos' in r:
+            row['target_codon_pos'] = str(list(r['targets_codon_pos']))
+            row['pred_codon_pos'] = str(list(r['preds_codon_pos']))
+            row['hit_codon_pos'] = r['hit_codon_pos']
+        if 'targets_synonymous' in r:
+            row['target_synonymous'] = str(list(r['targets_synonymous']))
+            row['pred_synonymous'] = str(list(r['preds_synonymous']))
+            row['hit_synonymous'] = r['hit_synonymous']
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_predictions.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Prediction results saved to {path}")
+
+
+def save_strain_info(strains, output_dir, prefix="train"):
+    """使用した株のリストをテキストファイルに保存する。"""
+    path = _get_save_path(output_dir, f'{prefix}_strains.txt')
+    with open(path, 'w') as f:
+        for s in sorted(list(set(strains))):
+            f.write(f"{s}\n")
+    _log.force_print(f"[INFO] Strain info saved to {path}")
+
+
+def save_config_copy(output_dir):
+    """config.pyのコピーを保存する（再現性のため）。"""
+    config_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.py')
+    config_dst = _get_save_path(output_dir, 'config_snapshot.py')
+    try:
+        shutil.copy2(config_src, config_dst)
+        _log.force_print(f"[INFO] Config snapshot saved to {config_dst}")
+    except Exception as e:
+        _log.force_print(f"[WARNING] Failed to save config snapshot: {e}")
+
+
+def save_synonymous_distribution_csv(train_data, valid_data, test_data, output_dir):
+    """シノニマス/ノンシノニマスの分布をCSVに保存する。"""
+    def count_synonymous(data_list):
+        syn_count, non_syn_count = 0, 0
+        for item in data_list:
+            y_targets = item[1]
+            for target in y_targets:
+                is_synonymous = target[4] if len(target) > 4 else 0
+                if is_synonymous == 1:
+                    syn_count += 1
+                else:
+                    non_syn_count += 1
+        return syn_count, non_syn_count
+
+    rows = []
+    for name, data in [('Train', train_data), ('Validation', valid_data), ('Test', test_data)]:
+        if data:
+            syn, non_syn = count_synonymous(data)
+            total = syn + non_syn
+            rows.append({
+                'dataset': name,
+                'synonymous_count': syn,
+                'non_synonymous_count': non_syn,
+                'total': total,
+                'synonymous_ratio_pct': syn / total * 100 if total > 0 else 0,
+                'non_synonymous_ratio_pct': non_syn / total * 100 if total > 0 else 0
+            })
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, 'synonymous_distribution.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Synonymous distribution saved to {path}")
+
+
+def save_metrics_csv(metrics_by_ts, output_dir, prefix="val"):
+    """タイムステップ別メトリクスをCSVに保存する。"""
+    rows = []
+    for ts_len in sorted(metrics_by_ts.keys()):
+        m = metrics_by_ts[ts_len]
+        row = {'timestep': ts_len}
+        row.update(m)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_metrics_by_timestep.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Metrics saved to {path}")
+    return df
+
+
+def save_category_metrics_csv(cat_metrics, output_dir, prefix="val"):
+    """流行度カテゴリ別メトリクスをCSVに保存する。"""
+    rows = []
+    for ts_len in sorted(cat_metrics.keys()):
+        for category in ['low', 'medium', 'high']:
+            m = cat_metrics[ts_len][category]
+            row = {'timestep': ts_len, 'category': category}
+            row.update(m)
+            rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_metrics_by_category.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Category metrics saved to {path}")
+    return df
+
+
+def save_random_baseline_csv(details, output_dir, prefix="test"):
+    """ランダムベースラインとの比較をCSVに保存する。"""
+    df = pd.DataFrame(details) if details else pd.DataFrame()
+    if len(df) == 0:
+        return
+
+    random_baselines = {
+        'タンパク質領域': 1 / config.NUM_REGIONS * 100,
+        '塩基配列位置': 1 / config.VOCAB_SIZE_POSITION * 100,
+        'アミノ酸配列位置': 1 / config.VOCAB_SIZE_AA_POS * 100,
+        'コドン位置': 1 / 3 * 100,
+        'シノニマス': 50.0,
+    }
+
+    label_mappings = [
+        ('タンパク質領域', 'hit_region'),
+        ('塩基配列位置', 'hit_position'),
+        ('アミノ酸配列位置', 'hit_aa_pos'),
+        ('コドン位置', 'hit_codon_pos'),
+        ('シノニマス', 'hit_synonymous'),
+    ]
+
+    rows = []
+    for label_name, hit_col in label_mappings:
+        random_rate = random_baselines.get(label_name, 0)
+        hit_rate = df[hit_col].mean() * 100 if hit_col in df.columns else 0
+        improvement = hit_rate / random_rate if random_rate > 0 else 0
+
+        rows.append({
+            'prediction_target': label_name,
+            'random_baseline_pct': random_rate,
+            'model_hit_rate_pct': hit_rate,
+            'improvement_ratio': improvement
+        })
+
+    result_df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_random_baseline.csv')
+    result_df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Random baseline comparison saved to {path}")
+
+
+def save_region_metrics_csv(details, output_dir, prefix="test"):
+    """タンパク質領域別メトリクスをCSVに保存する。"""
+    df = pd.DataFrame(details) if details else pd.DataFrame()
+    if len(df) == 0:
+        return
+
+    region_names = {v: k for k, v in config.PROTEIN_VOCABS.items()}
+    region_stats = {}
+
+    for _, row in df.iterrows():
+        for reg_id in row['targets_region']:
+            if reg_id not in region_stats:
+                region_stats[reg_id] = {'tp': 0, 'fp': 0, 'fn': 0, 'count': 0}
+            region_stats[reg_id]['count'] += 1
+            if reg_id in row['preds_region']:
+                region_stats[reg_id]['tp'] += 1
+            else:
+                region_stats[reg_id]['fn'] += 1
+        for pred_id in row['preds_region']:
+            if pred_id not in row['targets_region']:
+                if pred_id not in region_stats:
+                    region_stats[pred_id] = {'tp': 0, 'fp': 0, 'fn': 0, 'count': 0}
+                region_stats[pred_id]['fp'] += 1
+
+    rows = []
+    for reg_id in sorted(region_stats.keys(), key=lambda x: region_stats[x]['count'], reverse=True):
+        s = region_stats[reg_id]
+        prec = s['tp'] / (s['tp'] + s['fp']) * 100 if (s['tp'] + s['fp']) > 0 else 0
+        rec = s['tp'] / (s['tp'] + s['fn']) * 100 if (s['tp'] + s['fn']) > 0 else 0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0
+
+        rows.append({
+            'region_id': reg_id,
+            'region_name': region_names.get(reg_id, f"ID:{reg_id}"),
+            'sample_count': s['count'],
+            'true_positives': s['tp'],
+            'false_positives': s['fp'],
+            'false_negatives': s['fn'],
+            'precision_pct': prec,
+            'recall_pct': rec,
+            'f1_pct': f1
+        })
+
+    result_df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_region_metrics.csv')
+    result_df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Region metrics saved to {path}")
+
+
+def save_prediction_distribution_csv(details, output_dir, prefix="test"):
+    """予測分布（どの領域に何回予測したか）をCSVに保存する。"""
+    df = pd.DataFrame(details) if details else pd.DataFrame()
+    if len(df) == 0:
+        return
+
+    region_names = {v: k for k, v in config.PROTEIN_VOCABS.items()}
+
+    pred_counts = {}
+    target_counts = {}
+
+    for _, row in df.iterrows():
+        for pred_id in row['preds_region']:
+            pred_counts[pred_id] = pred_counts.get(pred_id, 0) + 1
+        for target_id in row['targets_region']:
+            target_counts[target_id] = target_counts.get(target_id, 0) + 1
+
+    all_ids = set(pred_counts.keys()) | set(target_counts.keys())
+
+    rows = []
+    for reg_id in sorted(all_ids, key=lambda x: pred_counts.get(x, 0) + target_counts.get(x, 0), reverse=True):
+        rows.append({
+            'region_id': reg_id,
+            'region_name': region_names.get(reg_id, f"ID:{reg_id}"),
+            'prediction_count': pred_counts.get(reg_id, 0),
+            'target_count': target_counts.get(reg_id, 0)
+        })
+
+    result_df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_prediction_distribution.csv')
+    result_df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Prediction distribution saved to {path}")
+
+
+def save_confusion_matrix_csv(details, output_dir, prefix="test"):
+    """タンパク質領域の混同行列をCSVに保存する。"""
+    df = pd.DataFrame(details) if details else pd.DataFrame()
+    if len(df) == 0:
+        return
+
+    region_names = {v: k for k, v in config.PROTEIN_VOCABS.items()}
+    confusion = {}
+
+    for _, row in df.iterrows():
+        targets = list(row['targets_region'])
+        preds = list(row['preds_region'])
+
+        for t in targets:
+            for p in preds:
+                key = (t, p)
+                confusion[key] = confusion.get(key, 0) + 1
+
+    rows = []
+    for (true_id, pred_id), count in sorted(confusion.items(), key=lambda x: x[1], reverse=True):
+        rows.append({
+            'true_region_id': true_id,
+            'true_region_name': region_names.get(true_id, f"ID:{true_id}"),
+            'pred_region_id': pred_id,
+            'pred_region_name': region_names.get(pred_id, f"ID:{pred_id}"),
+            'count': count
+        })
+
+    result_df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_confusion_matrix.csv')
+    result_df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Confusion matrix saved to {path}")
+
+
+def save_recall_summary_csv(metrics_by_ts, output_dir, prefix="test"):
+    """Weighted Recall@1 と Macro Recall@1 のサマリーをCSVに保存する。
+
+    全タイムステップを num_samples で加重平均した 1行サマリーと、
+    タイムステップ別の詳細行を含む CSV を出力する。
+
+    Args:
+        metrics_by_ts: evaluate() が返す final_metrics_by_ts
+        output_dir: 保存先ディレクトリ
+        prefix: ファイル名プレフィックス
+    """
+    tasks = [
+        ('region',      'タンパク質領域'),
+        ('position',    '塩基配列位置'),
+        ('aa_pos',      'アミノ酸配列位置'),
+        ('codon_pos',   'コドン位置'),
+        ('synonymous',  'シノニマス'),
+    ]
+
+    # タイムステップ別の行
+    rows = []
+    for ts_len in sorted(metrics_by_ts.keys()):
+        m = metrics_by_ts[ts_len]
+        row = {'timestep': ts_len, 'num_samples': m['num_samples']}
+        for task_key, _ in tasks:
+            row[f'{task_key}_weighted_recall'] = m.get(f'{task_key}_weighted_recall', 0.0)
+            row[f'{task_key}_macro_recall'] = m.get(f'{task_key}_macro_recall', 0.0)
+        rows.append(row)
+
+    ts_df = pd.DataFrame(rows)
+
+    # 全体集約行（num_samples で加重平均）
+    total_samples = sum(m['num_samples'] for m in metrics_by_ts.values())
+    if total_samples > 0:
+        summary_row = {'timestep': 'ALL', 'num_samples': total_samples}
+        for task_key, _ in tasks:
+            w_avg = sum(
+                m.get(f'{task_key}_weighted_recall', 0.0) * m['num_samples']
+                for m in metrics_by_ts.values()
+            ) / total_samples
+            m_avg = sum(
+                m.get(f'{task_key}_macro_recall', 0.0) * m['num_samples']
+                for m in metrics_by_ts.values()
+            ) / total_samples
+            summary_row[f'{task_key}_weighted_recall'] = w_avg
+            summary_row[f'{task_key}_macro_recall'] = m_avg
+        ts_df = pd.concat([ts_df, pd.DataFrame([summary_row])], ignore_index=True)
+
+    path = _get_save_path(output_dir, f'{prefix}_recall_summary.csv')
+    ts_df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Recall summary saved to {path}")
+
+    # コンソール表示（ALL行のみ）
+    _log.force_print(f"\n[INFO] === Recall@1 Summary ({prefix.upper()}) ===")
+    _log.force_print(f"  {'Task':<22} {'WeightedRecall@1':>18} {'MacroRecall@1':>15}")
+    _log.force_print(f"  {'-'*57}")
+    if total_samples > 0:
+        for task_key, task_label in tasks:
+            w = summary_row[f'{task_key}_weighted_recall']
+            m = summary_row[f'{task_key}_macro_recall']
+            _log.force_print(f"  {task_label:<22} {w:>17.2f}%  {m:>13.2f}%")
+
+    return ts_df
+
+
+def save_per_position_recall_csv(details, output_dir, prefix="test"):
+    """塩基位置ごとの Recall@1（TP/出現数）をCSVに保存する。"""
+    pos_tp = {}
+    pos_cnt = {}
+    for r in details:
+        targets = r.get('targets_position', set())
+        preds   = r.get('preds_position', set())
+        for p in targets:
+            pos_cnt[p] = pos_cnt.get(p, 0) + 1
+            if p in preds:
+                pos_tp[p] = pos_tp.get(p, 0) + 1
+
+    rows = [
+        {'position_id': pos_id, 'total_targets': cnt,
+         'true_positives': pos_tp.get(pos_id, 0),
+         'recall_pct': pos_tp.get(pos_id, 0) / cnt * 100 if cnt > 0 else 0.0}
+        for pos_id, cnt in sorted(pos_cnt.items())
+    ]
+    df = pd.DataFrame(rows).sort_values('total_targets', ascending=False)
+    path = _get_save_path(output_dir, f'{prefix}_per_position_recall.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Per-position recall saved to {path}")
+    return df
+
+
+def save_val_test_gap_csv(val_metrics, test_metrics, output_dir):
+    """Validation と Test の指標差（Generalization Gap）をCSVに保存する。"""
+    if not val_metrics or not test_metrics:
+        return
+
+    metric_keys = [
+        'region_hit_rate', 'position_hit_rate', 'aa_pos_hit_rate',
+        'codon_pos_hit_rate', 'synonymous_hit_rate',
+        'region_weighted_recall', 'position_weighted_recall',
+        'aa_pos_weighted_recall', 'region_macro_recall', 'position_macro_recall',
+        'strength_mae',
+    ]
+
+    def _wavg(metrics_by_ts, key):
+        total = sum(m['num_samples'] for m in metrics_by_ts.values())
+        if total == 0:
+            return 0.0
+        return sum(m.get(key, 0) * m['num_samples'] for m in metrics_by_ts.values()) / total
+
+    rows = []
+    for key in metric_keys:
+        v = _wavg(val_metrics, key)
+        t = _wavg(test_metrics, key)
+        rows.append({
+            'metric': key,
+            'validation': round(v, 4),
+            'test': round(t, 4),
+            'gap_val_minus_test': round(v - t, 4),
+            'gap_pct': round((v - t) / v * 100, 2) if v != 0 else 0.0,
+        })
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, 'val_test_gap.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Val-Test generalization gap saved to {path}")
+    return df
+
+
+def save_error_analysis_csv(details, output_dir, prefix="test"):
+    """全タスクで予測を外したサンプル（完全失敗例）をCSVに保存する。"""
+    hard_cases = [
+        r for r in details
+        if not r.get('hit_region') and not r.get('hit_position') and not r.get('hit_aa_pos')
+    ]
+    if not hard_cases:
+        _log.force_print(f"[INFO] Error analysis: no complete miss samples ({prefix})")
+        return
+
+    rows = [{
+        'strain': r.get('strain'),
+        'len': r.get('len'),
+        'strength_score': r.get('strength_score', 0.0),
+        'pred_strength': r.get('pred_strength', 0.0),
+        'raw_path': r.get('raw_path', ''),
+        'targets_region': str(list(r.get('targets_region', set()))),
+        'preds_region': str(list(r.get('preds_region', set()))),
+        'targets_position': str(list(r.get('targets_position', set()))),
+        'preds_position': str(list(r.get('preds_position', set()))),
+    } for r in hard_cases]
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_error_analysis.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(
+        f"[INFO] Error analysis: {len(hard_cases)}/{len(details)} complete miss "
+        f"({len(hard_cases)/len(details)*100:.1f}%) saved to {path}"
+    )
+    return df
+
+
+def save_strain_metrics_csv(details, output_dir, prefix="test"):
+    """株（Pango lineage）ごとの各タスク Hit Rate をCSVに保存する。"""
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+    strain_stats = {}
+
+    for r in details:
+        strain = r.get('strain', 'unknown')
+        if strain not in strain_stats:
+            strain_stats[strain] = {t: {'hits': 0, 'n': 0} for t in tasks}
+            strain_stats[strain].update({'strength_sum': 0.0, 'count': 0})
+        strain_stats[strain]['count'] += 1
+        strain_stats[strain]['strength_sum'] += r.get('strength_score', 0.0)
+        for task in tasks:
+            hit_key = f'hit_{task}'
+            if hit_key in r:
+                strain_stats[strain][task]['n']    += 1
+                strain_stats[strain][task]['hits'] += int(r[hit_key])
+
+    rows = []
+    for strain, s in sorted(strain_stats.items(), key=lambda x: x[1]['count'], reverse=True):
+        row = {
+            'strain': strain,
+            'num_samples': s['count'],
+            'avg_strength': s['strength_sum'] / s['count'] if s['count'] > 0 else 0.0,
+        }
+        for task in tasks:
+            n = s[task]['n']
+            row[f'{task}_hit_rate_pct'] = s[task]['hits'] / n * 100 if n > 0 else 0.0
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_strain_metrics.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Strain metrics saved to {path} ({len(rows)} strains)")
+    return df
+
+
+def save_early_stopping_json(training_log, best_model_path, output_dir, max_epochs):
+    """Early Stopping 情報を JSON に保存する。"""
+    import json
+    if not training_log:
+        return
+
+    # nan \u30ac\u30fc\u30c9: val_loss \u304c nan \u306e\u884c\u3092\u9664\u5916\u3057\u3066 best_epoch \u3092\u78ba\u5b9a\u3059\u308b
+    # (Hard Target + cbce \u7b49\u3067 nan \u304c\u767a\u751f\u3057\u305f\u5834\u5408\u306b min() \u304c\u8ab0\u686f\u306b\u306a\u308b\u554f\u984c\u3092\u9632\u3050)
+    valid_rows = [r for r in training_log if r['val_loss'] == r['val_loss']]  # nan != nan \u3092\u5229\u7528
+    rows_for_best = valid_rows if valid_rows else training_log  # \u5168\u884c nan \u306a\u3089\u5148\u982d\u884c\u3092\u4ee3\u7528
+    best_row = min(rows_for_best, key=lambda x: x['val_loss'])
+
+    last_row = training_log[-1]
+
+    info = {
+        'total_epochs_run': len(training_log),
+        'max_epochs': max_epochs,
+        'early_stopped': len(training_log) < max_epochs,
+        'best_epoch': best_row['epoch'],
+        'best_val_loss': round(best_row['val_loss'], 6),
+        'best_train_loss': round(best_row['train_loss'], 6),
+        'final_epoch': last_row['epoch'],
+        'final_val_loss': round(last_row['val_loss'], 6),
+        'best_model_path': str(best_model_path),
+        'total_training_time_s': round(sum(r['time_seconds'] for r in training_log), 1),
+    }
+
+    path = _get_save_path(output_dir, 'early_stopping_info.json')
+    with open(path, 'w') as f:
+        json.dump(info, f, indent=2, ensure_ascii=False)
+    _log.force_print(
+        f"[INFO] Early stopping info saved to {path} "
+        f"(best epoch={info['best_epoch']}, val_loss={info['best_val_loss']})"
+    )
+    return info
+
+
+def save_model_summary_txt(model, output_dir):
+    """モデルのアーキテクチャ・パラメータ数をテキストファイルに保存する。"""
+    total_params     = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    lines = [
+        "=" * 70,
+        "Model Summary",
+        "=" * 70,
+        str(model),
+        "",
+        f"Total parameters:     {total_params:,}",
+        f"Trainable parameters: {trainable_params:,}",
+        f"Non-trainable:        {total_params - trainable_params:,}",
+        "=" * 70,
+    ]
+
+    path = _get_save_path(output_dir, 'model_summary.txt')
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines))
+    _log.force_print(f"[INFO] Model summary saved to {path} (total params: {total_params:,})")
+
+
+def save_topk_precision_csv(topk_results, output_dir, prefix="test"):
+    """Top-K Precision / Recall / Hit Rate の比較表をCSVに保存する。"""
+    task_labels = {
+        'region': 'region', 'position': 'position',
+        'aa_pos': 'aa_pos', 'codon_pos': 'codon_pos', 'synonymous': 'synonymous',
+    }
+    rows = []
+    for task, k_dict in topk_results.items():
+        for k, metrics in k_dict.items():
+            rows.append({
+                'task': task,
+                'top_k': k,
+                'precision_pct': round(metrics['precision'], 2),
+                'recall_pct': round(metrics['recall'], 2),
+                'hit_rate_pct': round(metrics['hit_rate'], 2),
+            })
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_topk_precision.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Top-K precision summary saved to {path}")
+
+    # コンソール表示
+    _log.force_print(f"\n[INFO] === Top-K Precision ({prefix.upper()}) ===")
+    _log.force_print(f"  {'Task':<20} {'K':>4} {'Precision':>11} {'Recall':>9} {'HitRate':>9}")
+    _log.force_print(f"  {'-'*58}")
+    for task in task_labels:
+        if task not in topk_results:
+            continue
+        for k in sorted(topk_results[task].keys()):
+            m = topk_results[task][k]
+            _log.force_print(
+                f"  {task:<20} {k:>4}  {m['precision']:>9.2f}%  {m['recall']:>7.2f}%  {m['hit_rate']:>7.2f}%"
+            )
+    return df

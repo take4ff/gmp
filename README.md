@@ -86,7 +86,7 @@ gmp/
 │   ├── codon_mutation4.csv       # コドン変異テーブル（位置→遺伝子領域マッピング）
 │   └── aa_properties/            # アミノ酸理化学特性（疎水性・電荷・PAM250等）
 │
-├── transformer_260416/           # 現行メインパッケージ
+├── transformer_260417/           # 現行メインパッケージ
 │   ├── config.py                 # ハイパーパラメータ・ファイルパス設定
 │   ├── model.py                  # HierarchicalTransformer / MultiTaskLoss
 │   ├── train.py                  # 学習ループ（1エポック分）
@@ -110,7 +110,7 @@ gmp/
 ├── transformer_260224/           # 前バージョン（参照用）
 │
 ├── outputs/
-│   └── transformer_260416/
+│   └── transformer_260417/
 │       └── results/<timestamp>/  # 1実行ごとの出力先
 │           ├── best_model.pth
 │           ├── config_snapshot.py
@@ -152,7 +152,7 @@ pip install torch pandas numpy matplotlib scikit-learn networkx duckdb wandb tab
 
 ### 2. Configuration
 
-`transformer_260416/config.py` にて、データパスや学習パラメータを設定します。
+`transformer_267/config.py` にて、データパスや学習パラメータを設定します。
 
 ```python
 # 主要設定項目
@@ -171,16 +171,16 @@ TOP_K_EVAL = 1              # Top-K評価（1でRecall@1）
 DuckDB にゲノムデータを格納します（`USE_DB = True` の場合）。
 
 ```bash
-python -m transformer_260416.preprocess
+python -m transformer_260417.preprocess
 ```
 
 ### 4. Training & Evaluation
 
 ```bash
-python -m transformer_260416.main
+python -m transformer_260417.main
 ```
 
-実行後、`outputs/transformer_260416/results/<timestamp>/` に全出力が保存されます。
+実行後、`outputs/transformer_260417/results/<timestamp>/` に全出力が保存されます。
 
 ---
 
