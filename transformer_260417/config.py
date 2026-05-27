@@ -23,20 +23,24 @@ USE_UNIQUE_FILTER = True        # 学習時にパス重複(raw_path)を除外す
 USE_EVAL_STRENGTH_FILTER = False     # 評価時に流行度フィルタを適用 (Falseでカテゴリ分析を使用)
 EVAL_STRENGTH_MIN = 0.0              # 評価時フィルタのしきい値 (0.0=フィルタなし)
 # 流行度は log(1 + sample_count) で計算される
+STRENGTH_SCORE_FROM_CSV = True
 
-# 流行度カテゴリの閾値 (log(1+x)スケール)、自動設定機能がない場合は手動で設定
-# 例: log(1+10)=2.4, log(1+100)=4.6, log(1+1000)=6.9
-STRENGTH_CATEGORY_LOW_MAX = 3.0      # 小: 0 ~ 3.0 (サンプル数 ~20)
-STRENGTH_CATEGORY_MED_MAX = 5.0      # 中: 3.0 ~ 5.0 (サンプル数 ~150)
-                                     # 大: 5.0~ (サンプル数 150+)
+
+# 流行度カテゴリの閾値設定 (log(1+x)スケール)
+# DYNAMIC_STRENGTH_CATEGORY = True にすると、DB全体の分布に基づいて動的に閾値を計算します。
+# DYNAMIC_STRENGTH_CATEGORY = False の場合は、下の固定値（STRENGTH_CATEGORY_LOW_MAX / MED_MAX）が使用されます。
+DYNAMIC_STRENGTH_CATEGORY = True    # 動的閾値を使用するかどうか
+STRENGTH_CATEGORY_LOW_MAX = 6.0      # 小: 0 ~ 6.0 (サンプル数 ~400)
+STRENGTH_CATEGORY_MED_MAX = 10.0     # 中: 6.0 ~ 10.0 (サンプル数 ~20,000)
+                                     # 大: 10.0~ (サンプル数 20,000+)
 
 # --- 学習時 感染規模フィルタ設定 ---
 # 感染規模が小さい株を学習から除外することで、より流行した変異に特化した学習が可能
 # ※ 評価 (valid/test) には適用されない。学習データ (split_type=0) のみフィルタされる
 USE_TRAIN_STRENGTH_FILTER = False    # 学習時に感染規模フィルタを適用するか
-TRAIN_STRENGTH_MIN = 3.0             # 学習に使用する最小感染規模 (log(1+n)スケール)
-# 小を除く  : STRENGTH_CATEGORY_LOW_MAX と同じ値 (3.0) を設定
-# 小中を除く: STRENGTH_CATEGORY_MED_MAX と同じ値 (5.0) を設定
+TRAIN_STRENGTH_MIN = 6.0             # 学習に使用する最小感染規模 (log(1+n)スケール)
+# 小を除く  : STRENGTH_CATEGORY_LOW_MAX と同じ値 (6.0) を設定
+# 小中を除く: STRENGTH_CATEGORY_MED_MAX と同じ値 (10.0) を設定
 
 
 # --- パス設定 ---
@@ -45,6 +49,7 @@ CODON_CSV         = "meta_data/codon_mutation4.csv"
 FREQ_CSV          = "outputs/table_heatmap/251031/table_set/table_set.csv"
 DISSIMILARITY_CSV = "meta_data/aa_properties/dissimilarity_metrics.csv"
 PAM250_CSV        = "meta_data/aa_properties/PAM250.csv"
+SEQUENCES_CSV     = "meta_data/sequences-241017.csv"  # 株別サンプル数CSV
 
 OUTPUT_DIR = 'outputs/transformer_260417/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
@@ -63,6 +68,8 @@ FORCE_REPROCESS = False
 ENABLE_LRU_CACHE = True
 ENABLE_PARALLEL_PROCESSING = True
 CACHE_MAX_SIZE = 10000
+NUM_PREPROCESS_WORKERS = 4    # 前処理時の並列ワーカー数上限
+DB_WRITE_BATCH_SIZE = 500     # DB書き込み時のバッチサイズ
 EARLY_STOPPING_PATIENCE = 7   # [260417] エポック増加に合わせて余裕を持たせる
 WEIGHT_DECAY = 0.01
 
@@ -219,11 +226,11 @@ SOFT_TARGET_TEMPERATURE = 1.0
 #   'cb_focal': Class-Balanced + FocalLoss アプローチA（大規模データで再試する場合）
 #   'ce'      : 通常のCrossEntropyLoss（デバッグ・ベースライン用）
 # 選択肢: 'ce', 'wce', 'cbce', 'focal', 'cb_focal'
-LOSS_FUNCTION_TYPE = 'wce'
-FOCAL_LOSS_GAMMA = 2.0           # focal/cb_focal用
+LOSS_FUNCTION_TYPE = 'ce'
+FOCAL_LOSS_GAMMA = 1.0           # focal/cb_focal用
 FOCAL_LOSS_ALPHA = None          # focal専用 (cb_focalではCB重みをalphaとして自動使用)
 CLASS_BALANCED_BETA = 0.9999     # Class-Balanced用パラメータ (通常0.99〜0.9999)
-NORMALIZE_LOSS_WEIGHTS = True    # 頻度が少ないクラスでの損失爆発を防ぐため重みを正規化する
+NORMALIZE_LOSS_WEIGHTS = False    # 頻度が少ないクラスでの損失爆発を防ぐため重みを正規化する
 
 # Scheduler: 学習率の自動調整 (Trueで適用)
 USE_SCHEDULER = True
@@ -313,3 +320,45 @@ BIO_INFORMED_TASKS = ['position', 'aa_pos']  # 適用タスク
 # False の場合: 通常の eval モード推論（従来動作）
 USE_TTA = False
 TTA_N_PASSES = 5    # 推論回数（多いほど安定するが推論時間が N 倍になる）
+
+# ============================================================
+# --- ロジック・アーキテクチャ選択設定 ---
+# ============================================================
+
+# --- Optimizer 選択 ---
+# 'adamw' : AdamW 最適化 (デフォルト)
+# 'adam'  : Adam 最適化
+# 'sgd'   : SGD 最適化
+OPTIMIZER_TYPE = 'adamw'
+OPTIMIZER_SGD_MOMENTUM = 0.9      # SGD選択時のみ有効
+
+# --- モデル・アーキテクチャ ---
+# FFN層の次元倍率 (デフォルト: 4)
+FFN_RATIO = 4
+
+# 活性化関数の種類
+# 'gelu' : GeLU (デフォルト)
+# 'relu' : ReLU
+# 'silu' : SiLU
+# 'elu'  : ELU
+ACTIVATION = 'gelu'
+
+# Pre-Norm / Post-Norm の切り替え
+# True  : Pre-Norm (層の入力でレイヤー正規化、学習が安定しやすい、デフォルト)
+# False : Post-Norm (層の出力でレイヤー正規化)
+NORM_FIRST = True
+
+# パラメータ初期化時のスケール (デフォルト: 0.02)
+INITIALIZATION_SCALE = 0.02
+
+# --- 流行度前処理ロジック ---
+# 流行度CSVでグループ化に使うカラム名 (デフォルト: 'Pango lineage')
+STRENGTH_CSV_COLUMN = 'Pango lineage'
+
+# 流行度（株別サンプル数）の計算ロジック
+# 'log1p' : log(count + 1) (デフォルト)
+# 'sqrt'  : sqrt(count)
+# 'raw'   : count (生の件数)
+# 'log10' : log10(count + 1)
+STRENGTH_CALC_METHOD = 'log1p'
+

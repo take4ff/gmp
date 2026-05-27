@@ -20,7 +20,7 @@ from .utils.logging import force_print, print_config, print_sample_structure, in
 from .utils.io import (
     save_training_log, save_prediction_results, save_strain_info,
     save_config_copy, save_synonymous_distribution_csv, save_confusion_matrix_csv,
-    save_metrics_csv, save_category_metrics_csv,
+    save_metrics_csv, save_category_metrics_csv, save_combined_metrics_csv,
     save_random_baseline_csv, save_region_metrics_csv, save_prediction_distribution_csv,
     save_recall_summary_csv,
     save_per_position_recall_csv,
@@ -90,11 +90,17 @@ def prepare_data():
 
         data_info = get_db_data_info(db_path, max_cooccurrence=config.MAX_CO_OCCURRENCE)
 
+        from .db.queries import get_combined_sampled_strength
+        combined_strength = None
+        if not getattr(config, 'STRENGTH_SCORE_FROM_CSV', True):
+            combined_strength = get_combined_sampled_strength(db_path)
+
         def _make_loader(split_type, shuffle):
             return create_db_dataloader(
                 db_path=db_path, split_type=split_type,
                 batch_size=config.BATCH_SIZE, shuffle=shuffle,
                 max_cooccurrence=config.MAX_CO_OCCURRENCE,
+                strain_to_strength=combined_strength,
             )
 
         train_loader = _make_loader(0, shuffle=True)
@@ -113,6 +119,7 @@ def prepare_data():
                 batch_size=config.BATCH_SIZE, shuffle=True,
                 max_cooccurrence=config.MAX_CO_OCCURRENCE,
                 min_length=min_length,
+                strain_to_strength=combined_strength,
             )
 
         return train_loader, val_loader, test_loader, data_info, None, None, None, make_train_loader
@@ -162,12 +169,30 @@ def build_components(class_counts_dict=None):
         list(model.parameters()) + list(loss_wrapper.parameters())
         if loss_wrapper else model.parameters()
     )
-    optimizer = optim.AdamW(
-        params,
-        lr=config.LEARNING_RATE,
-        weight_decay=config.WEIGHT_DECAY,
-        betas=(config.OPTIMIZER_BETA1, config.OPTIMIZER_BETA2)
-    )
+    opt_type = getattr(config, 'OPTIMIZER_TYPE', 'adamw').lower()
+    if opt_type == 'adamw':
+        optimizer = optim.AdamW(
+            params,
+            lr=config.LEARNING_RATE,
+            weight_decay=config.WEIGHT_DECAY,
+            betas=(config.OPTIMIZER_BETA1, config.OPTIMIZER_BETA2)
+        )
+    elif opt_type == 'adam':
+        optimizer = optim.Adam(
+            params,
+            lr=config.LEARNING_RATE,
+            weight_decay=config.WEIGHT_DECAY,
+            betas=(config.OPTIMIZER_BETA1, config.OPTIMIZER_BETA2)
+        )
+    elif opt_type == 'sgd':
+        optimizer = optim.SGD(
+            params,
+            lr=config.LEARNING_RATE,
+            weight_decay=config.WEIGHT_DECAY,
+            momentum=getattr(config, 'OPTIMIZER_SGD_MOMENTUM', 0.9)
+        )
+    else:
+        raise ValueError(f"Unknown OPTIMIZER_TYPE: {opt_type}")
 
     scheduler = None
     if config.USE_SCHEDULER:
@@ -338,8 +363,8 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     def _save_results(metrics, cat_metrics, details, prefix):
         if config.SAVE_PREDICTIONS:
             save_prediction_results(details, run_output_dir, prefix=prefix)
-        save_metrics_csv(metrics, run_output_dir, prefix=prefix)
-        save_category_metrics_csv(cat_metrics, run_output_dir, prefix=prefix)
+        df_ts = save_metrics_csv(metrics, run_output_dir, prefix=prefix)
+        df_cat = save_category_metrics_csv(cat_metrics, run_output_dir, prefix=prefix)
         save_random_baseline_csv(details, run_output_dir, prefix=prefix)
         save_region_metrics_csv(details, run_output_dir, prefix=prefix)
         save_prediction_distribution_csv(details, run_output_dir, prefix=prefix)
@@ -352,22 +377,24 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         plot_category_metrics(cat_metrics, run_output_dir, prefix=prefix)
         plot_strength_calibration(details, run_output_dir, prefix=prefix)
         plot_per_position_recall(details, run_output_dir, prefix=prefix, top_n=getattr(config, "PLOT_TOP_N_POSITIONS", 40))
+        return df_ts, df_cat
 
     # Validation
     force_print("Final evaluation on Validation Set...")
     _, val_metrics, val_details, val_cat_metrics = evaluate(
         model, val_loader, loss_fn, strength_thresholds
     )
-    _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
+    val_df_ts, val_df_cat = _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
 
     # Test
     test_metrics, test_details, test_cat_metrics = None, None, None
+    test_df_ts, test_df_cat = None, None
     if len(test_loader) > 0:
         force_print("Final evaluation on Test Set...")
         _, test_metrics, test_details, test_cat_metrics = evaluate(
             model, test_loader, loss_fn, strength_thresholds
         )
-        _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
+        test_df_ts, test_df_cat = _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
 
     # 統合レポート
     print_combined_report(val_details, test_details, strength_thresholds)
@@ -375,6 +402,10 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         plot_combined_val_test_metrics(val_metrics, test_metrics, run_output_dir)
         plot_combined_category_comparison(val_details, test_details, strength_thresholds, run_output_dir)
         save_val_test_gap_csv(val_metrics, test_metrics, run_output_dir)
+        
+        # 結合したメトリクスCSVを出力（timestepでソート）
+        save_combined_metrics_csv(val_df_ts, test_df_ts, run_output_dir, 'combined_metrics_by_timestep.csv')
+        save_combined_metrics_csv(val_df_cat, test_df_cat, run_output_dir, 'combined_metrics_by_category.csv')
 
     # Top-K 評価 (Validation)
     eval_ks = getattr(config, "EVAL_TOP_KS", (1, 3, 5))
@@ -486,11 +517,19 @@ def main():
         save_synonymous_distribution_csv(train, valid, test, run_output_dir)
     save_config_copy(run_output_dir)
 
-    # 共通: strength_thresholds を main() で一度計算して両関数に渡す
-    strength_thresholds = (
-        data_info.get('strength_low_max', 3),
-        data_info.get('strength_med_max', 5),
-    )
+    # 共通: strength_thresholds を決定して両関数に渡す (config優先、DYNAMIC_STRENGTH_CATEGORYで動的切り替え)
+    use_dynamic = getattr(config, 'DYNAMIC_STRENGTH_CATEGORY', False)
+
+    if use_dynamic:
+        low_max = data_info.get('strength_low_max', 6.0)
+        med_max = data_info.get('strength_med_max', 10.0)
+        force_print(f"[INFO] Using dynamic thresholds from DB: low_max={low_max}, med_max={med_max}")
+    else:
+        low_max = getattr(config, 'STRENGTH_CATEGORY_LOW_MAX', 6.0)
+        med_max = getattr(config, 'STRENGTH_CATEGORY_MED_MAX', 10.0)
+        force_print(f"[INFO] Using fixed thresholds from config: low_max={low_max}, med_max={med_max}")
+
+    strength_thresholds = (low_max, med_max)
 
     # 3. 学習ループ
     training_log, best_model_path = run_training(

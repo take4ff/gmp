@@ -707,3 +707,30 @@ def save_topk_precision_csv(topk_results, output_dir, prefix="test"):
                 f"  {task:<20} {k:>4}  {m['precision']:>9.2f}%  {m['recall']:>7.2f}%  {m['hit_rate']:>7.2f}%"
             )
     return df
+
+
+def save_combined_metrics_csv(val_df, test_df, output_dir, filename):
+    """Validation と Test のメトリクス DataFrame を結合してCSVに保存する。"""
+    if val_df is None or test_df is None:
+        return None
+
+    val_copy = val_df.copy()
+    test_copy = test_df.copy()
+
+    # split カラムを先頭に追加
+    val_copy.insert(0, 'split', 'valid')
+    test_copy.insert(0, 'split', 'test')
+
+    combined_df = pd.concat([val_copy, test_copy], ignore_index=True)
+
+    # timestep カラムが存在する場合はソートする
+    if 'timestep' in combined_df.columns:
+        sort_cols = ['timestep', 'split']
+        if 'category' in combined_df.columns:
+            sort_cols.append('category')
+        combined_df = combined_df.sort_values(by=sort_cols).reset_index(drop=True)
+
+    path = _get_save_path(output_dir, filename)
+    combined_df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Combined metrics saved to {path}")
+    return combined_df

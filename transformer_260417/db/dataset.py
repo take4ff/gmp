@@ -19,7 +19,8 @@ class DBIterableDataset(IterableDataset):
     """
 
     def __init__(self, db_path, split_type=None, max_cooccurrence=None,
-                 min_length=None, max_length=None, shuffle=False, chunk_size=1000):
+                 min_length=None, max_length=None, shuffle=False, chunk_size=1000,
+                 strain_to_strength=None):
         """
         Args:
             db_path: DuckDBファイルパス
@@ -28,6 +29,7 @@ class DBIterableDataset(IterableDataset):
             min_length, max_length: パス長フィルタ
             shuffle: シャッフルするか
             chunk_size: 一度に読み込むサンプル数
+            strain_to_strength: サンプリング後株出現数の動的流行度辞書 (NoneならDB値を使用)
         """
         self.db_path = db_path
         self.split_type = split_type
@@ -36,6 +38,7 @@ class DBIterableDataset(IterableDataset):
         self.max_length = max_length
         self.shuffle = shuffle
         self.chunk_size = chunk_size
+        self.strain_to_strength = strain_to_strength
 
         # サンプルIDリストを取得
         self.sample_ids = self._get_sample_ids()
@@ -257,6 +260,9 @@ class DBIterableDataset(IterableDataset):
 
             y_targets = label_dict.get(sample_id, [])
 
+            if self.strain_to_strength is not None:
+                strength_score = self.strain_to_strength.get(strain_name, 0.0)
+
             results.append((x, y_targets, path_length, raw_path, strain_name, strength_score))
 
         return results
@@ -419,7 +425,7 @@ def _build_soft_target(group_items, temperature=None):
 
 def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
                          max_cooccurrence=None, min_length=None, max_length=None,
-                         chunk_size=1000):
+                         chunk_size=1000, strain_to_strength=None):
     """DBからデータを読み込むDataLoaderを作成する。
 
     Args:
@@ -430,6 +436,7 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
         max_cooccurrence: 最大共起数フィルタ
         min_length, max_length: パス長フィルタ
         chunk_size: DBから一度に読み込むサンプル数
+        strain_to_strength: サンプリング後株出現数の動的流行度辞書
 
     Returns:
         DataLoader
@@ -441,7 +448,8 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
         min_length=min_length,
         max_length=max_length,
         shuffle=shuffle,
-        chunk_size=chunk_size
+        chunk_size=chunk_size,
+        strain_to_strength=strain_to_strength
     )
 
     hybrid_alpha = getattr(config, 'HYBRID_ALPHA', 1.0)

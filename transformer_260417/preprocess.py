@@ -59,7 +59,7 @@ def load_static_data_minimal():
 
 def compute_strain_strength_from_csv():
     """CSVから株の流行度を計算する。"""
-    csv_path = os.path.join(config.DATA_BASE_DIR, '../sequences-241017.csv')
+    csv_path = config.SEQUENCES_CSV
 
     if not os.path.exists(csv_path):
         force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
@@ -67,14 +67,32 @@ def compute_strain_strength_from_csv():
 
     import math
     df = pd.read_csv(csv_path)
-    strain_counts = df.groupby('Pango lineage').size()
+    
+    column = getattr(config, 'STRENGTH_CSV_COLUMN', 'Pango lineage')
+    if column not in df.columns:
+        force_print(f"[WARNING] Column '{column}' not found in CSV. Falling back to first column.")
+        column = df.columns[0]
+        
+    strain_counts = df.groupby(column).size()
 
-    strain_to_strength = {
-        strain: float(f"{math.log(count + 1):.2f}")
-        for strain, count in strain_counts.items()
-    }
+    calc_method = getattr(config, 'STRENGTH_CALC_METHOD', 'log1p').lower()
+    
+    strain_to_strength = {}
+    for strain, count in strain_counts.items():
+        if calc_method == 'log1p':
+            val = math.log(count + 1)
+        elif calc_method == 'sqrt':
+            val = math.sqrt(count)
+        elif calc_method == 'raw':
+            val = float(count)
+        elif calc_method == 'log10':
+            val = math.log10(count + 1)
+        else:
+            raise ValueError(f"Unknown STRENGTH_CALC_METHOD: {calc_method}")
+            
+        strain_to_strength[strain] = float(f"{val:.2f}")
 
-    force_print(f"[INFO] Computed strength for {len(strain_to_strength)} strains from CSV")
+    force_print(f"[INFO] Computed strength for {len(strain_to_strength)} strains from CSV using method '{calc_method}'")
     return strain_to_strength
 
 
@@ -225,7 +243,7 @@ def write_strain_to_db(con, strain_id, strain_strength, samples_data,
     batch_samples = []
     batch_features = []
     batch_labels = []
-    batch_size = 500
+    batch_size = config.DB_WRITE_BATCH_SIZE
 
     for raw_path_str, path_length, max_cooc, x_features, y_targets in samples_data:
         batch_samples.append((
@@ -290,7 +308,7 @@ def main():
     config_hash = get_config_hash()[:8]
     force_print(f"[INFO] Config hash: {config_hash}")
 
-    num_workers = min(multiprocessing.cpu_count(), 4)
+    num_workers = min(multiprocessing.cpu_count(), config.NUM_PREPROCESS_WORKERS)
     force_print(f"[INFO] Using {num_workers} parallel workers")
 
     codon_data, freq_dict, dissim_dict, pam250_dict = load_static_data()

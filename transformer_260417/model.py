@@ -6,6 +6,22 @@ import math
 from . import config
 
 
+def get_activation():
+    act_str = getattr(config, 'ACTIVATION', 'gelu').lower()
+    if act_str == 'gelu':
+        return nn.GELU()
+    elif act_str == 'relu':
+        return nn.ReLU()
+    elif act_str == 'silu':
+        return nn.SiLU()
+    elif act_str == 'elu':
+        return nn.ELU()
+    elif act_str == 'selu':
+        return nn.SELU()
+    else:
+        raise ValueError(f"Unknown activation function: {act_str}")
+
+
 class PositionalEncoding(nn.Module):
     """Transformer用位置エンコーディング"""
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
@@ -159,7 +175,7 @@ class CausalConv1d(nn.Module):
         super().__init__()
         self.padding = (kernel_size - 1)
         self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, padding=0)
-        self.act = nn.GELU()  # ReLU -> GeLU に変更
+        self.act = get_activation()  # 活性化関数をconfigから選択
 
     def forward(self, x):
         # x: [B, T, F] -> [B, F, T]
@@ -229,7 +245,7 @@ class HierarchicalTransformer(nn.Module):
             self.origin_attn = OriginAttention()
             # 学習可能なOrigin埋め込み（「変異なし」の原点を表す専用ベクトル）
             self.origin_embedding = nn.Parameter(
-                torch.randn(1, 1, config.FEATURE_DIM) * 0.02
+                torch.randn(1, 1, config.FEATURE_DIM) * getattr(config, 'INITIALIZATION_SCALE', 0.02)
             )
         else:
             self.origin_attn = None
@@ -238,14 +254,14 @@ class HierarchicalTransformer(nn.Module):
         # [CLS] トークン（BERT方式）- TEMPORAL_POOLING='cls' の場合に使用
         # シーケンス先頭に追加し、Self-Attention を通じてシーケンス全体の情報を集約する
         # モード切り替えのたびにモデルを作り直す必要を避けるため、常に定義しておく
-        self.cls_token = nn.Parameter(torch.randn(1, 1, config.FEATURE_DIM) * 0.02)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, config.FEATURE_DIM) * getattr(config, 'INITIALIZATION_SCALE', 0.02))
 
         # Shared Trunk（全ヘッド共通の中間層）（Ablation Study用）
         # latest_context → Shared Trunk → 各ヘッドにわたるスイッチを容易にするため常に定義
         if getattr(config, 'USE_SHARED_TRUNK', False):
             self.shared_trunk = nn.Sequential(
                 nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
-                nn.GELU(),
+                get_activation(),
                 nn.LayerNorm(config.FEATURE_DIM),
             )
         else:
@@ -264,11 +280,11 @@ class HierarchicalTransformer(nn.Module):
         encoder_layer = TransformerEncoderLayer(
             d_model=config.FEATURE_DIM,
             nhead=config.N_HEADS,
-            dim_feedforward=config.FEATURE_DIM * 4,
+            dim_feedforward=config.FEATURE_DIM * getattr(config, 'FFN_RATIO', 4),
             dropout=config.DROPOUT,
             batch_first=True,
-            activation="gelu",  # GeLU採用
-            norm_first=True     # Pre-Norm採用 (学習安定化)
+            activation=getattr(config, 'ACTIVATION', 'gelu').lower(),
+            norm_first=getattr(config, 'NORM_FIRST', True)
         )
         self.transformer_encoder = TransformerEncoder(encoder_layer, num_layers=config.N_LAYERS)
 
@@ -276,7 +292,7 @@ class HierarchicalTransformer(nn.Module):
         # 1. Region予測ヘッド
         self.output_head = nn.Sequential(
             nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
-            nn.GELU(),
+            get_activation(),
             nn.LayerNorm(config.FEATURE_DIM),
             nn.Dropout(config.DROPOUT),
             nn.Linear(config.FEATURE_DIM, config.NUM_REGIONS)
@@ -285,7 +301,7 @@ class HierarchicalTransformer(nn.Module):
         # 2. 塩基位置予測ヘッド
         self.position_head = nn.Sequential(
             nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
-            nn.GELU(),
+            get_activation(),
             nn.LayerNorm(config.FEATURE_DIM),
             nn.Dropout(config.DROPOUT),
             nn.Linear(config.FEATURE_DIM, config.VOCAB_SIZE_POSITION)
@@ -294,7 +310,7 @@ class HierarchicalTransformer(nn.Module):
         # 3. アミノ酸配列位置予測ヘッド
         self.aa_pos_head = nn.Sequential(
             nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
-            nn.GELU(),
+            get_activation(),
             nn.LayerNorm(config.FEATURE_DIM),
             nn.Dropout(config.DROPOUT),
             nn.Linear(config.FEATURE_DIM, config.VOCAB_SIZE_AA_POS)
@@ -303,7 +319,7 @@ class HierarchicalTransformer(nn.Module):
         # 4. 流行度予測ヘッド (回帰)
         self.strength_head = nn.Sequential(
             nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
-            nn.GELU(),
+            get_activation(),
             nn.LayerNorm(config.FEATURE_DIM),
             nn.Dropout(config.DROPOUT),
             nn.Linear(config.FEATURE_DIM, 1)
@@ -312,7 +328,7 @@ class HierarchicalTransformer(nn.Module):
         # 5. コドン位置予測ヘッド (1, 2, 3 の3クラス + PAD=0 で6クラス)
         self.codon_pos_head = nn.Sequential(
             nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM // 2),
-            nn.GELU(),
+            get_activation(),
             nn.LayerNorm(config.FEATURE_DIM // 2),
             nn.Dropout(config.DROPOUT),
             nn.Linear(config.FEATURE_DIM // 2, config.VOCAB_SIZE_CODON_POS)
@@ -321,7 +337,7 @@ class HierarchicalTransformer(nn.Module):
         # 6. シノニマス/ノンシノニマス予測ヘッド (2クラス分類)
         self.synonymous_head = nn.Sequential(
             nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM // 4),
-            nn.GELU(),
+            get_activation(),
             nn.LayerNorm(config.FEATURE_DIM // 4),
             nn.Dropout(config.DROPOUT),
             nn.Linear(config.FEATURE_DIM // 4, config.VOCAB_SIZE_SYNONYMOUS)
