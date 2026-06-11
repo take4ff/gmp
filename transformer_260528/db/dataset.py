@@ -68,7 +68,9 @@ class DBIterableDataset(IterableDataset):
             params.append(self.max_length)
 
         # raw_path, strain_name, strength_score も取得してPython側でサンプリング・ユニーク化判定を行う
-        query = query.replace("SELECT sample_id", "SELECT s.sample_id, s.raw_path, st.strain_name, s.strength_score")
+        strength_col = 'strength_score_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strength_score_ncbi'
+        strain_name_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
+        query = query.replace("SELECT sample_id", f"SELECT s.sample_id, s.raw_path, st.{strain_name_col} as strain_name, st.{strength_col} as strength_score")
         query = query.replace("FROM samples", "FROM samples s JOIN strains st ON s.strain_id = st.strain_id")
         query = query.replace(" AND split_type", " AND s.split_type")
         query = query.replace(" AND max_cooccurrence", " AND s.max_cooccurrence")
@@ -79,7 +81,7 @@ class DBIterableDataset(IterableDataset):
         use_train_sf = getattr(config, 'USE_TRAIN_STRENGTH_FILTER', False)
         train_sf_min = getattr(config, 'TRAIN_STRENGTH_MIN', 0.0)
         if use_train_sf and self.split_type == 0 and train_sf_min > 0:
-            query += f" AND s.strength_score >= {train_sf_min}"
+            query += f" AND st.{strength_col} >= {train_sf_min}"
         query += " ORDER BY s.sample_id"
 
         result = con.execute(query, params).fetchall()
@@ -207,8 +209,10 @@ class DBIterableDataset(IterableDataset):
 
         placeholders = ','.join(['?' for _ in sample_ids])
 
+        strength_col = 'strength_score_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strength_score_ncbi'
+        strain_name_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
         sample_rows = con.execute(f"""
-            SELECT s.sample_id, s.raw_path, s.path_length, s.strength_score, st.strain_name, s.collection_date
+            SELECT s.sample_id, s.raw_path, s.path_length, st.{strength_col} as strength_score, st.{strain_name_col} as strain_name, s.collection_date
             FROM samples s
             JOIN strains st ON s.strain_id = st.strain_id
             WHERE s.sample_id IN ({placeholders})

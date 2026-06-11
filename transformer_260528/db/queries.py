@@ -31,7 +31,8 @@ def get_db_data_info(db_path=None, split_type=None, max_cooccurrence=None):
     test_stats = get_stats(2)
 
     # 流行度閾値
-    strength_stats = con.execute("SELECT MIN(strength_score), MAX(strength_score) FROM samples").fetchone()
+    strength_col = 'strength_score_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strength_score_ncbi'
+    strength_stats = con.execute(f"SELECT MIN({strength_col}), MAX({strength_col}) FROM strains").fetchone()
     min_s, max_s = strength_stats
     score_range = (max_s - min_s) if max_s and min_s else 10
     low_max = int(min_s + score_range / 3) + 1 if min_s else 6
@@ -73,9 +74,11 @@ def load_samples_from_db(db_path=None, split_type=None, max_cooccurrence=None,
 
     con = connect_db(db_path, read_only=True)
 
-    query = """
-        SELECT s.sample_id, s.raw_path, s.path_length, s.strength_score,
-               st.strain_name
+    strength_col = 'strength_score_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strength_score_ncbi'
+    strain_name_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
+    query = f"""
+        SELECT s.sample_id, s.raw_path, s.path_length, st.{strength_col} as strength_score,
+               st.{strain_name_col} as strain_name
         FROM samples s
         JOIN strains st ON s.strain_id = st.strain_id
         WHERE 1=1
@@ -280,8 +283,10 @@ def get_combined_sampled_strength(db_path=None):
         
     # すべてのサンプルをDBから取得
     con = connect_db(db_path, read_only=True)
-    query = """
-        SELECT s.sample_id, s.raw_path, st.strain_name, s.split_type, s.strength_score
+    strength_col = 'strength_score_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strength_score_ncbi'
+    strain_name_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
+    query = f"""
+        SELECT s.sample_id, s.raw_path, st.{strain_name_col} as strain_name, s.split_type, st.{strength_col} as strength_score
         FROM samples s
         JOIN strains st ON s.strain_id = st.strain_id
     """

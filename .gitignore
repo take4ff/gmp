@@ -22,7 +22,6 @@ __pycache__/
 /outputs/
 /wandb/
 nohup*.out
-/scratch/
 
 # ==========================================
 # Old Files & Third-party

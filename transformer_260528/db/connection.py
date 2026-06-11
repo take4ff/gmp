@@ -15,6 +15,7 @@ def get_feature_config_hash():
         str(config.MAX_SEQ_LEN),
         str(config.TARGET_LEN),
         str(config.DATA_BASE_DIR),
+        "v2_strength_clade", # スキーマバージョン情報追加（DB再構築を強制）
     ]
     config_string = "_".join(relevant_configs)
     return hashlib.md5(config_string.encode('utf-8')).hexdigest()
@@ -62,8 +63,12 @@ def init_db(db_path=None):
         CREATE TABLE IF NOT EXISTS strains (
             strain_id INTEGER PRIMARY KEY,
             strain_name VARCHAR UNIQUE NOT NULL,
+            strain_name_ncbi VARCHAR,
+            strain_name_usher VARCHAR,
             sample_count INTEGER DEFAULT 0,
             strength_score REAL DEFAULT 0.0,
+            strength_score_ncbi REAL DEFAULT 0.0,
+            strength_score_usher REAL DEFAULT 0.0,
             clade VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )

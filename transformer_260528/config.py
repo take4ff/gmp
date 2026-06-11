@@ -57,7 +57,7 @@ TRAIN_STRENGTH_MIN = 6.0             # 学習に使用する最小感染規模 (
 # --- パス設定 ---
 DATA_BASE_DIR = '../usher_output/'
 CODON_CSV         = "meta_data/codon_mutation4.csv"
-FREQ_CSV          = "outputs/table_heatmap/251031/table_set/table_set.csv"
+FREQ_CSV          = "meta_data/table_set.csv"
 DISSIMILARITY_CSV = "meta_data/aa_properties/dissimilarity_metrics.csv"
 PAM250_CSV        = "meta_data/aa_properties/PAM250.csv"
 SEQUENCES_CSV     = "meta_data/sequences-241017.csv"  # 株別サンプル数CSV
@@ -375,4 +375,10 @@ STRENGTH_CSV_COLUMN = 'Pangolin'
 # 'raw'   : count (生の件数)
 # 'log10' : log10(count + 1)
 STRENGTH_CALC_METHOD = 'log1p'
+
+# 流行度と系統名の参照ソース基準
+# 'ncbi'  : NCBIメタデータ (sequences-241017.csv) に基づく系統名・流行度を使用
+# 'usher' : UShERでの系統樹配置結果 (clades.txt) に基づく系統名・流行度を使用
+STRENGTH_SOURCE = 'ncbi'
+
 

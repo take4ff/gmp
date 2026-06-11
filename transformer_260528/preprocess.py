@@ -123,15 +123,81 @@ def import_strains_to_db(con, strain_to_strength):
     """株マスタをDBに登録する。"""
     force_print("[INFO] Importing strains to DB...")
 
+    # Accession -> Pangolin(NCBI) のマッピングをロード
+    csv_path = config.SEQUENCES_CSV
+    acc_to_pango = {}
+    if os.path.exists(csv_path):
+        force_print("[INFO] Loading Accession to Pangolin mapping from CSV...")
+        start_t = time.time()
+        # メモリ節約のため必要なカラムのみロード
+        df_seq = pd.read_csv(csv_path, usecols=['Accession', 'Pangolin'])
+        df_seq['Pangolin'] = df_seq['Pangolin'].fillna('')
+        acc_to_pango = dict(zip(df_seq['Accession'], df_seq['Pangolin']))
+        elapsed = time.time() - start_t
+        force_print(f"[INFO] Loaded {len(acc_to_pango):,} mappings in {elapsed:.1f} seconds")
+    else:
+        force_print(f"[WARNING] Sequences CSV not found for mapping: {csv_path}")
+
     usher_dir = config.DATA_BASE_DIR
     strains = sorted([f for f in os.listdir(usher_dir) if not f.startswith('.')])
 
+    from collections import Counter
+    import math
+
     for strain_id, strain_name in enumerate(tqdm(strains, desc="Registering strains")):
-        strength_score = strain_to_strength.get(strain_name, 0.0)
+        clade_counts = Counter()
+        ncbi_name_counts = Counter()
+        usher_sample_count = 0
+        
+        # すべての timestep フォルダを探索
+        strain_path = os.path.join(usher_dir, strain_name)
+        if os.path.exists(strain_path):
+            timesteps = [d for d in os.listdir(strain_path) if d.isdigit()]
+            for ts in timesteps:
+                clades_file = os.path.join(strain_path, ts, 'clades.txt')
+                if os.path.exists(clades_file):
+                    try:
+                        with open(clades_file, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                parts = line.strip().split('\t')
+                                if len(parts) >= 2:
+                                    # clade情報 (2カラム目)
+                                    clade_counts[parts[1]] += 1
+                                    # NCBIでの系統名マッピング (1カラム目の Accession を引く)
+                                    acc_id = parts[0]
+                                    ncbi_name = acc_to_pango.get(acc_id, '')
+                                    if ncbi_name:
+                                        ncbi_name_counts[ncbi_name] += 1
+                                    usher_sample_count += 1
+                    except Exception:
+                        pass
+        
+        # 最頻値の取得
+        most_common_clade = clade_counts.most_common(1)[0][0] if clade_counts else None
+        most_common_ncbi_name = ncbi_name_counts.most_common(1)[0][0] if ncbi_name_counts else strain_name
+        
+        # 流行度スコアの計算
+        strength_score_usher = float(f"{math.log(usher_sample_count + 1):.2f}") if usher_sample_count > 0 else 0.0
+        # NCBI 流行度は、決定した NCBI 系統名をもとに CSV から集計された流行度を引く
+        strength_score_ncbi = strain_to_strength.get(most_common_ncbi_name, 0.0)
+        
+        # config の STRENGTH_SOURCE に応じたデフォルト流行度の設定
+        strength_source = getattr(config, 'STRENGTH_SOURCE', 'ncbi').lower()
+        if strength_source == 'usher':
+            strength_score = strength_score_usher
+        else:
+            strength_score = strength_score_ncbi
+
         con.execute("""
-            INSERT OR IGNORE INTO strains (strain_id, strain_name, strength_score)
-            VALUES (?, ?, ?)
-        """, [strain_id, strain_name, strength_score])
+            INSERT OR IGNORE INTO strains (
+                strain_id, strain_name, strain_name_ncbi, strain_name_usher,
+                sample_count, clade, strength_score_ncbi, strength_score_usher, strength_score
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            strain_id, strain_name, most_common_ncbi_name, strain_name,
+            usher_sample_count, most_common_clade, strength_score_ncbi, strength_score_usher, strength_score
+        ])
 
     force_print(f"[INFO] Registered {len(strains)} strains")
     return strains
@@ -184,13 +250,22 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
     """1つの株の特徴量をチャンクに分割しながら生成し、キャッシュに保存する。
 
     Returns:
-        list of chunk_cache_paths
+        tuple: (list of chunk_cache_paths, dict of stats)
     """
     usher_dir = config.DATA_BASE_DIR
     file_paths = import_mutation_paths(usher_dir, strain_name)
 
+    stats = {
+        'total_raw_lines': 0,
+        'excluded_format': 0,
+        'excluded_cooccur': 0,
+        'excluded_feature_gen_error': 0,
+        'excluded_short_path': 0,
+        'valid_samples': 0
+    }
+
     if not file_paths:
-        return []
+        return [], stats
 
     max_cooccur = config.MAX_CO_OCCURRENCE
     chunk_size = getattr(config, 'PREPROCESS_CHUNK_SIZE', 1000)  # 1チャンクあたりのサンプル数上限
@@ -210,14 +285,17 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
                 # 行ごとのストリーミング読み込みでメモリを節約
                 f.readline()  # ヘッダーを読み飛ばす
                 for line in f:
+                    stats['total_raw_lines'] += 1
                     data = line.strip().split('\t')
                     if len(data) < 3:
+                        stats['excluded_format'] += 1
                         continue
 
                     path_str = data[2].split('>')
                     path_length = len(path_str)
 
                     if not filter_co_occur(path_str, max_cooccur):
+                        stats['excluded_cooccur'] += 1
                         continue
 
                     max_cooc = max(len(m.split(',')) for m in path_str)
@@ -228,16 +306,15 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
                             log_ratio_dict, human_rscu_dict, scv2_rscu_dict
                         )
                     except Exception:
+                        stats['excluded_feature_gen_error'] += 1
                         continue
 
                     if len(feature_path) <= config.TARGET_LEN:
+                        stats['excluded_short_path'] += 1
                         continue
 
-                    x_features = feature_path[:-config.TARGET_LEN]
-                    y_features = feature_path[-config.TARGET_LEN:]
-
                     y_targets = []
-                    for ts_events in y_features:
+                    for ts_events in feature_path[-config.TARGET_LEN:]:
                         for event in ts_events:
                             cat_feat = event[0]
                             region_id = cat_feat[7]
@@ -248,10 +325,12 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
                             y_targets.append((region_id, position_id, aa_pos_id, codon_pos_id, is_synonymous))
 
                     if not y_targets:
+                        stats['excluded_short_path'] += 1
                         continue
 
                     raw_path_str = data[2][:500]
-                    current_chunk_data.append((data[0], raw_path_str, path_length, max_cooc, x_features, y_targets))
+                    current_chunk_data.append((data[0], raw_path_str, path_length, max_cooc, feature_path[:-config.TARGET_LEN], y_targets))
+                    stats['valid_samples'] += 1
 
                     # チャンクサイズに達したらキャッシュ保存してメモリ解放
                     if len(current_chunk_data) >= chunk_size:
@@ -269,11 +348,11 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
         chunk_paths.append(p)
         chunk_idx += 1
 
-    # メタデータを保存
+    # メタデータを保存（統計データもキャッシュ内に保存）
     meta_path = get_strain_meta_cache_path(strain_name, config_hash)
-    save_strain_cache({'num_chunks': chunk_idx}, meta_path)
+    save_strain_cache({'num_chunks': chunk_idx, 'stats': stats}, meta_path)
 
-    return chunk_paths
+    return chunk_paths, stats
 
 
 def process_strain_wrapper(args):
@@ -287,9 +366,15 @@ def process_strain_wrapper(args):
             with open(meta_path, 'rb') as f:
                 meta = pickle.load(f)
             num_chunks = meta.get('num_chunks', 0)
+            stats = meta.get('stats', None)
             chunk_paths = [get_strain_chunk_cache_path(strain_name, config_hash, i) for i in range(num_chunks)]
             if all(os.path.exists(p) for p in chunk_paths):
-                return strain_name, chunk_paths, True  # キャッシュヒット
+                if stats is None:
+                    stats = {
+                        'total_raw_lines': 0, 'excluded_format': 0, 'excluded_cooccur': 0,
+                        'excluded_feature_gen_error': 0, 'excluded_short_path': 0, 'valid_samples': 0
+                    }
+                return strain_name, chunk_paths, True, stats  # キャッシュヒット
         except Exception:
             pass
 
@@ -299,6 +384,11 @@ def process_strain_wrapper(args):
         try:
             old_data = load_strain_cache(old_cache_path)
             if old_data is not None:
+                # 概算統計
+                stats = {
+                    'total_raw_lines': len(old_data), 'excluded_format': 0, 'excluded_cooccur': 0,
+                    'excluded_feature_gen_error': 0, 'excluded_short_path': 0, 'valid_samples': len(old_data)
+                }
                 # チャンク分割して保存
                 chunk_size = 5000
                 chunk_paths = []
@@ -311,21 +401,25 @@ def process_strain_wrapper(args):
                     chunk_idx += 1
                 
                 # メタデータ保存
-                save_strain_cache({'num_chunks': chunk_idx}, meta_path)
-                return strain_name, chunk_paths, True  # キャッシュヒット扱い
+                save_strain_cache({'num_chunks': chunk_idx, 'stats': stats}, meta_path)
+                return strain_name, chunk_paths, True, stats  # キャッシュヒット扱い
         except Exception:
             pass
 
     # 3. どちらのキャッシュもない場合は新規に再計算
     try:
         codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = load_static_data_minimal()
-        chunk_paths = process_strain_features_core_chunked(
+        chunk_paths, stats = process_strain_features_core_chunked(
             strain_name, codon_data, freq_dict, dissim_dict, pam250_dict,
             log_ratio_dict, human_rscu_dict, scv2_rscu_dict, config_hash
         )
-        return strain_name, chunk_paths, False
+        return strain_name, chunk_paths, False, stats
     except Exception as e:
-        return strain_name, [], False
+        empty_stats = {
+            'total_raw_lines': 0, 'excluded_format': 0, 'excluded_cooccur': 0,
+            'excluded_feature_gen_error': 0, 'excluded_short_path': 0, 'valid_samples': 0
+        }
+        return strain_name, [], False, empty_stats
 
 
 def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
@@ -470,6 +564,16 @@ def main():
             # バルク書き込みの閾値 (samples 件数基準で config.DB_WRITE_BATCH_SIZE を使用)
             FLUSH_SAMPLE_THRESHOLD = getattr(config, 'DB_WRITE_BATCH_SIZE', 10000)
 
+            # 統計用グローバルカウンター
+            global_stats = {
+                'total_raw_lines': 0,
+                'excluded_format': 0,
+                'excluded_cooccur': 0,
+                'excluded_feature_gen_error': 0,
+                'excluded_short_path': 0,
+                'valid_samples': 0
+            }
+
             strain_id_map = {s: i for i, s in enumerate(strains)}
             sample_id, feature_id, label_id = get_next_ids(con)
 
@@ -485,10 +589,14 @@ def main():
                 for future in pbar:
                     strain_name = futures[future]
                     try:
-                        result_name, chunk_paths, from_cache = future.result()
+                        result_name, chunk_paths, from_cache, stats = future.result()
 
                         if from_cache:
                             cache_hits += 1
+
+                        # 統計カウンターの合算
+                        for k, v in stats.items():
+                            global_stats[k] += v
 
                         if chunk_paths:
                             strain_id = strain_id_map.get(result_name, 0)
@@ -564,6 +672,26 @@ def main():
 
         assign_splits(con)
         con.close()
+
+        # 統計レポートの表示
+        force_print("=" * 60)
+        force_print("📊 PREPROCESSING FILTER STATISTICS REPORT")
+        force_print("=" * 60)
+        total_raw = global_stats['total_raw_lines']
+        valid = global_stats['valid_samples']
+        
+        def print_stat_row(label, val, total):
+            pct = (val / total * 100) if total > 0 else 0.0
+            force_print(f"  {label:<30} : {val:>9,} ({pct:>6.2f}%)")
+
+        force_print(f"  Total Raw Samples Read         : {total_raw:>9,}")
+        print_stat_row("Excluded by Format Error", global_stats['excluded_format'], total_raw)
+        print_stat_row("Excluded by Co-occurrence Lim", global_stats['excluded_cooccur'], total_raw)
+        print_stat_row("Excluded by Feature Gen Error", global_stats['excluded_feature_gen_error'], total_raw)
+        print_stat_row("Excluded by Short Path (<=1 ts)", global_stats['excluded_short_path'], total_raw)
+        force_print("  " + "-" * 56)
+        print_stat_row("Final Valid Samples Written", valid, total_raw)
+        force_print("=" * 60)
 
         print_db_stats(db_path)
 
