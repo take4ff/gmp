@@ -183,6 +183,78 @@ def assign_splits(con, train_ratio=0.8, valid_ratio=0.1):
         print(f"[{timestamp}]   {split_name}: {count:,} samples")
 
 
+def assign_date_splits(con):
+    """collection_date の基準日を用いて train/valid/test を分割し、DB を更新する。
+
+    - collection_date < TEMPORAL_SPLIT_DATE  → train / valid（DATE_VALID_RATIO でランダム分割）
+    - collection_date >= TEMPORAL_SPLIT_DATE → test
+    - collection_date が NULL または空文字   → train に割り当て
+
+    config キー:
+        TEMPORAL_SPLIT_DATE : str  基準日（ISO 形式: YYYY-MM-DD）
+        DATE_VALID_RATIO    : float 基準日前データのうち Valid に充てる比率
+        SEED                : int   再現性のためのランダムシード
+    """
+    from datetime import datetime
+
+    split_date = getattr(config, 'TEMPORAL_SPLIT_DATE', '2023-12-31')
+    valid_ratio = getattr(config, 'DATE_VALID_RATIO', 0.1)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print(f"[{timestamp}] [INFO] Assigning splits by date (split_date={split_date}, "
+          f"valid_ratio={valid_ratio})...")
+
+    # まず全サンプルを train (0) にリセット
+    con.execute("UPDATE samples SET split_type = 0")
+
+    # 基準日以降 → test (2)
+    con.execute(f"""
+        UPDATE samples
+        SET split_type = 2
+        WHERE collection_date >= '{split_date}'
+          AND collection_date IS NOT NULL
+          AND collection_date != ''
+    """)
+
+    # 基準日前 (NULL / 空文字も含む) の sample_id を取得して valid を確率的に割り当て
+    before_rows = con.execute("""
+        SELECT sample_id FROM samples
+        WHERE split_type = 0
+        ORDER BY sample_id
+    """).fetchall()
+
+    if before_rows:
+        before_ids = [r[0] for r in before_rows]
+        random.seed(config.SEED)
+        random.shuffle(before_ids)
+        n_valid = int(len(before_ids) * valid_ratio)
+        valid_ids = before_ids[:n_valid]
+
+        if valid_ids:
+            con.execute(
+                f"UPDATE samples SET split_type = 1 "
+                f"WHERE sample_id IN ({','.join(map(str, valid_ids))})"
+            )
+
+    # 統計を表示
+    stats = con.execute("SELECT * FROM split_stats").fetchall()
+    for split_type, split_name, count in stats:
+        print(f"[{timestamp}]   {split_name}: {count:,} samples")
+
+
+def assign_splits_auto(con):
+    """config.SPLIT_MODE に応じて適切な分割関数を呼び出すラッパー。
+
+    - 'date'     : assign_date_splits(con)
+    - 'timestep' : assign_splits(con)  （デフォルト・既存動作）
+    """
+    split_mode = getattr(config, 'SPLIT_MODE', 'timestep').lower()
+    if split_mode == 'date':
+        assign_date_splits(con)
+    else:
+        assign_splits(con)
+
+
 def get_processed_strains(con):
     """DBから処理済みの株一覧を取得する（再開機能用）。"""
     try:

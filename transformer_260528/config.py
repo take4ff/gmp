@@ -14,11 +14,11 @@ ABLATION_MASKS = {
     'SIZE': False,       # サイズ差を無効化
     'BLSM': False,       # BLOSUM62差を無効化
     'PAM250': False,     # PAM250スコアを無効化
-    'CODON_LOG_RATIO_DIFF': False,
-    'CODON_LOG_RATIO_BEFORE': False,
-    'HUMAN_CODON_RSCU_DIFF': False,
-    'SCV2_CODON_RSCU_DIFF': False,
-    'MUTATION_CONTEXT': False,     # 前後3文字（6塩基）をすべて無効化
+    'CODON_LOG_RATIO_DIFF': True,
+    'CODON_LOG_RATIO_BEFORE': True,
+    'HUMAN_CODON_RSCU_DIFF': True,
+    'SCV2_CODON_RSCU_DIFF': True,
+    'MUTATION_CONTEXT': True,     # 前後3文字（6塩基）をすべて無効化
         'MUTATION_CONTEXT_L3': False,  # 3文字前の塩基を無効化
         'MUTATION_CONTEXT_L2': False,  # 2文字前の塩基を無効化
         'MUTATION_CONTEXT_L1': False,  # 1文字前の塩基を無効化
@@ -380,5 +380,32 @@ STRENGTH_CALC_METHOD = 'log1p'
 # 'ncbi'  : NCBIメタデータ (sequences-241017.csv) に基づく系統名・流行度を使用
 # 'usher' : UShERでの系統樹配置結果 (clades.txt) に基づく系統名・流行度を使用
 STRENGTH_SOURCE = 'ncbi'
+
+
+# ============================================================
+# --- Feature 7: 基準日ベース時系列分割 & 時間軸評価 ---
+# ============================================================
+
+# --- データ分割モード ---
+# 'timestep' : 現状通り（path_length ベースの分割）← デフォルト
+# 'date'     : TEMPORAL_SPLIT_DATE を基準に train/valid/test を分割
+SPLIT_MODE = 'timestep'          # 'timestep' | 'date'
+
+# 基準日（ISO 形式: YYYY-MM-DD）
+# SPLIT_MODE='date' のときのみ有効。この日より前 → train/valid、以降 → test
+TEMPORAL_SPLIT_DATE = '2023-12-31'
+
+# date モードでの Validation 比率（基準日前のデータからランダムに抽出）
+DATE_VALID_RATIO = 0.1
+
+# True のとき main.py 起動時に split を再計算する
+# （TEMPORAL_SPLIT_DATE を変更した場合などに使用）
+# False のとき preprocess.py 実行時の分割をそのまま使用
+FORCE_DATE_REASSIGN = False
+
+# --- 評価 X 軸モード ---
+# 'timestep' : X 軸 = path_length ← デフォルト
+# 'date'     : X 軸 = collection_date の年月 (YYYY-MM)、valid と test を凡例で区別
+EVAL_X_AXIS = 'timestep'         # 'timestep' | 'date'
 
 

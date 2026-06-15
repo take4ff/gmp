@@ -142,6 +142,101 @@ def plot_metrics_by_timestep(metrics_by_ts, output_dir, prefix="val"):
         _log.force_print("[WARNING] matplotlib not available, skipping plots")
 
 
+def plot_metrics_by_date(val_metrics_ym, test_metrics_ym, output_dir):
+    """月別（Year-Month）メトリクスをグラフ化する。
+
+    valid（青・実線）と test（赤・破線）を同一グラフに重ね描きし、
+    X 軸を YYYY-MM の時系列で表示する。
+
+    Args:
+        val_metrics_ym:  evaluate() の final_metrics_by_ym（valid セット）
+        test_metrics_ym: evaluate() の final_metrics_by_ym（test セット）
+        output_dir:      保存先ディレクトリ
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        # 凡例色・線種
+        val_style  = {'color': '#3498db', 'linestyle': '-',  'marker': 'o',
+                      'linewidth': 2, 'markersize': 4}
+        test_style = {'color': '#e74c3c', 'linestyle': '--', 'marker': '^',
+                      'linewidth': 2, 'markersize': 4}
+
+        metric_configs = [
+            ('region_hit_rate',    'Region Hit Rate (%)',     (0, 0)),
+            ('position_hit_rate',  'Base Pos Hit Rate (%)',   (0, 1)),
+            ('aa_pos_hit_rate',    'AA Pos Hit Rate (%)',     (1, 0)),
+            ('codon_pos_hit_rate', 'Codon Pos Hit Rate (%)',  (1, 1)),
+            ('synonymous_hit_rate','Synonymous Hit Rate (%)', (2, 0)),
+            ('strength_mae',       'Strength MAE',            (2, 1)),
+        ]
+
+        fig, axes = plt.subplots(3, 2, figsize=(16, 15))
+        fig.suptitle('Metrics by Collection Date (Year-Month)', fontsize=14)
+
+        for metric_key, title, (row, col) in metric_configs:
+            ax = axes[row, col]
+
+            if val_metrics_ym:
+                val_yms = sorted(val_metrics_ym.keys())
+                val_vals = [val_metrics_ym[ym].get(metric_key, 0) for ym in val_yms]
+                ax.plot(val_yms, val_vals, label='Valid', **val_style)
+
+            if test_metrics_ym:
+                test_yms = sorted(test_metrics_ym.keys())
+                test_vals = [test_metrics_ym[ym].get(metric_key, 0) for ym in test_yms]
+                ax.plot(test_yms, test_vals, label='Test', **test_style)
+
+            ax.set_xlabel('Year-Month')
+            ax.set_ylabel(title)
+            ax.set_title(title)
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            ax.tick_params(axis='x', rotation=45)
+
+        # サンプル数サブプロット（右下: valid と test のサンプル数バー）
+        ax = axes[2, 1]
+        ax.clear()
+        bar_labels, bar_counts, bar_colors = [], [], []
+        if val_metrics_ym:
+            for ym in sorted(val_metrics_ym.keys()):
+                bar_labels.append(f'V:{ym}')
+                bar_counts.append(val_metrics_ym[ym]['num_samples'])
+                bar_colors.append('#3498db')
+        if test_metrics_ym:
+            for ym in sorted(test_metrics_ym.keys()):
+                bar_labels.append(f'T:{ym}')
+                bar_counts.append(test_metrics_ym[ym]['num_samples'])
+                bar_colors.append('#e74c3c')
+        if bar_labels:
+            x_pos = np.arange(len(bar_labels))
+            ax.bar(x_pos, bar_counts, color=bar_colors, alpha=0.75)
+            ax.set_xticks(x_pos)
+            ax.set_xticklabels(bar_labels, rotation=45, ha='right', fontsize=7)
+        ax.set_xlabel('Year-Month (V=Valid, T=Test)')
+        ax.set_ylabel('Number of Samples')
+        ax.set_title('Sample Count by Date')
+        ax.grid(True, alpha=0.3, axis='y')
+        # 凡例パッチ
+        from matplotlib.patches import Patch
+        ax.legend(handles=[
+            Patch(color='#3498db', alpha=0.75, label='Valid'),
+            Patch(color='#e74c3c', alpha=0.75, label='Test'),
+        ])
+
+        plt.tight_layout()
+        path = _get_plot_path(output_dir, 'metrics_by_date.png')
+        plt.savefig(path, dpi=150, bbox_inches='tight')
+        plt.close()
+        _log.force_print(f"[INFO] Date metrics plot saved to {path}")
+
+    except ImportError:
+        _log.force_print("[WARNING] matplotlib not available, skipping date metrics plot")
+
+
 def plot_category_metrics(cat_metrics, output_dir, prefix="val"):
     """流行度カテゴリ別のメトリクスをグラフ化する。"""
     try:

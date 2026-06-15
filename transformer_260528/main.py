@@ -1,6 +1,6 @@
 # --- main.py ---
 # DuckDB対応版メイン処理
-# Usage: nohup python -m transformer_260528.main > nohup0.out & 
+# Usage: nohup python -m transformer_260528.main > nohup0.out 2>&1 & 
 
 import torch
 import torch.optim as optim
@@ -30,6 +30,7 @@ from .utils.io import (
     save_early_stopping_json,
     save_model_summary_txt,
     save_topk_precision_csv,
+    save_date_metrics_csv,
 )
 from .utils.plotting import (
     plot_training_curve, plot_metrics_by_timestep, plot_category_metrics,
@@ -46,6 +47,7 @@ from .utils.plotting import (
     plot_per_position_recall,
     plot_topk_precision,
     plot_attention_heatmap,
+    plot_metrics_by_date,
 )
 
 
@@ -111,6 +113,22 @@ def prepare_data():
             f"Data loaded: {data_info['train_count']} train, "
             f"{data_info['val_count']} validation, {data_info['test_count']} test samples."
         )
+
+        # SPLIT_MODE='date' かつ FORCE_DATE_REASSIGN=True のとき split を再計算
+        if (getattr(config, 'SPLIT_MODE', 'timestep') == 'date'
+                and getattr(config, 'FORCE_DATE_REASSIGN', False)):
+            force_print("[INFO] FORCE_DATE_REASSIGN=True: re-assigning splits by date...")
+            from .db.queries import assign_date_splits
+            from .db.connection import connect_db
+            _con = connect_db(db_path)
+            assign_date_splits(_con)
+            _con.close()
+            # 再分割後に data_info を更新
+            data_info = get_db_data_info(db_path, max_cooccurrence=config.MAX_CO_OCCURRENCE)
+            force_print(
+                f"[INFO] After re-assign: {data_info['train_count']} train, "
+                f"{data_info['val_count']} valid, {data_info['test_count']} test"
+            )
 
         # Curriculum Learning 用: 訓練ローダーを再生成するラムダ
         def make_train_loader(min_length=None):
@@ -279,7 +297,7 @@ def run_training(model, train_loader, val_loader, loss_fn, loss_wrapper,
             scheduler.step()
             current_lr = optimizer.param_groups[0]['lr']
 
-        val_loss, val_metrics, _, _ = evaluate(model, val_loader, loss_fn, strength_thresholds)
+        val_loss, val_metrics, _, _, _ = evaluate(model, val_loader, loss_fn, strength_thresholds)
 
         epoch_time = time.time() - epoch_start_time
         force_print(
@@ -381,7 +399,7 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
 
     # Validation
     force_print("Final evaluation on Validation Set...")
-    _, val_metrics, val_details, val_cat_metrics = evaluate(
+    _, val_metrics, val_details, val_cat_metrics, val_metrics_ym = evaluate(
         model, val_loader, loss_fn, strength_thresholds
     )
     val_df_ts, val_df_cat = _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
@@ -389,9 +407,10 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     # Test
     test_metrics, test_details, test_cat_metrics = None, None, None
     test_df_ts, test_df_cat = None, None
+    test_metrics_ym = {}
     if len(test_loader) > 0:
         force_print("Final evaluation on Test Set...")
-        _, test_metrics, test_details, test_cat_metrics = evaluate(
+        _, test_metrics, test_details, test_cat_metrics, test_metrics_ym = evaluate(
             model, test_loader, loss_fn, strength_thresholds
         )
         test_df_ts, test_df_cat = _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
@@ -402,10 +421,17 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         plot_combined_val_test_metrics(val_metrics, test_metrics, run_output_dir)
         plot_combined_category_comparison(val_details, test_details, strength_thresholds, run_output_dir)
         save_val_test_gap_csv(val_metrics, test_metrics, run_output_dir)
-        
+
         # 結合したメトリクスCSVを出力（timestepでソート）
         save_combined_metrics_csv(val_df_ts, test_df_ts, run_output_dir, 'combined_metrics_by_timestep.csv')
         save_combined_metrics_csv(val_df_cat, test_df_cat, run_output_dir, 'combined_metrics_by_category.csv')
+
+    # EVAL_X_AXIS='date' のとき月別 CSV とグラフを出力
+    if getattr(config, 'EVAL_X_AXIS', 'timestep') == 'date':
+        force_print("[INFO] EVAL_X_AXIS='date': saving date-based metrics...")
+        save_date_metrics_csv(val_metrics_ym,  run_output_dir, prefix='valid')
+        save_date_metrics_csv(test_metrics_ym, run_output_dir, prefix='test')
+        plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
 
     # Top-K 評価 (Validation)
     eval_ks = getattr(config, "EVAL_TOP_KS", (1, 3, 5))

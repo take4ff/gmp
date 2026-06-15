@@ -735,3 +735,32 @@ def save_combined_metrics_csv(val_df, test_df, output_dir, filename):
     combined_df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Combined metrics saved to {path}")
     return combined_df
+
+
+def save_date_metrics_csv(metrics_by_ym, output_dir, prefix="test"):
+    """月別（Year-Month）メトリクスを CSV に保存する。
+
+    Args:
+        metrics_by_ym: evaluate() が返す final_metrics_by_ym
+                       キーが 'YYYY-MM' 文字列、値が metrics dict
+        output_dir:    保存先ディレクトリ
+        prefix:        ファイル名プレフィックス ('valid' or 'test')
+
+    Returns:
+        pd.DataFrame または None（データが空の場合）
+    """
+    if not metrics_by_ym:
+        return None
+
+    rows = []
+    for ym in sorted(metrics_by_ym.keys()):
+        m = metrics_by_ym[ym]
+        row = {'yearmonth': ym}
+        row.update(m)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_metrics_by_date.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Date metrics saved to {path}")
+    return df

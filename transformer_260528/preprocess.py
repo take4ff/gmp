@@ -17,7 +17,7 @@ from datetime import datetime
 from . import config
 from .utils.logging import force_print
 from .db.connection import init_db, connect_db, get_db_path, print_db_stats, get_feature_config_hash, create_db_indexes
-from .db.queries import assign_splits, get_processed_strains, get_next_ids
+from .db.queries import assign_splits, assign_splits_auto, get_processed_strains, get_next_ids
 from .utils.io import get_config_hash
 from .legacy.dataset import (
     import_mutation_paths,
@@ -670,7 +670,7 @@ def main():
         # インデックスを一括作成（インサートがすべて終わった後に行うことで劇的に高速化）
         create_db_indexes(con)
 
-        assign_splits(con)
+        assign_splits_auto(con)
         con.close()
 
         # 統計レポートの表示
