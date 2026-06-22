@@ -1,5 +1,0 @@
-0 all features
-1 not codon log ratio (before and diff)
-2 not RSCU (human and scv2)
-3 not mutation context
-4 not 1,2,3

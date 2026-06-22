@@ -51,8 +51,11 @@ class DBIterableDataset(IterableDataset):
         query = "SELECT sample_id FROM samples WHERE 1=1"
         params = []
 
+        from .queries import get_split_col
+        split_col = get_split_col()
+
         if self.split_type is not None:
-            query += " AND split_type = ?"
+            query += f" AND {split_col} = ?"
             params.append(self.split_type)
 
         if self.max_cooccurrence is not None:
@@ -68,11 +71,22 @@ class DBIterableDataset(IterableDataset):
             params.append(self.max_length)
 
         # raw_path, strain_name, strength_score も取得してPython側でサンプリング・ユニーク化判定を行う
+        # 評価（Valid/Test）時には、多共起のラベルを持つサンプルを除外するために labels テーブルもジョインする
+        eval_max_y_co = getattr(config, 'EVAL_MAX_Y_CO_OCCURRENCE', None)
+        is_eval_split = (self.split_type in [1, 2])
+        
         strength_col = 'strength_score_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strength_score_ncbi'
         strain_name_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
-        query = query.replace("SELECT sample_id", f"SELECT s.sample_id, s.raw_path, st.{strain_name_col} as strain_name, st.{strength_col} as strength_score")
-        query = query.replace("FROM samples", "FROM samples s JOIN strains st ON s.strain_id = st.strain_id")
-        query = query.replace(" AND split_type", " AND s.split_type")
+        
+        if is_eval_split and eval_max_y_co is not None:
+            # labelsテーブルをジョインして targets (blob) を取得
+            query = query.replace("SELECT sample_id", f"SELECT s.sample_id, s.raw_path, st.{strain_name_col} as strain_name, st.{strength_col} as strength_score, l.targets")
+            query = query.replace("FROM samples", "FROM samples s JOIN strains st ON s.strain_id = st.strain_id JOIN labels l ON s.sample_id = l.sample_id")
+        else:
+            query = query.replace("SELECT sample_id", f"SELECT s.sample_id, s.raw_path, st.{strain_name_col} as strain_name, st.{strength_col} as strength_score")
+            query = query.replace("FROM samples", "FROM samples s JOIN strains st ON s.strain_id = st.strain_id")
+            
+        query = query.replace(f" AND {split_col}", f" AND s.{split_col}")
         query = query.replace(" AND max_cooccurrence", " AND s.max_cooccurrence")
         query = query.replace(" AND path_length", " AND s.path_length")
 
@@ -84,7 +98,26 @@ class DBIterableDataset(IterableDataset):
             query += f" AND st.{strength_col} >= {train_sf_min}"
         query += " ORDER BY s.sample_id"
 
-        result = con.execute(query, params).fetchall()
+        raw_result = con.execute(query, params).fetchall()
+        
+        # Python側で結果を処理し、評価用多共起ラベルフィルタを適用
+        result = []
+        excluded_y_co_count = 0
+        
+        for row in raw_result:
+            if is_eval_split and eval_max_y_co is not None:
+                # row: (sample_id, raw_path, strain, strength_score, targets_blob)
+                targets = pickle.loads(row[4])
+                if len(targets) > eval_max_y_co:
+                    excluded_y_co_count += 1
+                    continue
+                result.append(row[:4])
+            else:
+                result.append(row)
+                
+        if excluded_y_co_count > 0:
+            split_name = {0: 'Train', 1: 'Valid', 2: 'Test'}.get(self.split_type, 'Unknown')
+            print(f"[INFO] {split_name} data - Excluded {excluded_y_co_count:,} samples due to target Y co-occurrence > {eval_max_y_co}")
 
         # データ全体のサンプル数を取得 (現在適用されている全体フィルタと同条件だが、split_typeは問わない)
         query_all = "SELECT COUNT(*) FROM samples WHERE 1=1"

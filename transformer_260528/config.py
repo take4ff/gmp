@@ -14,11 +14,11 @@ ABLATION_MASKS = {
     'SIZE': False,       # サイズ差を無効化
     'BLSM': False,       # BLOSUM62差を無効化
     'PAM250': False,     # PAM250スコアを無効化
-    'CODON_LOG_RATIO_DIFF': True,
-    'CODON_LOG_RATIO_BEFORE': True,
-    'HUMAN_CODON_RSCU_DIFF': True,
-    'SCV2_CODON_RSCU_DIFF': True,
-    'MUTATION_CONTEXT': True,     # 前後3文字（6塩基）をすべて無効化
+    'CODON_LOG_RATIO_DIFF': False,
+    'CODON_LOG_RATIO_BEFORE': False,
+    'HUMAN_CODON_RSCU_DIFF': False,
+    'SCV2_CODON_RSCU_DIFF': False,
+    'MUTATION_CONTEXT': False,     # 前後3文字（6塩基）をすべて無効化
         'MUTATION_CONTEXT_L3': False,  # 3文字前の塩基を無効化
         'MUTATION_CONTEXT_L2': False,  # 2文字前の塩基を無効化
         'MUTATION_CONTEXT_L1': False,  # 1文字前の塩基を無効化
@@ -72,6 +72,7 @@ INCREMENTAL_CACHE_DIR = 'cache/incremental_features'
 
 # --- DuckDB データベース設定 ---
 DB_DIR = 'db'
+DB_FILE = None  # データベースファイルを直接指定する場合はパスを設定 (例: 'db/features.duckdb')。Noneの場合は自動生成
 USE_DB = True  # Trueの場合、pickleキャッシュの代わりにDuckDBを使用
 MIN_SEQ_LEN = 10  # 最小シーケンス長
 
@@ -97,12 +98,13 @@ MAX_SEQ_LEN = 39
 TARGET_LEN = 1
 TRAIN_MAX = 40 # TS:1-40を学習に利用(TRAIN_MAX > MAX_SEQ_LEN + TARGET_LEN)
 VALID_NUM = 3
-MAX_CO_OCCURRENCE = 5
+MAX_CO_OCCURRENCE = 20  # 最大共起数上限（Omicron等に対応するため5から20へ緩和）
+EVAL_MAX_Y_CO_OCCURRENCE = 5  # 評価時に過剰な情報漏洩を防ぐためのターゲット共起上限
 VALID_RATIO = 0.2
 
 # --- サンプリングモード設定 ---
 # (両モード共通) 頻出上位 MAX_STRAIN_NUM 株のデータのみを使用対象とする
-MAX_STRAIN_NUM = 10000       # 共通: 使用する上位株数
+MAX_STRAIN_NUM = 10000      # 共通: 使用する上位株数
 
 # 'proportional': 対象株のデータ比率を維持しつつ、合計 MAX_NUM 件になるように抽出
 # 'fixed_per_strain': 対象の各株からそれぞれ最大 MAX_NUM_PER_STRAIN 件ずつ抽出
@@ -112,7 +114,8 @@ SAMPLING_MODE = 'proportional'
 MAX_NUM = 10000000  # 全体での抽出合計サンプル数の上限
 
 # モードB: 各株の上限数制限用 (SAMPLING_MODE = 'fixed_per_strain')
-MAX_NUM_PER_STRAIN = 20000   # 各株ごとの最大抽出サンプル数
+MAX_NUM_PER_STRAIN = 1000000   # 各株ごとの最大抽出サンプル数
+# 下限値MIN_NUM_PER_STRAIN追加？
 
 # --- ボキャブラリー設定 ---
 BASE_VOCABS = {'A':1, 'T':2, 'C':3, 'G':4, 'N':5, 'n':6, 'PAD':0}
@@ -392,8 +395,8 @@ STRENGTH_SOURCE = 'ncbi'
 SPLIT_MODE = 'timestep'          # 'timestep' | 'date'
 
 # 基準日（ISO 形式: YYYY-MM-DD）
-# SPLIT_MODE='date' のときのみ有効。この日より前 → train/valid、以降 → test
-TEMPORAL_SPLIT_DATE = '2023-12-31'
+# SPLIT_MODE='date' のときのみ有効。この日より前 → train/valid、この日以降 → test
+TEMPORAL_SPLIT_DATE = '2024-01-01'
 
 # date モードでの Validation 比率（基準日前のデータからランダムに抽出）
 DATE_VALID_RATIO = 0.1

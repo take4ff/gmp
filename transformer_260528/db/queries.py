@@ -7,6 +7,11 @@ from .connection import connect_db, get_db_path
 from .. import config
 
 
+def get_split_col():
+    """現在設定されている SPLIT_MODE に応じて参照すべき DB のカラム名を返す。"""
+    return 'split_type_date' if getattr(config, 'SPLIT_MODE', 'timestep').lower() == 'date' else 'split_type'
+
+
 def get_db_data_info(db_path=None, split_type=None, max_cooccurrence=None):
     """DBからデータ情報を取得（data_info相当）。
 
@@ -18,10 +23,11 @@ def get_db_data_info(db_path=None, split_type=None, max_cooccurrence=None):
 
     con = connect_db(db_path, read_only=True)
 
-    query_base = "SELECT MIN(path_length), MAX(path_length), COUNT(*) FROM samples WHERE 1=1"
+    split_col = get_split_col()
+    query_base = f"SELECT MIN(path_length), MAX(path_length), COUNT(*) FROM samples WHERE 1=1"
 
     def get_stats(st):
-        q = query_base + f" AND split_type = {st}"
+        q = query_base + f" AND {split_col} = {st}"
         if max_cooccurrence:
             q += f" AND max_cooccurrence <= {max_cooccurrence}"
         return con.execute(q).fetchone()
@@ -86,7 +92,8 @@ def load_samples_from_db(db_path=None, split_type=None, max_cooccurrence=None,
     params = []
 
     if split_type is not None:
-        query += " AND s.split_type = ?"
+        split_col = get_split_col()
+        query += f" AND s.{split_col} = ?"
         params.append(split_type)
 
     if max_cooccurrence is not None:
@@ -205,13 +212,14 @@ def assign_date_splits(con):
           f"valid_ratio={valid_ratio})...")
 
     # まず全サンプルを train (0) にリセット
-    con.execute("UPDATE samples SET split_type = 0")
+    con.execute("UPDATE samples SET split_type_date = 0")
 
     # 基準日以降 → test (2)
+    # RPADを用いて YYYY や YYYY-MM 形式の日付を補完し、正確に文字列比較を行う
     con.execute(f"""
         UPDATE samples
-        SET split_type = 2
-        WHERE collection_date >= '{split_date}'
+        SET split_type_date = 2
+        WHERE RPAD(collection_date, 10, '-01-01') >= '{split_date}'
           AND collection_date IS NOT NULL
           AND collection_date != ''
     """)
@@ -219,7 +227,7 @@ def assign_date_splits(con):
     # 基準日前 (NULL / 空文字も含む) の sample_id を取得して valid を確率的に割り当て
     before_rows = con.execute("""
         SELECT sample_id FROM samples
-        WHERE split_type = 0
+        WHERE split_type_date = 0
         ORDER BY sample_id
     """).fetchall()
 
@@ -232,27 +240,27 @@ def assign_date_splits(con):
 
         if valid_ids:
             con.execute(
-                f"UPDATE samples SET split_type = 1 "
+                f"UPDATE samples SET split_type_date = 1 "
                 f"WHERE sample_id IN ({','.join(map(str, valid_ids))})"
             )
 
     # 統計を表示
-    stats = con.execute("SELECT * FROM split_stats").fetchall()
+    stats = con.execute("""
+        SELECT split_type_date,
+               CASE split_type_date WHEN 0 THEN 'train' WHEN 1 THEN 'valid' WHEN 2 THEN 'test' END as split_name,
+               COUNT(*) as sample_count
+        FROM samples
+        GROUP BY split_type_date
+        ORDER BY split_type_date
+    """).fetchall()
     for split_type, split_name, count in stats:
         print(f"[{timestamp}]   {split_name}: {count:,} samples")
 
 
 def assign_splits_auto(con):
-    """config.SPLIT_MODE に応じて適切な分割関数を呼び出すラッパー。
-
-    - 'date'     : assign_date_splits(con)
-    - 'timestep' : assign_splits(con)  （デフォルト・既存動作）
-    """
-    split_mode = getattr(config, 'SPLIT_MODE', 'timestep').lower()
-    if split_mode == 'date':
-        assign_date_splits(con)
-    else:
-        assign_splits(con)
+    """従来の `split_type` (timestep) と新設 of `split_type_date` (date) の両方を常に更新・初期化する。"""
+    assign_splits(con)
+    assign_date_splits(con)
 
 
 def get_processed_strains(con):
@@ -309,11 +317,12 @@ def get_train_class_counts(db_path=None):
     con = connect_db(db_path, read_only=True)
 
     # 必要なすべてのサンプルのラベルを取得 (Trainのみ)
-    query = """
+    split_col = get_split_col()
+    query = f"""
         SELECT l.targets 
         FROM labels l
         JOIN samples s ON l.sample_id = s.sample_id
-        WHERE s.split_type = 0
+        WHERE s.{split_col} = 0
     """
     rows = con.execute(query).fetchall()
     con.close()
@@ -355,10 +364,11 @@ def get_combined_sampled_strength(db_path=None):
         
     # すべてのサンプルをDBから取得
     con = connect_db(db_path, read_only=True)
+    split_col = get_split_col()
     strength_col = 'strength_score_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strength_score_ncbi'
     strain_name_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
     query = f"""
-        SELECT s.sample_id, s.raw_path, st.{strain_name_col} as strain_name, s.split_type, st.{strength_col} as strength_score
+        SELECT s.sample_id, s.raw_path, st.{strain_name_col} as strain_name, s.{split_col} as split_type, st.{strength_col} as strength_score
         FROM samples s
         JOIN strains st ON s.strain_id = st.strain_id
     """

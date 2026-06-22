@@ -24,7 +24,7 @@ PROTEIN_VOCABS_INV = {
 
 def main():
     # 接続するDBパスを自動検出
-    db_path = 'db/features_7dba6a01.duckdb'
+    db_path = 'db/features_724e4a32.duckdb'
     try:
         from transformer_260528.db.connection import get_db_path
         config_db_path = get_db_path()

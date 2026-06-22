@@ -76,7 +76,7 @@ def prepare_data():
             (train_loader, val_loader, test_loader, data_info)
     """
     if config.USE_DB:
-        from .db.connection import check_db_exists, print_db_stats, get_db_path
+        from .db.connection import check_db_exists, print_db_stats, get_db_path, run_db_migrations
         from .db.dataset import create_db_dataloader
         from .db.queries import get_db_data_info
 
@@ -87,6 +87,10 @@ def prepare_data():
             raise RuntimeError("Database not found.")
 
         db_path = get_db_path()
+
+        # スキーマ拡張のマイグレーションを自動実行（並列実行時のロック競合を避けるためコメントアウト）
+        # run_db_migrations(db_path)
+
         force_print(f"[INFO] Loading data from DuckDB: {db_path}")
         print_db_stats()
 
@@ -129,6 +133,10 @@ def prepare_data():
                 f"[INFO] After re-assign: {data_info['train_count']} train, "
                 f"{data_info['val_count']} valid, {data_info['test_count']} test"
             )
+            # 再生成した分割に基づいてデータローダーも作り直す
+            train_loader = _make_loader(0, shuffle=True)
+            val_loader   = _make_loader(1, shuffle=False)
+            test_loader  = _make_loader(2, shuffle=False)
 
         # Curriculum Learning 用: 訓練ローダーを再生成するラムダ
         def make_train_loader(min_length=None):

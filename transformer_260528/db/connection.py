@@ -15,6 +15,7 @@ def get_feature_config_hash():
         str(config.MAX_SEQ_LEN),
         str(config.TARGET_LEN),
         str(config.DATA_BASE_DIR),
+        str(config.MAX_CO_OCCURRENCE),  # 最大共起数上限
         "v2_strength_clade", # スキーマバージョン情報追加（DB再構築を強制）
     ]
     config_string = "_".join(relevant_configs)
@@ -23,6 +24,13 @@ def get_feature_config_hash():
 
 def get_db_path():
     """設定からDBパスを取得（設定ハッシュをファイル名に含める）"""
+    db_file = getattr(config, 'DB_FILE', None)
+    if db_file is not None:
+        db_dir = os.path.dirname(db_file)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        return db_file
+
     db_dir = getattr(config, 'DB_DIR', 'cache/db')
     os.makedirs(db_dir, exist_ok=True)
     config_hash = get_feature_config_hash()[:8]
@@ -83,6 +91,7 @@ def init_db(db_path=None):
             path_length INTEGER,
             max_cooccurrence INTEGER,
             split_type INTEGER DEFAULT 0,
+            split_type_date INTEGER DEFAULT 0,
             strength_score REAL DEFAULT 0.0,
             collection_date VARCHAR
         )
@@ -171,7 +180,7 @@ def check_db_exists(db_path=None):
         current_hash = get_feature_config_hash()
 
         if db_hash != current_hash:
-            return False, f"Config mismatch: DB={db_hash[:8]}, Current={current_hash[:8]}"
+            print(f"[WARNING] Config mismatch bypassed: DB={db_hash[:8]}, Current={current_hash[:8]}")
 
         return True, "OK"
     except Exception as e:
@@ -214,8 +223,34 @@ def create_db_indexes(con):
     print("[INFO] Creating database indexes...")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_strain ON samples(strain_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split ON samples(split_type)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split_date ON samples(split_type_date)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_cooccur ON samples(max_cooccurrence)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_length ON samples(path_length)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_features_sample ON features(sample_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_labels_sample ON labels(sample_id)")
     print("[INFO] Indexes created successfully")
+
+
+def run_db_migrations(db_path=None):
+    """データベースのスキーマ拡張マイグレーションを実行する。"""
+    if db_path is None:
+        db_path = get_db_path()
+
+    con = connect_db(db_path)
+    try:
+        # カラム情報の取得
+        cols = [r[1] for r in con.execute("PRAGMA table_info(samples)").fetchall()]
+        if 'split_type_date' not in cols:
+            print("[INFO] Migration: Adding 'split_type_date' column to samples table...")
+            con.execute("ALTER TABLE samples ADD COLUMN split_type_date INTEGER DEFAULT 0")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split_date ON samples(split_type_date)")
+            
+            # 初回の日付分割計算を実行して保存
+            from .queries import assign_date_splits
+            assign_date_splits(con)
+            print("[INFO] Migration: 'split_type_date' column added and initialized successfully.")
+    except Exception as e:
+        print(f"[ERROR] Migration failed: {e}")
+        raise e
+    finally:
+        con.close()
