@@ -152,7 +152,7 @@ def prepare_data():
 
     else:
         # 従来の pickle キャッシュ方式
-        from .legacy.dataset import prepare_all_data, create_dataloader
+        from .db.feature import prepare_all_data, create_dataloader
 
         train, valid, test, data_info = prepare_all_data()
         train_loader = create_dataloader(train, config.BATCH_SIZE, shuffle=True)

@@ -13,7 +13,7 @@ if project_root not in sys.path:
 
 from transformer_260625 import config
 from transformer_260625.db.connection import get_db_path, connect_db
-from transformer_260625.legacy.dataset import import_mutation_paths
+from transformer_260625.db.feature import import_mutation_paths
 
 
 def plot_cooccurrence_distribution(output_dir=None):

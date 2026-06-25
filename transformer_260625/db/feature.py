@@ -1,6 +1,5 @@
-# --- legacy/dataset.py ---
-# 旧実装（pickleキャッシュ方式）の参照用コピー
-# transformer_260224/dataset.py から移植
+# --- db/feature.py ---
+# 変異パスの読み込み・特徴量計算・DuckDB前処理用ロジック
 import os
 import time
 import pickle

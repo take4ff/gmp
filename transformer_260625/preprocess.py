@@ -19,7 +19,7 @@ from .utils.logging import force_print
 from .db.connection import init_db, connect_db, get_db_path, print_db_stats, get_feature_config_hash, create_db_indexes
 from .db.queries import assign_splits, assign_splits_auto, get_processed_strains, get_next_ids
 from .utils.io import get_config_hash
-from .legacy.dataset import (
+from .db.feature import (
     import_mutation_paths,
     filter_co_occur,
     preprocess_static_data,
