@@ -1,5 +1,5 @@
-# --- transformer_260625.utils.plot_collection_date_comparison.py ---
-# python -m transformer_260625.utils.plot_collection_date_comparison --db_path db/features_724e4a32.duckdb
+# --- transformer_260625.scripts.plot_collection_date_comparison.py ---
+# python -m transformer_260625.scripts.plot_collection_date_comparison --db_path db/features_724e4a32.duckdb
 import os
 import sys
 import pandas as pd

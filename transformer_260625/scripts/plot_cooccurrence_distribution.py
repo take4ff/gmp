@@ -1,4 +1,4 @@
-# --- transformer_260625/utils/plot_cooccurrence_distribution.py ---
+# --- transformer_260625/scripts/plot_cooccurrence_distribution.py ---
 import os
 import sys
 import pandas as pd

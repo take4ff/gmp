@@ -1,5 +1,5 @@
-# copy:jupyter_notebook/20250620_table_heatmap.ipynb
-# %%
+# --- transformer_260625/scripts/mutation_freq.py ---
+# Usage: python -m transformer_260625.scripts.mutation_freq
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
