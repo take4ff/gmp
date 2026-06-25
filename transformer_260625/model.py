@@ -88,12 +88,12 @@ class ALibiPositionalBias(nn.Module):
 
 
 class InputEmbedding(nn.Module):
-    """15のカテゴリ特徴量 + 30の数値特徴量を受け取り、FEATURE_DIM次元に射影
+    """(9 + 2*CONTEXT_WINDOW) のカテゴリ特徴量 + 32の数値特徴量を受け取り、FEATURE_DIM次元に射影
 
-    カテゴリ特徴量 (15): base_before[0], position[1], base_after[2], codon_pos[3],
+    カテゴリ特徴量 (9 + 2*CONTEXT_WINDOW): base_before[0], position[1], base_after[2], codon_pos[3],
                          aa_before[4], aa_pos[5], aa_after[6], region[7], synonymous[8],
-                         left3[9], left2[10], left1[11], right1[12], right2[13], right3[14]
-    数値特徴量    (30): freq[0], hydro[1], charge[2], size[3], blsm[4], pam250[5],
+                         left{W}[9]..left1[9+W-1], right1[9+W]..right{W}[9+2W-1]  (W=CONTEXT_WINDOW)
+    数値特徴量    (32): freq[0], hydro[1], charge[2], size[3], blsm[4], pam250[5],
                          host_distance_log_ratio_diff[6], host_distance_log_ratio_before[7],
                          human_RSCU_diff[8], SCV2_RSCU_diff[9],
                          optimal_to_optimal[10], non_optimal_to_optimal[11], optimal_to_non_optimal[12],
@@ -102,7 +102,8 @@ class InputEmbedding(nn.Module):
                          human_RSCU_before[18], SCV2_RSCU_before[19],
                          human_freq_before[20], human_freq_diff[21], SCV2_freq_before[22], SCV2_freq_diff[23],
                          human_CAI_before[24], human_CAI_diff[25], SCV2_CAI_before[26], SCV2_CAI_diff[27],
-                         host_distance_RSCU_ratio_before[28], host_distance_RSCU_ratio_diff[29]
+                         host_distance_RSCU_ratio_before[28], host_distance_RSCU_ratio_diff[29],
+                         cum_syn[30], cum_nonsyn[31]
     """
     def __init__(self):
         super().__init__()
@@ -119,7 +120,8 @@ class InputEmbedding(nn.Module):
 
         self.num_norm = nn.LayerNorm(config.NUM_CHEM_FEATURES)
 
-        total_embed_dim = (config.EMBED_DIM_POS + (config.EMBED_DIM_BASE * 8) +
+        _ctx_w = getattr(config, 'CONTEXT_WINDOW', 3)
+        total_embed_dim = (config.EMBED_DIM_POS + (config.EMBED_DIM_BASE * (2 + 2 * _ctx_w)) +
                            (config.EMBED_DIM_AA * 2) + config.EMBED_DIM_REGION +
                            config.EMBED_DIM_CODON_POS + config.EMBED_DIM_AA_POS +
                            config.NUM_CHEM_FEATURES +
@@ -138,12 +140,8 @@ class InputEmbedding(nn.Module):
         aa_after = self.aa_embed(x_cat[..., 6])
         region = self.region_embed(x_cat[..., 7])
         synonymous = self.synonymous_embed(x_cat[..., 8])
-        left3 = self.base_embed(x_cat[..., 9])
-        left2 = self.base_embed(x_cat[..., 10])
-        left1 = self.base_embed(x_cat[..., 11])
-        right1 = self.base_embed(x_cat[..., 12])
-        right2 = self.base_embed(x_cat[..., 13])
-        right3 = self.base_embed(x_cat[..., 14])
+        ctx_w = getattr(config, 'CONTEXT_WINDOW', 3)
+        context_embeds = [self.base_embed(x_cat[..., 9 + i]) for i in range(2 * ctx_w)]
 
         num = self.num_norm(x_num)
 
@@ -151,7 +149,7 @@ class InputEmbedding(nn.Module):
             pos, base_before, base_after,
             aa_before, aa_after,
             region, codon_pos, aa_pos, synonymous,
-            left3, left2, left1, right1, right2, right3,
+            *context_embeds,
             num
         ], dim=-1)
 

@@ -242,7 +242,7 @@ def save_metrics_csv(metrics_by_ts, output_dir, prefix="val"):
 
 
 def save_category_metrics_csv(cat_metrics, output_dir, prefix="val"):
-    """流行度カテゴリ別メトリクスをCSVに保存する。"""
+    """流行度カテゴリ別メトリクスをCSVに保存する（全体1ファイル + カテゴリ別3ファイル）。"""
     rows = []
     for ts_len in sorted(cat_metrics.keys()):
         for category in ['low', 'medium', 'high']:
@@ -255,6 +255,59 @@ def save_category_metrics_csv(cat_metrics, output_dir, prefix="val"):
     path = _get_save_path(output_dir, f'{prefix}_metrics_by_category.csv')
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Category metrics saved to {path}")
+
+    for category in ['low', 'medium', 'high']:
+        cat_rows = [r for r in rows if r['category'] == category]
+        if cat_rows:
+            cat_path = _get_save_path(output_dir, f'{prefix}_metrics_by_category_{category}.csv')
+            pd.DataFrame(cat_rows).to_csv(cat_path, index=False)
+
+    return df
+
+
+def save_strength_fine_csv(details, output_dir, prefix="test"):
+    """対数スケール4区分の流行度別メトリクスをCSVに保存する。"""
+    import math
+    if not details:
+        return None
+
+    bins = [
+        ('~100',   math.log1p(100)),
+        ('~500',   math.log1p(500)),
+        ('~1K',    math.log1p(1_000)),
+        ('~5K',    math.log1p(5_000)),
+        ('~10K',   math.log1p(10_000)),
+        ('~50K',   math.log1p(50_000)),
+        ('~100K',  math.log1p(100_000)),
+        ('~500K',  math.log1p(500_000)),
+        ('>500K',  float('inf')),
+    ]
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+    fine_stats = {}
+
+    for r in details:
+        score = r.get('strength_score', 0.0)
+        cat = next((label for label, thr in bins if score < thr), bins[-1][0])
+        if cat not in fine_stats:
+            fine_stats[cat] = {'n': 0, 'hits': {t: 0 for t in tasks}, 'strains': set()}
+        fine_stats[cat]['n'] += 1
+        fine_stats[cat]['strains'].add(r.get('strain', ''))
+        for t in tasks:
+            fine_stats[cat]['hits'][t] += int(r.get(f'hit_{t}', False))
+
+    rows = []
+    for label, _ in bins:
+        s = fine_stats.get(label, {'n': 0, 'hits': {t: 0 for t in tasks}, 'strains': set()})
+        n = s['n']
+        row = {'strength_category': label, 'num_samples': n, 'num_strains': len(s['strains'])}
+        for t in tasks:
+            row[f'{t}_hit_rate_pct'] = round(s['hits'][t] / n * 100, 2) if n > 0 else 0.0
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_strength_fine.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Fine-grained strength metrics saved to {path}")
     return df
 
 
@@ -613,6 +666,61 @@ def save_strain_metrics_csv(details, output_dir, prefix="test"):
     return df
 
 
+def save_lineage_metrics_csv(details, output_dir, prefix="test"):
+    """系統（Pango上位2階層）単位で精度・予測難易度（エントロピー）を集計したCSVを保存する。"""
+    import math
+    from collections import Counter
+
+    if not details:
+        return None
+
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+    lineage_stats = {}
+
+    for r in details:
+        strain = r.get('strain', 'unknown') or 'unknown'
+        parts = strain.split('.')
+        lineage = '.'.join(parts[:2]) if len(parts) >= 2 else parts[0]
+
+        if lineage not in lineage_stats:
+            lineage_stats[lineage] = {
+                'n': 0, 'hits': {t: 0 for t in tasks},
+                'strength_sum': 0.0, 'target_positions': [],
+            }
+        s = lineage_stats[lineage]
+        s['n'] += 1
+        s['strength_sum'] += r.get('strength_score', 0.0)
+        for t in tasks:
+            s['hits'][t] += int(r.get(f'hit_{t}', False))
+        s['target_positions'].extend(list(r.get('targets_position', set())))
+
+    rows = []
+    for lineage, s in sorted(lineage_stats.items(), key=lambda x: x[1]['n'], reverse=True):
+        n = s['n']
+        pos_list = s['target_positions']
+        entropy = 0.0
+        if pos_list:
+            counts = Counter(pos_list)
+            total = len(pos_list)
+            entropy = -sum((c / total) * math.log2(c / total) for c in counts.values())
+
+        row = {
+            'lineage': lineage,
+            'num_samples': n,
+            'avg_strength': round(s['strength_sum'] / n, 4) if n > 0 else 0.0,
+            'target_position_entropy': round(entropy, 4),
+        }
+        for t in tasks:
+            row[f'{t}_hit_rate_pct'] = round(s['hits'][t] / n * 100, 2) if n > 0 else 0.0
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_lineage_metrics.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Lineage metrics saved to {path} ({len(rows)} lineages)")
+    return df
+
+
 def save_early_stopping_json(training_log, best_model_path, output_dir, max_epochs):
     """Early Stopping 情報を JSON に保存する。"""
     import json
@@ -648,6 +756,50 @@ def save_early_stopping_json(training_log, best_model_path, output_dir, max_epoc
         f"(best epoch={info['best_epoch']}, val_loss={info['best_val_loss']})"
     )
     return info
+
+
+def save_run_summary_json(val_metrics, test_metrics, val_topk, test_topk,
+                          val_loss, test_loss, output_dir):
+    """主要指標だけをまとめた軽量 JSON を保存する。"""
+    import json
+
+    def _weighted_avg(metrics, key):
+        if not metrics:
+            return None
+        total_n = sum(m.get('num_samples', 0) for m in metrics.values())
+        if total_n == 0:
+            return None
+        return round(sum(m.get(key, 0.0) * m.get('num_samples', 0) for m in metrics.values()) / total_n, 4)
+
+    def _topk_entry(topk, task, k):
+        if topk is None:
+            return None
+        m = topk.get(task, {}).get(k)
+        return round(m['hit_rate'], 2) if m else None
+
+    eval_ks = getattr(config, 'EVAL_TOP_KS', (1, 3, 5))
+    summary = {
+        'val_loss': round(val_loss, 6) if val_loss is not None else None,
+        'test_loss': round(test_loss, 6) if test_loss is not None else None,
+        'val': {
+            'macro_recall_region': _weighted_avg(val_metrics, 'region_macro_recall'),
+            'macro_recall_position': _weighted_avg(val_metrics, 'position_macro_recall'),
+            **{f'top{k}_region_hit_rate_pct': _topk_entry(val_topk, 'region', k) for k in eval_ks},
+            **{f'top{k}_position_hit_rate_pct': _topk_entry(val_topk, 'position', k) for k in eval_ks},
+        },
+        'test': {
+            'macro_recall_region': _weighted_avg(test_metrics, 'region_macro_recall'),
+            'macro_recall_position': _weighted_avg(test_metrics, 'position_macro_recall'),
+            **{f'top{k}_region_hit_rate_pct': _topk_entry(test_topk, 'region', k) for k in eval_ks},
+            **{f'top{k}_position_hit_rate_pct': _topk_entry(test_topk, 'position', k) for k in eval_ks},
+        },
+    }
+
+    path = _get_save_path(output_dir, 'run_summary.json')
+    with open(path, 'w') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    _log.force_print(f"[INFO] Run summary saved to {path}")
+    return summary
 
 
 def save_model_summary_txt(model, output_dir):
@@ -707,6 +859,32 @@ def save_topk_precision_csv(topk_results, output_dir, prefix="test"):
             _log.force_print(
                 f"  {task:<20} {k:>4}  {m['precision']:>9.2f}%  {m['recall']:>7.2f}%  {m['hit_rate']:>7.2f}%"
             )
+    return df
+
+
+def save_r_precision_csv(topk_results, output_dir, prefix="test"):
+    """R-Precision（動的K=|target|）の結果を独立ファイルに保存する。"""
+    if not topk_results:
+        return None
+
+    rows = []
+    for task in ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']:
+        rp = topk_results.get(task, {}).get('r_precision')
+        if rp is not None:
+            rows.append({
+                'task': task,
+                'precision_pct': round(rp['precision'], 4),
+                'recall_pct': round(rp['recall'], 4),
+                'hit_rate_pct': round(rp['hit_rate'], 4),
+            })
+
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_r_precision.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] R-Precision results saved to {path}")
     return df
 
 

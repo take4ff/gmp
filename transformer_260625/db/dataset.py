@@ -393,7 +393,8 @@ class DBIterableDataset(IterableDataset):
                 #           human_RSCU_before(18), SCV2_RSCU_before(19),
                 #           human_freq_before(20), human_freq_diff(21), SCV2_freq_before(22), SCV2_freq_diff(23),
                 #           human_CAI_before(24), human_CAI_diff(25), SCV2_CAI_before(26), SCV2_CAI_diff(27),
-                #           host_distance_RSCU_ratio_before(28), host_distance_RSCU_ratio_diff(29)]
+                #           host_distance_RSCU_ratio_before(28), host_distance_RSCU_ratio_diff(29),
+                #           cum_syn(30), cum_nonsyn(31)]
                 num_mask_keys = [
                     'FREQ', 'HYDRO', 'CHARGE', 'SIZE', 'BLSM', 'PAM250',
                     'HOST_LOG_RATIO_DIFF', 'HOST_LOG_RATIO_BEFORE',
@@ -405,24 +406,24 @@ class DBIterableDataset(IterableDataset):
                     'HUMAN_FREQ_BEFORE', 'HUMAN_FREQ_DIFF', 'SCV2_FREQ_BEFORE', 'SCV2_FREQ_DIFF',
                     'HUMAN_CAI_BEFORE', 'HUMAN_CAI_DIFF', 'SCV2_CAI_BEFORE', 'SCV2_CAI_DIFF',
                     'HOST_RSCU_RATIO_BEFORE', 'HOST_RSCU_RATIO_DIFF',
+                    'CUM_SYN', 'CUM_NONSYN',
                 ]
                 for i, key in enumerate(num_mask_keys):
                     if config.ABLATION_MASKS[key]:
                         num[i] = 0.0
 
-                # カテゴリ特徴量: 前後3塩基コンテキストの個別マスク (PAD index=0 に置換)
-                # cat構造: [9]=left3, [10]=left2, [11]=left1, [12]=right1, [13]=right2, [14]=right3
+                # カテゴリ特徴量: コンテキスト塩基の個別マスク (PAD index=0 に置換)
+                # cat構造: [9..9+W-1]=left{W}..left1, [9+W..9+2W-1]=right1..right{W}  (W=CONTEXT_WINDOW)
+                _ctx_w = getattr(config, 'CONTEXT_WINDOW', 3)
                 if config.ABLATION_MASKS.get('MUTATION_CONTEXT', False):
-                    for ci in range(9, 15):
+                    for ci in range(9, 9 + 2 * _ctx_w):
                         cat[ci] = 0
                 else:
-                    ctx_mask_keys = [
-                        'MUTATION_CONTEXT_L3', 'MUTATION_CONTEXT_L2', 'MUTATION_CONTEXT_L1',
-                        'MUTATION_CONTEXT_R1', 'MUTATION_CONTEXT_R2', 'MUTATION_CONTEXT_R3',
-                    ]
-                    for j, key in enumerate(ctx_mask_keys):
-                        if config.ABLATION_MASKS.get(key, False):
-                            cat[9 + j] = 0
+                    for j in range(1, _ctx_w + 1):
+                        if config.ABLATION_MASKS.get(f'MUTATION_CONTEXT_L{j}', False):
+                            cat[9 + _ctx_w - j] = 0      # left_j: 遠い方が小インデックス
+                        if config.ABLATION_MASKS.get(f'MUTATION_CONTEXT_R{j}', False):
+                            cat[9 + _ctx_w + j - 1] = 0  # right_j: 近い方が小インデックス
 
                 padded_cat[target_idx, c] = cat
                 padded_num[target_idx, c] = num

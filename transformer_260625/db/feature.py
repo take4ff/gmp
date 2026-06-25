@@ -417,13 +417,13 @@ def Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_
     codon = str(codon_state['codon'][idx])
     codon_pos = int(codon_state['codon_pos'][idx])
 
-    # 前後3文字の周辺塩基を取得 (変異適用前のゲノム配列から抽出)
-    left3_base = str(codon_state['base'][idx - 3]) if idx - 3 >= 0 else 'n'
-    left2_base = str(codon_state['base'][idx - 2]) if idx - 2 >= 0 else 'n'
-    left1_base = str(codon_state['base'][idx - 1]) if idx - 1 >= 0 else 'n'
-    right1_base = str(codon_state['base'][idx + 1]) if idx + 1 < len(codon_state['base']) else 'n'
-    right2_base = str(codon_state['base'][idx + 2]) if idx + 2 < len(codon_state['base']) else 'n'
-    right3_base = str(codon_state['base'][idx + 3]) if idx + 3 < len(codon_state['base']) else 'n'
+    # 前後 CONTEXT_WINDOW 塩基を取得 (変異適用前のゲノム配列から抽出)
+    _ctx = getattr(config, 'CONTEXT_WINDOW', 3)
+    _base_arr = codon_state['base']
+    _base_len = len(_base_arr)
+    left_bases  = [str(_base_arr[idx - i]) if idx - i >= 0 else 'n' for i in range(_ctx, 0, -1)]
+    right_bases = [str(_base_arr[idx + i]) if idx + i < _base_len else 'n' for i in range(1, _ctx + 1)]
+    context_bases = left_bases + right_bases
 
     new_codon = codon
     
@@ -462,42 +462,34 @@ def Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_
     host_adapt = host_adapt_dict.get((codon, new_codon), _ADAPT_ZERO)
 
     return codon, new_codon, codon_pos, protein, aa_pos, freq, hydro, charge, size, blsm, pam250, \
-           host_adapt, \
-           left3_base, left2_base, left1_base, right1_base, right2_base, right3_base
+           host_adapt, context_bases
 
 
 def Mutation_features_fast(mutations_str, codon_state, freq_dict, dissim_dict, pam250_dict,
-                           host_adapt_dict, undo_list=None):
+                           host_adapt_dict, undo_list=None, cum_syn=0, cum_nonsyn=0):
     features = []
     for mutation in mutations_str.split(','):
         codon, new_codon, codon_pos, protein, aa_pos, freq, hydro, charge, size, blsm, pam250, \
-        host_adapt, \
-        left3_base, left2_base, left1_base, right1_base, right2_base, right3_base = \
+        host_adapt, context_bases = \
             Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_dict,
                                   host_adapt_dict, undo_list=undo_list)
-        
+
         codon = codon if codon != 'none' else 'nnn'
         new_codon = new_codon if new_codon != 'none' else 'nnn'
-        
+
         bef_token = config.BASE_VOCABS.get(mutation[0], config.BASE_VOCABS['n'])
         aft_token = config.BASE_VOCABS.get(mutation[-1], config.BASE_VOCABS['n'])
         aa_bef_token = config.AA_VOCABS.get(DNA2Protein.get(codon, 'n'), config.AA_VOCABS['n'])
         aa_aft_token = config.AA_VOCABS.get(DNA2Protein.get(new_codon, 'n'), config.AA_VOCABS['n'])
         protein_token = config.PROTEIN_VOCABS.get(protein, config.PROTEIN_VOCABS['PAD'])
-        
-        # 前後3文字の塩基をトークン化
-        left3_token = config.BASE_VOCABS.get(left3_base, config.BASE_VOCABS['n'])
-        left2_token = config.BASE_VOCABS.get(left2_base, config.BASE_VOCABS['n'])
-        left1_token = config.BASE_VOCABS.get(left1_base, config.BASE_VOCABS['n'])
-        right1_token = config.BASE_VOCABS.get(right1_base, config.BASE_VOCABS['n'])
-        right2_token = config.BASE_VOCABS.get(right2_base, config.BASE_VOCABS['n'])
-        right3_token = config.BASE_VOCABS.get(right3_base, config.BASE_VOCABS['n'])
+
+        # コンテキスト塩基をトークン化（left_far→left_near, right_near→right_far の順）
+        context_tokens = [config.BASE_VOCABS.get(b, config.BASE_VOCABS['n']) for b in context_bases]
 
         is_synonymous = 1 if aa_bef_token == aa_aft_token else 0
-        cat_feat = [bef_token, int(mutation[1:-1]), aft_token, codon_pos, 
-                    aa_bef_token, aa_pos, aa_aft_token, protein_token, is_synonymous,
-                    left3_token, left2_token, left1_token, right1_token, right2_token, right3_token]
-        num_feat = [freq, hydro, charge, size, blsm, pam250] + list(host_adapt)
+        cat_feat = [bef_token, int(mutation[1:-1]), aft_token, codon_pos,
+                    aa_bef_token, aa_pos, aa_aft_token, protein_token, is_synonymous] + context_tokens
+        num_feat = [freq, hydro, charge, size, blsm, pam250] + list(host_adapt) + [float(cum_syn), float(cum_nonsyn)]
         features.append((cat_feat, num_feat))
     return features
 
@@ -510,17 +502,25 @@ def Feature_path_fast(mutation_path, codon_state_shared, freq_dict, dissim_dict,
     """
     undo_list = []
     path_features = []
+    cum_syn = 0
+    cum_nonsyn = 0
     try:
         for mutations_str in mutation_path:
             ts_features = Mutation_features_fast(
                 mutations_str, codon_state_shared, freq_dict, dissim_dict, pam250_dict,
-                host_adapt_dict, undo_list=undo_list
+                host_adapt_dict, undo_list=undo_list, cum_syn=cum_syn, cum_nonsyn=cum_nonsyn
             )
+            # このタイムステップ終了後に累積カウントを更新（cat_feat[8] = is_synonymous）
+            for cat_feat, _ in ts_features:
+                if cat_feat[8] == 1:
+                    cum_syn += 1
+                else:
+                    cum_nonsyn += 1
             path_features.append(ts_features)
     finally:
         for target, idx, old_val in reversed(undo_list):
             codon_state_shared[target][idx] = old_val
-            
+
     return path_features
 
 # ==========================================

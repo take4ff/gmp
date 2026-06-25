@@ -81,10 +81,12 @@ def main():
         region    = PROTEIN_VOCABS_INV.get(cat_feat[7], '?')
         is_syn    = "Synonymous" if cat_feat[8] == 1 else "Non-Synonymous"
 
-        if len(cat_feat) >= 15:
-            ctx = [BASE_VOCABS_INV.get(cat_feat[i], '?') for i in range(9, 15)]
-            left_context  = ''.join(ctx[:3])
-            right_context = ''.join(ctx[3:])
+        ctx_w = getattr(config, 'CONTEXT_WINDOW', 3)
+        n_ctx = 2 * ctx_w
+        if len(cat_feat) >= 9 + n_ctx:
+            ctx = [BASE_VOCABS_INV.get(cat_feat[9 + i], '?') for i in range(n_ctx)]
+            left_context  = ''.join(ctx[:ctx_w])
+            right_context = ''.join(ctx[ctx_w:])
             full_context  = f"{left_context}[{bef_base}->{aft_base}]{right_context}"
         else:
             left_context = right_context = full_context = '---'
@@ -112,7 +114,8 @@ def main():
                          'SCV2FreqBef': f"{num_feat[22]:.2f}", 'SCV2FreqDiff': f"{num_feat[23]:.2f}",
                          'HumanCAIBef': f"{num_feat[24]:.4f}", 'HumanCAIDiff': f"{num_feat[25]:.4f}",
                          'SCV2CAIBef': f"{num_feat[26]:.4f}", 'SCV2CAIDiff': f"{num_feat[27]:.4f}",
-                         'RSCURatioBef': f"{num_feat[28]:.4f}", 'RSCURatioDiff': f"{num_feat[29]:.4f}"})
+                         'RSCURatioBef': f"{num_feat[28]:.4f}", 'RSCURatioDiff': f"{num_feat[29]:.4f}",
+                         'CumSyn': f"{num_feat[30]:.0f}", 'CumNonSyn': f"{num_feat[31]:.0f}"})
 
     df_cat      = pd.DataFrame(cat_rows)
     df_num      = pd.DataFrame(num_rows)

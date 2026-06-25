@@ -40,14 +40,25 @@ ABLATION_MASKS = {
     'SCV2_CAI_DIFF': False,              # SCV2_CAI_diff
     'HOST_RSCU_RATIO_BEFORE': False,     # host_distance_RSCU_ratio_before
     'HOST_RSCU_RATIO_DIFF': False,       # host_distance_RSCU_ratio_diff
-    # --- 前後塩基コンテキスト ---
-    'MUTATION_CONTEXT': False,     # 前後3文字（6塩基）をすべて無効化
-        'MUTATION_CONTEXT_L3': False,  # 3文字前の塩基を無効化
-        'MUTATION_CONTEXT_L2': False,  # 2文字前の塩基を無効化
+    # --- パス内累積変異カウント ---
+    'CUM_SYN': False,                    # 現タイムステップまでのシノニマス変異累積数
+    'CUM_NONSYN': False,                 # 現タイムステップまでのノンシノニマス変異累積数
+    # --- 前後塩基コンテキスト（CONTEXT_WINDOW 分の各位置を個別制御）---
+    'MUTATION_CONTEXT': False,     # 全コンテキスト塩基を一括無効化
         'MUTATION_CONTEXT_L1': False,  # 1文字前の塩基を無効化
+        'MUTATION_CONTEXT_L2': False,  # 2文字前の塩基を無効化
+        'MUTATION_CONTEXT_L3': False,  # 3文字前の塩基を無効化
+        'MUTATION_CONTEXT_L4': False,  # 4文字前の塩基を無効化
+        'MUTATION_CONTEXT_L5': False,  # 5文字前の塩基を無効化
+        'MUTATION_CONTEXT_L6': False,  # 6文字前の塩基を無効化
+        'MUTATION_CONTEXT_L7': False,  # 7文字前の塩基を無効化
         'MUTATION_CONTEXT_R1': False,  # 1文字後の塩基を無効化
         'MUTATION_CONTEXT_R2': False,  # 2文字後の塩基を無効化
         'MUTATION_CONTEXT_R3': False,  # 3文字後の塩基を無効化
+        'MUTATION_CONTEXT_R4': False,  # 4文字後の塩基を無効化
+        'MUTATION_CONTEXT_R5': False,  # 5文字後の塩基を無効化
+        'MUTATION_CONTEXT_R6': False,  # 6文字後の塩基を無効化
+        'MUTATION_CONTEXT_R7': False,  # 7文字後の塩基を無効化
 }
 
 # --- データロード設定 ---
@@ -115,7 +126,8 @@ WEIGHT_DECAY = 0.01
 
 # --- 保存・ログ設定 ---
 SAVE_PREDICTIONS = True         # 予測結果の詳細をファイルに出力するか
-SAVE_STRAIN_INFO = True         # 使用した株の情報を保存するか
+SAVE_STRAIN_INFO = True         # 使用した株の情報を保存するか（USE_DB=False 時のみ有効）
+SAVE_STRAIN_METRICS = False     # 株単位の精度CSV（1万株×複数指標で巨大、詳細分析時のみ）
 
 # --- データセット設定 ---
 MAX_SEQ_LEN = 39
@@ -158,8 +170,9 @@ PROTEIN_VOCABS = {
 }
 
 # --- モデルアーキテクチャ設定 ---
-NUM_FEATURE_STRING = 15  # 特徴量文字列数 (シノニマス + 前後3塩基)
-NUM_CHEM_FEATURES = 30
+CONTEXT_WINDOW = 5                         # 前後コンテキスト窓幅（各方向）。3/5/7 で切り替え可
+NUM_FEATURE_STRING = 9 + 2 * CONTEXT_WINDOW  # 固定9 + 両側コンテキスト
+NUM_CHEM_FEATURES = 32
 
 VOCAB_SIZE_POSITION = 30006
 VOCAB_SIZE_BASE = 7

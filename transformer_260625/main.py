@@ -21,8 +21,7 @@ from .utils.io import (
     save_training_log, save_prediction_results, save_strain_info,
     save_config_copy, save_synonymous_distribution_csv, save_confusion_matrix_csv,
     save_metrics_csv, save_category_metrics_csv, save_combined_metrics_csv,
-    save_random_baseline_csv, save_region_metrics_csv, save_prediction_distribution_csv,
-    save_recall_summary_csv,
+    save_region_metrics_csv,
     save_per_position_recall_csv,
     save_val_test_gap_csv,
     save_error_analysis_csv,
@@ -31,6 +30,10 @@ from .utils.io import (
     save_model_summary_txt,
     save_topk_precision_csv,
     save_date_metrics_csv,
+    save_strength_fine_csv,
+    save_lineage_metrics_csv,
+    save_run_summary_json,
+    save_r_precision_csv,
 )
 from .utils.plotting import (
     plot_training_curve, plot_metrics_by_timestep, plot_category_metrics,
@@ -391,14 +394,14 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
             save_prediction_results(details, run_output_dir, prefix=prefix)
         df_ts = save_metrics_csv(metrics, run_output_dir, prefix=prefix)
         df_cat = save_category_metrics_csv(cat_metrics, run_output_dir, prefix=prefix)
-        save_random_baseline_csv(details, run_output_dir, prefix=prefix)
+        save_strength_fine_csv(details, run_output_dir, prefix=prefix)
+        save_lineage_metrics_csv(details, run_output_dir, prefix=prefix)
         save_region_metrics_csv(details, run_output_dir, prefix=prefix)
-        save_prediction_distribution_csv(details, run_output_dir, prefix=prefix)
         save_confusion_matrix_csv(details, run_output_dir, prefix=prefix)
-        save_recall_summary_csv(metrics, run_output_dir, prefix=prefix)
         save_per_position_recall_csv(details, run_output_dir, prefix=prefix)
         save_error_analysis_csv(details, run_output_dir, prefix=prefix)
-        save_strain_metrics_csv(details, run_output_dir, prefix=prefix)
+        if getattr(config, 'SAVE_STRAIN_METRICS', False):
+            save_strain_metrics_csv(details, run_output_dir, prefix=prefix)
         plot_metrics_by_timestep(metrics, run_output_dir, prefix=prefix)
         plot_category_metrics(cat_metrics, run_output_dir, prefix=prefix)
         plot_strength_calibration(details, run_output_dir, prefix=prefix)
@@ -407,18 +410,19 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
 
     # Validation
     force_print("Final evaluation on Validation Set...")
-    _, val_metrics, val_details, val_cat_metrics, val_metrics_ym = evaluate(
+    val_loss, val_metrics, val_details, val_cat_metrics, val_metrics_ym = evaluate(
         model, val_loader, loss_fn, strength_thresholds
     )
     val_df_ts, val_df_cat = _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
 
     # Test
+    test_loss = None
     test_metrics, test_details, test_cat_metrics = None, None, None
     test_df_ts, test_df_cat = None, None
     test_metrics_ym = {}
     if len(test_loader) > 0:
         force_print("Final evaluation on Test Set...")
-        _, test_metrics, test_details, test_cat_metrics, test_metrics_ym = evaluate(
+        test_loss, test_metrics, test_details, test_cat_metrics, test_metrics_ym = evaluate(
             model, test_loader, loss_fn, strength_thresholds
         )
         test_df_ts, test_df_cat = _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
@@ -447,12 +451,22 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     val_topk = evaluate_topk(model, val_loader, ks=eval_ks)
     save_topk_precision_csv(val_topk, run_output_dir, prefix='valid')
     plot_topk_precision(val_topk, run_output_dir, prefix='valid')
+    if getattr(config, 'USE_R_PRECISION', False):
+        save_r_precision_csv(val_topk, run_output_dir, prefix='valid')
 
+    test_topk = None
     if len(test_loader) > 0:
         force_print(f"[INFO] Evaluating Top-K precision (k={eval_ks}) on Test...")
         test_topk = evaluate_topk(model, test_loader, ks=eval_ks)
         save_topk_precision_csv(test_topk, run_output_dir, prefix='test')
         plot_topk_precision(test_topk, run_output_dir, prefix='test')
+        if getattr(config, 'USE_R_PRECISION', False):
+            save_r_precision_csv(test_topk, run_output_dir, prefix='test')
+
+    save_run_summary_json(
+        val_metrics, test_metrics, val_topk, test_topk,
+        val_loss, test_loss, run_output_dir,
+    )
 
     return val_metrics, test_metrics, val_details, test_details, strength_thresholds
 
