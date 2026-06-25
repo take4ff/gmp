@@ -699,16 +699,20 @@ def save_lineage_metrics_csv(details, output_dir, prefix="test"):
         n = s['n']
         pos_list = s['target_positions']
         entropy = 0.0
+        normalized_entropy = 0.0
         if pos_list:
             counts = Counter(pos_list)
             total = len(pos_list)
             entropy = -sum((c / total) * math.log2(c / total) for c in counts.values())
+            max_entropy = math.log2(len(counts)) if len(counts) > 1 else 1.0
+            normalized_entropy = entropy / max_entropy
 
         row = {
             'lineage': lineage,
             'num_samples': n,
             'avg_strength': round(s['strength_sum'] / n, 4) if n > 0 else 0.0,
             'target_position_entropy': round(entropy, 4),
+            'target_position_entropy_norm': round(normalized_entropy, 4),
         }
         for t in tasks:
             row[f'{t}_hit_rate_pct'] = round(s['hits'][t] / n * 100, 2) if n > 0 else 0.0
@@ -786,12 +790,14 @@ def save_run_summary_json(val_metrics, test_metrics, val_topk, test_topk,
             'macro_recall_position': _weighted_avg(val_metrics, 'position_macro_recall'),
             **{f'top{k}_region_hit_rate_pct': _topk_entry(val_topk, 'region', k) for k in eval_ks},
             **{f'top{k}_position_hit_rate_pct': _topk_entry(val_topk, 'position', k) for k in eval_ks},
+            **{f'top{k}_aa_pos_hit_rate_pct': _topk_entry(val_topk, 'aa_pos', k) for k in eval_ks},
         },
         'test': {
             'macro_recall_region': _weighted_avg(test_metrics, 'region_macro_recall'),
             'macro_recall_position': _weighted_avg(test_metrics, 'position_macro_recall'),
             **{f'top{k}_region_hit_rate_pct': _topk_entry(test_topk, 'region', k) for k in eval_ks},
             **{f'top{k}_position_hit_rate_pct': _topk_entry(test_topk, 'position', k) for k in eval_ks},
+            **{f'top{k}_aa_pos_hit_rate_pct': _topk_entry(test_topk, 'aa_pos', k) for k in eval_ks},
         },
     }
 
