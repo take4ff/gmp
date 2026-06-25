@@ -170,7 +170,7 @@ PROTEIN_VOCABS = {
 }
 
 # --- モデルアーキテクチャ設定 ---
-CONTEXT_WINDOW = 5                         # 前後コンテキスト窓幅（各方向）。3/5/7 で切り替え可
+CONTEXT_WINDOW = 5                         # 前後コンテキスト窓幅（各方向）。3/5 で切り替え可(7はDBの再構築必要)
 NUM_FEATURE_STRING = 9 + 2 * CONTEXT_WINDOW  # 固定9 + 両側コンテキスト
 NUM_CHEM_FEATURES = 32
 
@@ -246,7 +246,7 @@ CO_ATTN_DIM      = FEATURE_DIM  # 共起 Attention の内部次元（デフォ�
 USE_FLAT_COATTN = False
 
 # --- 訓練設定 ---
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 LEARNING_RATE = 1e-4
 EPOCHS = 15              # Soft Target収束のため余裕を持たせる
 TOP_K_EVAL = 1 # Top-5でのRecallなども見たい場合はここを変更
@@ -335,9 +335,6 @@ EARLY_STOPPING_MODE = "min"         # 'min' (loss等, 小さいほど良い) ま
 EVAL_TOP_KS = (1, 3, 5)             # Top-K 評価で計算する K のリスト
 PLOT_TOP_N_POSITIONS = 40           # 塩基位置の Recall でプロットする上位 N 件
 SAVE_ATTENTION_HEATMAP = True       # Attentionヒートマップを保存するかどうか
-
-# --- データ前処理 (新規追加) ---
-NORMALIZE_NUM_FEATURES = False      # 数値特徴量(FREQ, HYDRO等)を正規化するかどうか
 
 # --- strength ヘッドの損失関数 ---
 # 'mse'  : 均乗誤差（現状・外れ値に弱い）
@@ -433,7 +430,7 @@ STRENGTH_CALC_METHOD = 'log1p'
 # 流行度と系統名の参照ソース基準
 # 'ncbi'  : NCBIメタデータ (sequences-241017.csv) に基づく系統名・流行度を使用
 # 'usher' : UShERでの系統樹配置結果 (clades.txt) に基づく系統名・流行度を使用
-STRENGTH_SOURCE = 'ncbi'
+STRENGTH_SOURCE = 'usher'
 
 
 # ============================================================
@@ -470,12 +467,12 @@ EVAL_X_AXIS = 'timestep'         # 'timestep' | 'date'
 # --- Item 6: R-Precision ---
 # evaluate_topk() で K=len(target_set) の動的 K を使った R-Precision を計算する
 # True の場合: 固定 K 結果と並列に 'r_precision' キーで結果が追加される
-USE_R_PRECISION = False
+USE_R_PRECISION = True
 
 # --- Item 5: Substitution Prediction Head ---
 # base_after (塩基変化先) と aa_after (アミノ酸変化先) を予測する追加ヘッド
 # True の場合: forward() が 8-tuple を返し、labels も 7 要素になる
-USE_SUBSTITUTION_HEAD  = False
+USE_SUBSTITUTION_HEAD  = True
 LOSS_WEIGHT_BASE_AFTER = 0.05   # base_after 損失の重み
 LOSS_WEIGHT_AA_AFTER   = 0.05   # aa_after 損失の重み
 
