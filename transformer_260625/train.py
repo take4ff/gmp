@@ -22,10 +22,18 @@ def train_one_epoch(model, dataloader, optimizer, loss_fn, loss_wrapper=None):
     total_epoch_loss = 0
     batches_processed = 0
 
+    # SupCon 設定
+    use_supcon = getattr(config, 'USE_SUPCON', False)
+    supcon_weight = getattr(config, 'SUPCON_WEIGHT', 0.1)
+    if use_supcon:
+        from .utils.losses import SupConLoss
+        supcon_temperature = getattr(config, 'SUPCON_TEMPERATURE', 0.07)
+        supcon_loss_fn = SupConLoss(temperature=supcon_temperature)
+
     # collate_fn の戻り値に raw_y が追加
     # Soft Target モード: y_batch = list of dict (Soft Target ベクトル)
     # Hard Target モード: y_batch = list of list of tuples
-    for (x_cat, x_num, mask), y_batch, _, _, batch_strength_scores, _, _, _, _raw_y, *extra in tqdm(dataloader, desc="Training"):
+    for (x_cat, x_num, mask), y_batch, _, batch_strains, batch_strength_scores, _, _, _, _raw_y, *extra in tqdm(dataloader, desc="Training"):
 
         x_cat = x_cat.to(config.DEVICE)
         x_num = x_num.to(config.DEVICE)
@@ -56,6 +64,19 @@ def train_one_epoch(model, dataloader, optimizer, loss_fn, loss_wrapper=None):
             )
         else:
             total_loss = losses['total']
+
+        # --- Item 12: Supervised Contrastive Loss ---
+        # USE_SUPCON=True かつ モデルが射影ベクトルを持つ場合に追加
+        if use_supcon and getattr(model, '_last_projections', None) is not None:
+            projections = model._last_projections  # [B, proj_dim]
+            # strain 名を整数ハッシュ化してラベルとして使用
+            strain_labels = torch.tensor(
+                [hash(s) % (2 ** 31) for s in batch_strains],
+                dtype=torch.long,
+                device=config.DEVICE,
+            )
+            sc_loss = supcon_loss_fn(projections, strain_labels)
+            total_loss = total_loss + supcon_weight * sc_loss
 
         total_loss.backward()
 

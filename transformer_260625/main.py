@@ -502,6 +502,117 @@ def run_visualization(model, run_output_dir, val_loader=None, test_loader=None):
 
 
 # ──────────────────────────────────────────────
+# 6. Ensemble 評価
+# ──────────────────────────────────────────────
+
+def ensemble_evaluate(val_loader, test_loader, loss_fn, run_output_dir, strength_thresholds):
+    """複数のチェックポイントをロードし、softmax 確率を平均したアンサンブル評価を行う。
+
+    config.ENSEMBLE_CHECKPOINT_PATHS に記載されたチェックポイントを全てロードし、
+    各バッチで全モデルの softmax 予測を平均して最終予測とする。
+
+    Args:
+        val_loader: Validation DataLoader
+        test_loader: Test DataLoader
+        loss_fn: 損失関数 dict
+        run_output_dir: 結果保存ディレクトリ
+        strength_thresholds: (low_max, med_max) の閾値タプル
+    """
+    import torch.nn.functional as F
+
+    ckpt_paths = getattr(config, 'ENSEMBLE_CHECKPOINT_PATHS', [])
+    if not ckpt_paths:
+        force_print("[INFO] ENSEMBLE_CHECKPOINT_PATHS が空のためアンサンブルをスキップします。")
+        return
+
+    # 全チェックポイントのモデルをロード
+    models = []
+    for ckpt_path in ckpt_paths:
+        if not os.path.exists(ckpt_path):
+            force_print(f"[WARNING] Ensemble checkpoint not found, skipping: {ckpt_path}")
+            continue
+        m = HierarchicalTransformer().to(config.DEVICE)
+        ckpt = torch.load(ckpt_path, map_location=config.DEVICE, weights_only=True)
+        state_dict = ckpt.get('model_state_dict', ckpt)
+        m.load_state_dict(state_dict)
+        m.eval()
+        models.append(m)
+        force_print(f"[Ensemble] Loaded checkpoint: {ckpt_path}")
+
+    if not models:
+        force_print("[WARNING] 有効なアンサンブルチェックポイントがありません。スキップします。")
+        return
+
+    force_print(f"[Ensemble] {len(models)} モデルでアンサンブル評価を実行します。")
+
+    def ensemble_forward(x_cat, x_num, mask):
+        """全モデルの softmax 確率を平均して返す。"""
+        all_probs = []
+        with torch.no_grad():
+            for m in models:
+                out = m(x_cat, x_num, src_key_padding_mask=mask)
+                # 8-tuple に対応（先頭 6 要素を使用）
+                (reg, pos, aa, strength, cod, syn, *_) = out
+                probs = (
+                    F.softmax(reg,      dim=-1),
+                    F.softmax(pos,      dim=-1),
+                    F.softmax(aa,       dim=-1),
+                    strength,                    # 回帰値はそのまま平均
+                    F.softmax(cod,      dim=-1),
+                    F.softmax(syn,      dim=-1),
+                    None, None,                  # base_after, aa_after は無効
+                )
+                all_probs.append(probs)
+
+        # タスクごとに平均
+        n = len(all_probs)
+        avg_reg     = sum(p[0] for p in all_probs) / n
+        avg_pos     = sum(p[1] for p in all_probs) / n
+        avg_aa      = sum(p[2] for p in all_probs) / n
+        avg_str     = sum(p[3] for p in all_probs) / n
+        avg_cod     = sum(p[4] for p in all_probs) / n
+        avg_syn     = sum(p[5] for p in all_probs) / n
+
+        return (avg_reg, avg_pos, avg_aa, avg_str, avg_cod, avg_syn, None, None)
+
+    # アンサンブルモデルを関数として evaluate() に渡すためのラッパークラス
+    class EnsembleWrapper(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+
+        def eval(self):
+            for m in models:
+                m.eval()
+            return self
+
+        def forward(self, x_cat, x_num, src_key_padding_mask=None):
+            return ensemble_forward(x_cat, x_num, src_key_padding_mask)
+
+    ens_model = EnsembleWrapper()
+
+    # Validation アンサンブル評価
+    force_print("[Ensemble] Validation set evaluation...")
+    _, ens_val_metrics, ens_val_details, ens_val_cat, ens_val_ym = evaluate(
+        ens_model, val_loader, loss_fn, strength_thresholds
+    )
+    ens_dir = os.path.join(run_output_dir, 'ensemble')
+    os.makedirs(ens_dir, exist_ok=True)
+    save_metrics_csv(ens_val_metrics, ens_dir, prefix='ensemble_valid')
+    force_print("[Ensemble] Validation metrics saved.")
+
+    # Test アンサンブル評価
+    if len(test_loader) > 0:
+        force_print("[Ensemble] Test set evaluation...")
+        _, ens_test_metrics, ens_test_details, ens_test_cat, ens_test_ym = evaluate(
+            ens_model, test_loader, loss_fn, strength_thresholds
+        )
+        save_metrics_csv(ens_test_metrics, ens_dir, prefix='ensemble_test')
+        force_print("[Ensemble] Test metrics saved.")
+
+    force_print(f"[Ensemble] Results saved to {ens_dir}")
+
+
+# ──────────────────────────────────────────────
 # 7. エントリポイント
 # ──────────────────────────────────────────────
 
@@ -595,6 +706,11 @@ def main():
 
     # 5. 可視化
     run_visualization(model, run_output_dir, val_loader=val_loader, test_loader=test_loader)
+
+    # 6. Ensemble 評価 (USE_ENSEMBLE=True かつ ENSEMBLE_CHECKPOINT_PATHS が非空の場合)
+    if getattr(config, 'USE_ENSEMBLE', False) and getattr(config, 'ENSEMBLE_CHECKPOINT_PATHS', []):
+        force_print("[INFO] Ensemble evaluation starting...")
+        ensemble_evaluate(val_loader, test_loader, loss_fn, run_output_dir, strength_thresholds)
 
     force_print(f"[INFO] Process completed. Results saved to {run_output_dir}")
     finish_wandb(wandb)

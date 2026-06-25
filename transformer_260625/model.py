@@ -1,7 +1,7 @@
 # --- model.py ---
 import torch
 import torch.nn as nn
-from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.nn import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
 import math
 from . import config
 
@@ -352,6 +352,76 @@ class HierarchicalTransformer(nn.Module):
             nn.Linear(config.FEATURE_DIM // 4, config.VOCAB_SIZE_SYNONYMOUS)
         )
 
+        # --- Item 5: Substitution Prediction Head ---
+        # base_after (塩基変化先: VOCAB_SIZE_BASE=7) と aa_after (AA変化先: VOCAB_SIZE_AA=23) を予測
+        # USE_SUBSTITUTION_HEAD=False の場合 None を返すが、ヘッド自体は定義しておく
+        if getattr(config, 'USE_SUBSTITUTION_HEAD', False):
+            self.base_after_head = nn.Sequential(
+                nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM // 4),
+                get_activation(),
+                nn.LayerNorm(config.FEATURE_DIM // 4),
+                nn.Dropout(config.DROPOUT),
+                nn.Linear(config.FEATURE_DIM // 4, config.VOCAB_SIZE_BASE)
+            )
+            self.aa_after_head = nn.Sequential(
+                nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM // 2),
+                get_activation(),
+                nn.LayerNorm(config.FEATURE_DIM // 2),
+                nn.Dropout(config.DROPOUT),
+                nn.Linear(config.FEATURE_DIM // 2, config.VOCAB_SIZE_AA)
+            )
+        else:
+            self.base_after_head = None
+            self.aa_after_head   = None
+
+        # --- Item 4: Autoregressive Decoder ---
+        # 各タスク用のクエリ埋め込みを TransformerDecoder に通し、タスク別の特徴を生成する
+        # N_TASKS = 6 (base 6 tasks; 拡張時は対応するスライスも更新が必要)
+        scale = getattr(config, 'INITIALIZATION_SCALE', 0.02)
+        if getattr(config, 'USE_AUTOREGRESSIVE_DECODER', False):
+            self.task_queries = nn.Parameter(torch.randn(6, 1, config.FEATURE_DIM) * scale)
+            decoder_layer = TransformerDecoderLayer(
+                d_model=config.FEATURE_DIM,
+                nhead=getattr(config, 'AR_DECODER_HEADS', 4),
+                dim_feedforward=config.FEATURE_DIM * getattr(config, 'FFN_RATIO', 4),
+                dropout=config.DROPOUT,
+                batch_first=True,
+                norm_first=getattr(config, 'NORM_FIRST', True),
+            )
+            self.ar_decoder = TransformerDecoder(
+                decoder_layer,
+                num_layers=getattr(config, 'AR_DECODER_LAYERS', 1),
+            )
+        else:
+            self.task_queries = None
+            self.ar_decoder   = None
+
+        # --- Item 12: SupCon Projection Head ---
+        # latest_context [B, FEATURE_DIM] → 正規化された射影ベクトル [B, SUPCON_PROJECTION_DIM]
+        # forward() 後に self._last_projections にセットされる (train.py から参照)
+        if getattr(config, 'USE_SUPCON', False):
+            proj_dim = getattr(config, 'SUPCON_PROJECTION_DIM', 128)
+            self.supcon_projector = nn.Sequential(
+                nn.Linear(config.FEATURE_DIM, config.FEATURE_DIM),
+                nn.ReLU(),
+                nn.Linear(config.FEATURE_DIM, proj_dim),
+            )
+        else:
+            self.supcon_projector = None
+        self._last_projections = None  # train.py が参照するための属性
+
+        # --- Items 8/9/10: 外部特徴量スタブ ---
+        # ESM-2: preprocess.py で抽出した埋め込みを受け取り、FEATURE_DIM 互換の64次元に射影する
+        # 実際の特徴量は forward() の esm2_features 引数 (Optional Tensor [B, T, ESM2_EMBED_DIM]) で渡す予定
+        # 現状はスタブ実装のみ。有効化時は InputEmbedding.forward() の引数拡張と連携が必要。
+        if getattr(config, 'USE_ESM2', False):
+            esm2_dim = getattr(config, 'ESM2_EMBED_DIM', 320)
+            self.esm2_projection = nn.Linear(esm2_dim, 64)
+        else:
+            self.esm2_projection = None
+        # USE_STRUCTURE_FEATURES / USE_EVESCAPE: num_norm の入力次元を拡張する予定
+        # 現状は config フラグのみ定義。実際の統合は preprocess.py での特徴量付与が先決。
+
     def forward(self, x_cat, x_num, src_mask=None, src_key_padding_mask=None):
         # 1. 入力埋め込み
         x = self.input_embed(x_cat, x_num)
@@ -439,14 +509,49 @@ class HierarchicalTransformer(nn.Module):
         if self.shared_trunk is not None:
             latest_context = self.shared_trunk(latest_context)
 
-        output_region = self.output_head(latest_context)
-        output_position = self.position_head(latest_context)
-        output_aa_pos = self.aa_pos_head(latest_context)
-        output_strength = self.strength_head(latest_context).squeeze(-1)  # [B, 1] -> [B]
-        output_codon_pos = self.codon_pos_head(latest_context)
-        output_synonymous = self.synonymous_head(latest_context)
+        # --- Item 12: SupCon 射影ベクトルの計算 ---
+        # forward 後に self._last_projections にセット (train.py から参照)
+        if self.supcon_projector is not None:
+            proj = self.supcon_projector(latest_context)           # [B, proj_dim]
+            self._last_projections = nn.functional.normalize(proj, dim=1)
+        else:
+            self._last_projections = None
 
-        return output_region, output_position, output_aa_pos, output_strength, output_codon_pos, output_synonymous
+        # --- Item 4: Autoregressive Decoder ---
+        # タスク別クエリを Decoder に通し、各タスク固有の特徴を生成する
+        # decoded[:, i, :] を各タスクヘッドに渡す（0=region, 1=position, ...）
+        if self.ar_decoder is not None:
+            B_size = latest_context.size(0)
+            memory = latest_context.unsqueeze(1)                          # [B, 1, F]
+            queries = self.task_queries.expand(-1, B_size, -1).permute(1, 0, 2)  # [B, 6, F]
+            decoded = self.ar_decoder(queries, memory)                    # [B, 6, F]
+            ctx_region    = decoded[:, 0, :]
+            ctx_position  = decoded[:, 1, :]
+            ctx_aa_pos    = decoded[:, 2, :]
+            ctx_strength  = decoded[:, 3, :]
+            ctx_codon_pos = decoded[:, 4, :]
+            ctx_synonymous= decoded[:, 5, :]
+        else:
+            ctx_region = ctx_position = ctx_aa_pos = ctx_strength = ctx_codon_pos = ctx_synonymous = latest_context
+
+        output_region    = self.output_head(ctx_region)
+        output_position  = self.position_head(ctx_position)
+        output_aa_pos    = self.aa_pos_head(ctx_aa_pos)
+        output_strength  = self.strength_head(ctx_strength).squeeze(-1)  # [B, 1] -> [B]
+        output_codon_pos = self.codon_pos_head(ctx_codon_pos)
+        output_synonymous= self.synonymous_head(ctx_synonymous)
+
+        # --- Item 5: Substitution Prediction Head ---
+        # USE_SUBSTITUTION_HEAD=True の場合のみ計算、False なら None を返す
+        if self.base_after_head is not None:
+            output_base_after = self.base_after_head(latest_context)  # [B, VOCAB_SIZE_BASE]
+            output_aa_after   = self.aa_after_head(latest_context)    # [B, VOCAB_SIZE_AA]
+        else:
+            output_base_after = None
+            output_aa_after   = None
+
+        return (output_region, output_position, output_aa_pos, output_strength,
+                output_codon_pos, output_synonymous, output_base_after, output_aa_after)
 
 
 class MultiTaskLoss(nn.Module):

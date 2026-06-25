@@ -12,6 +12,69 @@ from .. import config
 from .bio_smooth import gaussian_smooth_target
 
 
+class SupConLoss(nn.Module):
+    """Supervised Contrastive Loss (Khosla et al., 2020)
+
+    同一 strain ラベルのサンプルをポジティブペアとして引き付け、
+    異なる strain のサンプルを遠ざける対照損失。
+
+    Args:
+        temperature: ソフトマックスの温度パラメータ (デフォルト 0.07)
+
+    Input:
+        features: [B, D] — 正規化済み射影ベクトル
+        labels:   [B]    — strain ラベル (整数値)
+
+    Returns:
+        スカラー損失
+    """
+    def __init__(self, temperature=0.07):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, features, labels):
+        """
+        features: [B, D] normalized projection vectors
+        labels:   [B] strain labels (LongTensor)
+        """
+        B = features.size(0)
+        device = features.device
+
+        # 特徴量を正規化 (L2 norm)
+        features = nn.functional.normalize(features, dim=1)  # [B, D]
+
+        # コサイン類似度行列: [B, B]
+        sim_matrix = torch.matmul(features, features.T) / self.temperature
+
+        # 同一ラベルペアのマスク: [B, B]（自己ペアを除外）
+        labels = labels.view(-1)
+        pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1))  # [B, B]
+        diag_mask = torch.eye(B, dtype=torch.bool, device=device)
+        pos_mask = pos_mask & ~diag_mask  # 対角を除いた正例マスク
+
+        # ポジティブペアが存在しないサンプルはスキップ
+        has_positive = pos_mask.any(dim=1)  # [B]
+        if not has_positive.any():
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        # 分母: 自己ペアを除いた全ペアの log-sum-exp
+        sim_matrix_masked = sim_matrix.masked_fill(diag_mask, float('-inf'))
+        log_denom = torch.logsumexp(sim_matrix_masked, dim=1)  # [B]
+
+        # 各アンカーのポジティブペアに対する損失平均
+        loss = torch.tensor(0.0, device=device)
+        n_anchors = 0
+        for i in range(B):
+            if not has_positive[i]:
+                continue
+            pos_sims = sim_matrix[i][pos_mask[i]]  # [n_pos]
+            loss_i = -(pos_sims - log_denom[i]).mean()
+            loss = loss + loss_i
+            n_anchors += 1
+
+        return loss / max(n_anchors, 1)
+
+
 def get_class_weights(counts, loss_type, beta=0.9999):
     """クラスの出現頻度から損失の重みを計算する。
 
@@ -69,6 +132,9 @@ def build_loss_fn(class_counts_dict=None):
     )
 
     tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+    # USE_SUBSTITUTION_HEAD=True の場合は base_after / aa_after も追加
+    if getattr(config, 'USE_SUBSTITUTION_HEAD', False):
+        tasks = tasks + ['base_after', 'aa_after']
     loss_fns = {}
 
     for task in tasks:
@@ -157,8 +223,12 @@ def compute_task_losses(
                         'strength', 'total', 'num_targets'
         None: バッチ内に有効ターゲットがない場合
     """
+    # 8-tuple への拡張に対応（base_after / aa_after は None の場合あり）
     (predictions_region, predictions_position, predictions_aa_pos,
-     predictions_strength, predictions_codon_pos, predictions_synonymous) = predictions_tuple
+     predictions_strength, predictions_codon_pos, predictions_synonymous,
+     *_extra_preds) = predictions_tuple
+    predictions_base_after = _extra_preds[0] if len(_extra_preds) > 0 else None
+    predictions_aa_after   = _extra_preds[1] if len(_extra_preds) > 1 else None
 
     def get_lf(task_name):
         return loss_fn[task_name] if isinstance(loss_fn, dict) else loss_fn
@@ -312,6 +382,55 @@ def compute_task_losses(
     else:  # 'mse' (デフォルト・従来動作)
         loss_strength = nn.MSELoss()(predictions_strength, target_strength)
 
+    # --- Substitution Head 損失 (Item 5) ---
+    # USE_SUBSTITUTION_HEAD=True かつ predictions_base_after/aa_after が存在する場合に計算
+    use_sub = getattr(config, 'USE_SUBSTITUTION_HEAD', False)
+    loss_base_after = torch.tensor(0.0, device=config.DEVICE)
+    loss_aa_after   = torch.tensor(0.0, device=config.DEVICE)
+
+    if use_sub and predictions_base_after is not None and predictions_aa_after is not None:
+        lf_base_after = get_lf('base_after') if isinstance(loss_fn, dict) and 'base_after' in loss_fn \
+                        else nn.CrossEntropyLoss(reduction='mean')
+        lf_aa_after   = get_lf('aa_after') if isinstance(loss_fn, dict) and 'aa_after' in loss_fn \
+                        else nn.CrossEntropyLoss(reduction='mean')
+
+        loss_base_after_total = torch.tensor(0.0, device=config.DEVICE)
+        loss_aa_after_total   = torch.tensor(0.0, device=config.DEVICE)
+        n_sub = 0
+
+        # ターゲットは 7 要素タプル: (..., base_after_token=t[5], aa_after_token=t[6])
+        source = raw_y_batch if raw_y_batch is not None else y_batch
+        if not is_soft:
+            source = y_batch
+
+        for i, targets_tuples in enumerate(source):
+            if not targets_tuples:
+                continue
+            # tuples が dict (Soft Target) の場合はスキップ
+            if isinstance(targets_tuples, dict):
+                continue
+            # 7 要素タプルかどうか確認
+            sample_tuples = targets_tuples if not isinstance(targets_tuples, dict) else []
+            valid_tuples = [t for t in sample_tuples if len(t) >= 7]
+            if not valid_tuples:
+                continue
+
+            num_t = len(valid_tuples)
+            t_base_after = torch.tensor([t[5] for t in valid_tuples], dtype=torch.long, device=config.DEVICE)
+            t_aa_after   = torch.tensor([t[6] for t in valid_tuples], dtype=torch.long, device=config.DEVICE)
+
+            loss_base_after_total += lf_base_after(
+                predictions_base_after[i].expand(num_t, -1), t_base_after
+            ).mean()
+            loss_aa_after_total += lf_aa_after(
+                predictions_aa_after[i].expand(num_t, -1), t_aa_after
+            ).mean()
+            n_sub += 1
+
+        if n_sub > 0:
+            loss_base_after = loss_base_after_total / n_sub
+            loss_aa_after   = loss_aa_after_total   / n_sub
+
     # 加重合計損失
     total_loss = (
         config.LOSS_WEIGHT_REGION     * avg_region   +
@@ -322,7 +441,12 @@ def compute_task_losses(
         config.LOSS_WEIGHT_STRENGTH   * loss_strength
     )
 
-    return {
+    if use_sub:
+        w_base = getattr(config, 'LOSS_WEIGHT_BASE_AFTER', 0.05)
+        w_aa   = getattr(config, 'LOSS_WEIGHT_AA_AFTER',   0.05)
+        total_loss = total_loss + w_base * loss_base_after + w_aa * loss_aa_after
+
+    result = {
         'region':      avg_region,
         'position':    avg_position,
         'aa_pos':      avg_aa_pos,
@@ -332,4 +456,10 @@ def compute_task_losses(
         'total':       total_loss,
         'num_targets': num_valid_samples,
     }
+
+    if use_sub:
+        result['base_after'] = loss_base_after
+        result['aa_after']   = loss_aa_after
+
+    return result
 

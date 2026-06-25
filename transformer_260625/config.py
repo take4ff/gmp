@@ -415,3 +415,67 @@ FORCE_DATE_REASSIGN = False
 EVAL_X_AXIS = 'timestep'         # 'timestep' | 'date'
 
 
+# ============================================================
+# 10. 新規拡張実験設定
+# ============================================================
+
+# --- Item 6: R-Precision ---
+# evaluate_topk() で K=len(target_set) の動的 K を使った R-Precision を計算する
+# True の場合: 固定 K 結果と並列に 'r_precision' キーで結果が追加される
+USE_R_PRECISION = False
+
+# --- Item 5: Substitution Prediction Head ---
+# base_after (塩基変化先) と aa_after (アミノ酸変化先) を予測する追加ヘッド
+# True の場合: forward() が 8-tuple を返し、labels も 7 要素になる
+USE_SUBSTITUTION_HEAD  = False
+LOSS_WEIGHT_BASE_AFTER = 0.05   # base_after 損失の重み
+LOSS_WEIGHT_AA_AFTER   = 0.05   # aa_after 損失の重み
+
+# --- Item 12: Supervised Contrastive Learning (SupCon) ---
+# strain ラベルをポジティブペアとして同一株変異を引き付け、異株を弾く対照学習
+USE_SUPCON            = False
+SUPCON_TEMPERATURE    = 0.07   # SupCon の温度パラメータ
+SUPCON_WEIGHT         = 0.1    # SupCon 損失の重み
+SUPCON_PROJECTION_DIM = 128    # 射影ヘッドの出力次元
+
+# --- Item 4: Autoregressive Decoder ---
+# 各タスク用クエリ埋め込みを TransformerDecoder に通し、タスク別の特徴を生成する
+USE_AUTOREGRESSIVE_DECODER = False
+AR_DECODER_LAYERS          = 1   # Decoder 層数
+AR_DECODER_HEADS           = 4   # Decoder ヘッド数
+
+# --- Item 3: MLM / CLM Pretraining ---
+# 事前学習モードを有効にする (scripts/pretrain.py で使用)
+USE_PRETRAINING        = False
+PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
+PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
+PRETRAINING_EPOCHS     = 5       # 事前学習エポック数
+PRETRAINING_LR         = 1e-4    # 事前学習の学習率
+
+# --- Item 8: ESM-2 外部タンパク質言語モデル特徴量 ---
+# ESM-2 埋め込みを追加特徴量として使用 (実際の抽出は preprocess.py で行う)
+# 統合ポイント: InputEmbedding に esm2_projection を追加予定
+USE_ESM2        = False
+ESM2_MODEL_NAME = 'esm2_t6_8M_UR50D'
+ESM2_EMBED_DIM  = 320            # ESM-2 埋め込み次元 (モデルによって異なる)
+
+# --- Item 9: 構造特徴量 (SASA / B-factor) ---
+# SASA (溶媒接触可能面積) と B-factor を数値特徴量に追加
+# 統合ポイント: num_norm 入力次元を拡張 (実際の特徴量付与は preprocess.py)
+USE_STRUCTURE_FEATURES = False
+STRUCTURE_CSV          = 'reference/structure/sars_cov2_structure.csv'
+
+# --- Item 10: EVEscape スコア ---
+# EVEscape 進化逸脱スコアを数値特徴量に追加
+# 統合ポイント: num_norm 入力次元を拡張 (実際の特徴量付与は preprocess.py)
+USE_EVESCAPE = False
+EVESCAPE_CSV = 'reference/evescape/sars_cov2_evescape.csv'
+
+# --- Item 13: Ensemble ---
+# 複数のチェックポイントをロードして予測を平均するアンサンブル評価
+# ENSEMBLE_CHECKPOINT_PATHS が空リストの場合はアンサンブルを実行しない
+USE_ENSEMBLE              = False
+ENSEMBLE_N_MODELS         = 3
+ENSEMBLE_CHECKPOINT_PATHS = []   # ロードするチェックポイントパスのリスト (絶対パス)
+
+

@@ -282,7 +282,36 @@ class DBIterableDataset(IterableDataset):
             features_dict[sample_id][timestep].append((cat_feat, num_feat))
 
         # ラベルを辞書化
-        label_dict = {row[0]: pickle.loads(row[1]) for row in label_rows}
+        # USE_SUBSTITUTION_HEAD=True の場合、ラベルタプルを 5 要素から 7 要素に拡張する
+        # 拡張分: (base_after_token=cat_feat[2], aa_after_token=cat_feat[6])
+        # cat_feat は features テーブルの最終タイムステップの最初の共起変異から取得する
+        _use_sub_head = getattr(config, 'USE_SUBSTITUTION_HEAD', False)
+
+        # features_dict は既に構築済み。最終タイムステップの情報を取得するため参照する
+        # (label_dict の構築は features_dict の後に行う)
+        def _maybe_extend_labels(sample_id, base_labels):
+            """USE_SUBSTITUTION_HEAD=True の場合に 5-tuple → 7-tuple へ拡張する。"""
+            if not _use_sub_head or not base_labels:
+                return base_labels
+            # features_dict から最終タイムステップの最初の共起変異の cat_feat を取得
+            sample_feats = features_dict.get(sample_id, {})
+            if not sample_feats:
+                # 特徴量がない場合は PAD (0) を付加
+                return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
+            last_ts = max(sample_feats.keys())
+            first_event = sample_feats[last_ts][0] if sample_feats[last_ts] else None
+            if first_event is None:
+                return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
+            cat_feat_last = first_event[0]  # (cat_feat, num_feat) の cat_feat
+            base_after_token = cat_feat_last[2]   # cat_feat[2] = base_after
+            aa_after_token   = cat_feat_last[6]   # cat_feat[6] = aa_after
+            return [(t[0], t[1], t[2], t[3], t[4], base_after_token, aa_after_token)
+                    for t in base_labels]
+
+        label_dict = {
+            row[0]: _maybe_extend_labels(row[0], pickle.loads(row[1]))
+            for row in label_rows
+        }
 
         # 結果を構築
         results = []

@@ -25,17 +25,25 @@ def _predict_tta(model, x_cat, x_num, mask, n_passes):
     with torch.no_grad():
         for _ in range(n_passes):
             out = model(x_cat, x_num, src_key_padding_mask=mask)
-            # (region, position, aa_pos, strength, codon_pos, synonymous)
-            probs = tuple(torch.softmax(o, dim=-1) if o.dim() > 1 else o for o in out)
+            # 8-tuple に対応: base_after / aa_after が None の場合はそのまま保持
+            probs = tuple(
+                torch.softmax(o, dim=-1) if (o is not None and o.dim() > 1)
+                else o
+                for o in out
+            )
             all_logits.append(probs)
     model.eval()  # 推論後は必ず eval に戻す
 
-    # タスクごとに n_passes 平均を返す
+    # タスクごとに n_passes 平均を返す（None は None のまま）
     n_tasks = len(all_logits[0])
     averaged = []
     for task_idx in range(n_tasks):
-        stacked = torch.stack([p[task_idx] for p in all_logits], dim=0)
-        averaged.append(stacked.mean(dim=0))
+        samples = [p[task_idx] for p in all_logits]
+        if samples[0] is None:
+            averaged.append(None)
+        else:
+            stacked = torch.stack(samples, dim=0)
+            averaged.append(stacked.mean(dim=0))
     return tuple(averaged)
 
 
@@ -129,14 +137,16 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
             x_num = x_num.to(config.DEVICE)
             mask = mask.to(config.DEVICE)
 
-            # モデル出力: 6つの予測 (TTA 時は softmax 平均値を返す)
+            # モデル出力: 6 or 8 タプル (TTA 時は softmax 平均値を返す)
             if getattr(config, 'USE_TTA', False):
                 n_passes = getattr(config, 'TTA_N_PASSES', 5)
                 predictions_tuple = _predict_tta(model, x_cat, x_num, mask, n_passes)
             else:
                 predictions_tuple = model(x_cat, x_num, src_key_padding_mask=mask)
+            # 8-tuple への拡張に対応（base_after / aa_after は現在未使用）
             (predictions_region, predictions_position, predictions_aa_pos,
-             predictions_strength, predictions_codon_pos, predictions_synonymous) = predictions_tuple
+             predictions_strength, predictions_codon_pos, predictions_synonymous,
+             *_extra_preds) = predictions_tuple
 
             # Top-K 推論
             def safe_topk(tensor, k):
@@ -468,6 +478,9 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
 def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
     """複数の K 値で Top-K Precision / Recall を同時に計算する。
 
+    USE_R_PRECISION=True の場合、各サンプルの K=len(target_set) で計算した
+    R-Precision も 'r_precision' キーとして結果に追加する。
+
     Args:
         model: 評価対象モデル
         dataloader: DataLoader
@@ -475,15 +488,25 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
 
     Returns:
         dict: {
-            task_name: {k: {'precision': float, 'recall': float, 'hit_rate': float}}
+            task_name: {
+                k: {'precision': float, 'recall': float, 'hit_rate': float},
+                ...,
+                'r_precision': {'precision': float, 'recall': float, 'hit_rate': float}  # USE_R_PRECISION=True のみ
+            }
         }
         task_name は 'region' / 'position' / 'aa_pos' / 'codon_pos' / 'synonymous'
     """
     model.eval()
 
+    use_r_precision = getattr(config, 'USE_R_PRECISION', False)
+
     tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
     # task -> k -> {'tp': int, 'fp': int, 'total_targets': int, 'hits': int, 'n': int}
     stats = {t: {k: {'tp': 0, 'fp': 0, 'total_targets': 0, 'hits': 0, 'n': 0} for k in ks} for t in tasks}
+
+    # R-Precision 用統計（動的 K = len(target_set)）
+    if use_r_precision:
+        rp_stats = {t: {'tp': 0, 'fp': 0, 'total_targets': 0, 'hits': 0, 'n': 0} for t in tasks}
 
     def _topk_preds(tensor, k):
         actual_k = min(k, tensor.size(1))
@@ -495,12 +518,14 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
             x_num = x_num.to(config.DEVICE)
             mask  = mask.to(config.DEVICE)
 
-            (pred_region, pred_position, pred_aa_pos,
-             _, pred_codon_pos, pred_synonymous) = (
+            out_tuple = (
                 _predict_tta(model, x_cat, x_num, mask, getattr(config, 'TTA_N_PASSES', 5))
                 if getattr(config, 'USE_TTA', False)
                 else model(x_cat, x_num, src_key_padding_mask=mask)
             )
+            # 8-tuple への拡張に対応
+            (pred_region, pred_position, pred_aa_pos,
+             _, pred_codon_pos, pred_synonymous, *_extra) = out_tuple
 
             preds_all = {
                 'region':    pred_region,
@@ -525,6 +550,17 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
                         stats[task][k]['hits']          += int(tp > 0)
                         stats[task][k]['n']             += 1
 
+                    # R-Precision: K = len(target_set) を動的に決定
+                    if use_r_precision:
+                        r_k = max(1, len(t_set))
+                        pred_set_r = set(_topk_preds(preds_all[task], r_k)[i].cpu().tolist())
+                        tp_r = len(pred_set_r & t_set)
+                        rp_stats[task]['tp']            += tp_r
+                        rp_stats[task]['fp']            += len(pred_set_r) - tp_r
+                        rp_stats[task]['total_targets'] += len(t_set)
+                        rp_stats[task]['hits']          += int(tp_r > 0)
+                        rp_stats[task]['n']             += 1
+
     results = {}
     for task in tasks:
         results[task] = {}
@@ -535,5 +571,14 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
             recall      = (s['tp'] / s['total_targets'] * 100) if s['total_targets'] > 0 else 0.0
             hit_rate    = (s['hits'] / s['n'] * 100) if s['n'] > 0 else 0.0
             results[task][k] = {'precision': precision, 'recall': recall, 'hit_rate': hit_rate}
+
+        # R-Precision の追加
+        if use_r_precision:
+            s = rp_stats[task]
+            total_pred  = s['tp'] + s['fp']
+            precision   = (s['tp'] / total_pred  * 100) if total_pred  > 0 else 0.0
+            recall      = (s['tp'] / s['total_targets'] * 100) if s['total_targets'] > 0 else 0.0
+            hit_rate    = (s['hits'] / s['n'] * 100) if s['n'] > 0 else 0.0
+            results[task]['r_precision'] = {'precision': precision, 'recall': recall, 'hit_rate': hit_rate}
 
     return results
