@@ -197,6 +197,20 @@ TEMPORAL_POOLING = "last"  # 'last' | 'mean' | 'cls'
 # Falseの場合: latest_context → 各ヘッドが並列に直接受け取る（現状）
 USE_SHARED_TRUNK = False
 
+# --- Co-occurrence Attention 設定 ---
+# ① CO_ATTN_DIM: 集約の内部次元。FEATURE_DIM より大きくすると表現力UP（最後に FEATURE_DIM へ投影）
+#    CO_ATTN_DIM は CO_ATTN_N_HEADS で割り切れる必要あり
+# ② CO_ATTN_N_LAYERS: 1=現状と同じ（Cross-Attention のみ）。
+#    2以上にすると最初の N-1 層で Self-Attention（変異間相互作用）、最終層で Cross-Attention 集約
+CO_ATTN_N_HEADS  = N_HEADS       # 共起 Attention のヘッド数（デフォルト = N_HEADS = 4）
+CO_ATTN_N_LAYERS = 1             # 共起 Attention の層数
+CO_ATTN_DIM      = FEATURE_DIM  # 共起 Attention の内部次元（デフォルト = FEATURE_DIM = 256）
+
+# ③ USE_FLAT_COATTN: 共起集約をスキップし、全変異を独立トークンとして Transformer に渡す
+#    [B, T, C, F] → [B, T*C, F] + 2D 位置エンコーディング（タイムステップ + 共起内インデックス）
+#    T*C = 39*20 = 780 トークン/サンプルになるため BATCH_SIZE を大幅に下げる必要あり（例: 32〜64）
+USE_FLAT_COATTN = False
+
 # --- 訓練設定 ---
 BATCH_SIZE = 512
 LEARNING_RATE = 1e-4

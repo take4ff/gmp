@@ -15,9 +15,11 @@
   - 変異が起きた位置の前後3文字（境界外は `'n'`）を新たなカテゴリカル特徴量（15次元特徴量）として追加。
   - `config.py` 内のアブレーションマスクフラグにより、学習中・推論中にこれらの周辺塩基を **1塩基単位で独立して無効化（マスク）** できる高精度アブレーション分析をサポート。
 - **高精度マルチタスク学習**
-  - 変異の発生する「遺伝子領域（37分類）」、「ゲノム位置（~3万分類）」、「アミノ酸位置（~1万分類）」、「コドン内位置（3分類）」、「同義/非同義（2分類）」, およびその変異株の「流行規模（Strength Score / 回帰）」をマルチタスクで同時に学習・予測。
+  - 変異の発生する「遺伝子領域（37分類）」、「ゲノム位置（~3万分類）」、「アミノ酸位置（~1万分類）」、「コドン内位置（3分類）」、「同義/非同義（2分類）」、「塩基変化先（7分類）」、「アミノ酸変化先（23分類）」、およびその変異株の「流行規模（Strength Score / 回帰）」をマルチタスクで同時に学習・予測。
 - **時系列マルチタスクの学習**
   - 変異の時系列ステップ（Mutation Step）に伴う進化の遷移を学習し、未知の時間の経過に合わせて変異発生時期を高度に予測。
+- **Co-occurrence Attention の多段階拡張（Omicron期大規模共起への対応）**
+  - `CO_ATTN_DIM`（内部次元拡大）、`CO_ATTN_N_LAYERS`（変異間 Self-Attention の多段化）、`USE_FLAT_COATTN`（全変異を独立トークンとして Transformer に直接入力）の3フラグで共起集約の表現力をアブレーション比較可能。
 - **DuckDB による超高速データベース＆バルク処理**
   - 数百万レコードに及ぶ大規模な変異パスとゲノムメタデータを DuckDB で管理し、メモリ効率的かつ高速なストリームバッチ学習を実現。
 - **メンテナンスフリーな動的ロギング**
@@ -32,17 +34,29 @@
 ```mermaid
 graph TD
     Input["Input Sequence (Mutations, Properties, Time)"] --> Embed["Embedding Layer\n(Base, Position, AA, Region, CodonPos, Synonymous,\n+/-3 Surrounding Context Bases)"]
-    Embed --> CoAttn["Co-occurrence Attention\n(共起変異の集合集約)"]
+
+    Embed --> FlatSwitch{USE_FLAT_COATTN?}
+    FlatSwitch -->|False| CoAttn["Co-occurrence Attention\n(CO_ATTN_DIM / CO_ATTN_N_LAYERS で拡張可能)\n[B, T, C, F] → [B, T, F]"]
+    FlatSwitch -->|True| FlatSeq["Flatten + 2D Positional Encoding\n[B, T, C, F] → [B, T×C, F]"]
+
     CoAttn --> Conv["Causal Conv1d\n(局所塩基文脈 / Optional)"]
     Conv --> OriAttn["Origin Attention\n(Wuhan参照株アテンション / Optional)"]
-    OriAttn --> Transformer["Transformer Encoder\n(大局的時系列進化の読解)"]
-    Transformer --> Heads{"Prediction Heads"}
+    OriAttn --> Transformer
+
+    FlatSeq --> Transformer["Transformer Encoder\n(大局的時系列進化の読解)"]
+
+    Transformer --> ARSwitch{USE_AUTOREGRESSIVE_DECODER?}
+    ARSwitch -->|False| Heads{"Prediction Heads"}
+    ARSwitch -->|True| ARDec["Autoregressive Decoder\n(タスク別クエリ埋め込み)"]
+    ARDec --> Heads
+
     Heads --> Out1["Region Class (37)"]
     Heads --> Out2["Nucleotide Pos (~30K)"]
     Heads --> Out3["AA Pos (~10K)"]
     Heads --> Out4["Codon Pos (3)"]
     Heads --> Out5["Synonymous (2)"]
     Heads --> Out6["Strength Score (感染規模回帰)"]
+    Heads --> Out7["Base After (7) / AA After (23)\n(USE_SUBSTITUTION_HEAD)"]
 ```
 
 ---
@@ -86,6 +100,12 @@ python -m transformer_260625.main
 ```python
 USE_LOCAL_CONV1D = False         # Conv1d局所特徴抽出の切り替え
 USE_ORIGIN_ATTENTION = False     # Origin Attention（武漢株参照）の切り替え
+
+# Co-occurrence Attention 拡張（共起集約の表現力比較）
+CO_ATTN_N_HEADS  = 4            # 共起 Attention のヘッド数（CO_ATTN_DIM で割り切れること）
+CO_ATTN_N_LAYERS = 1            # 2以上で変異間 Self-Attention を多段化
+CO_ATTN_DIM      = 256          # 内部次元（大きくすると集約表現力UP、最後に FEATURE_DIM へ投影）
+USE_FLAT_COATTN  = False        # True: 全変異を独立トークンとして Transformer に渡す（要 BATCH_SIZE 削減）
 
 # カテゴリ特徴量・数値特徴量の個別アブレーションマスク（再構築不要で動的適用）
 ABLATION_MASKS = {
@@ -151,25 +171,29 @@ ABLATION_MASKS = {
 * **内容**: メタデータの Lineage テキスト集計ではなく、UShERの系統樹トポロジー placements が出力する `clades.txt` を直接パースして系統別のサンプル数を集計する機構。
 * **ステータス**: **【完了】** (v260625) `clades.txt` をパースし、UShERサンプル数およびNextclade最頻値の集計・DB登録機構を実装。さらに、NCBI基準（メタデータ）とUShER基準（系統樹トポロジー）の動的切り替え（`config.STRENGTH_SOURCE`）に対応。
 
-#### 3. 変異シーケンスの事前学習（MLM/CLM 選択式）
+#### [x] 3. 変異シーケンスの事前学習（MLM/CLM 選択式）
 * **カテゴリ**: `【アーキテクチャ・モデル】` / `【学習・訓練ロジック】`
 * **内容**: 本プロジェクトの変異データ自体を活用し、双方向の **MLM（Masked Language Modeling）** または単方向の **CLM（Causal Language Modeling）** を config 経由で切り替えて事前学習を回す機構。
 * **効果**: 共起関係や時系列推移のドメイン知識をあらかじめ獲得した強力な初期重みを得ることで、下流タスクのファインチューニング精度を極限まで高めます。
+* **ステータス**: **【実装済み】** `config.USE_PRETRAINING = True` で有効化。`python -m transformer_260625.scripts.pretrain` で実行。MLM/CLM は `config.PRETRAINING_MODE` で切り替え。
 
-#### 4. 予測ターゲット間関係の自己回帰デコーダー（極小Decoder / アプローチB）
+#### [x] 4. 予測ターゲット間関係の自己回帰デコーダー（極小Decoder / アプローチB）
 * **カテゴリ**: `【アーキテクチャ・モデル】`
 * **内容**: 各マルチタスク予測ヘッド（Region, Pos, AA, CodonPos 等）の手前に非常にコンパクトな自己回帰デコーダー層を組み込みます。
 * **効果**: 「変異位置決定 ➔ アミノ酸変異/コドン変異の決定」のように、出力ラベル間の依存関係を条件付き確率（自己回帰）で結合し、遺伝暗号表に則った生物学的に矛盾のない一貫した予測結果を実現します。
+* **ステータス**: **【実装済み】** `config.USE_AUTOREGRESSIVE_DECODER = True` で有効化。層数は `AR_DECODER_LAYERS`、ヘッド数は `AR_DECODER_HEADS` で調整。
 
-#### 5. 予測対象（ターゲット）の拡張：具体的な塩基置換・アミノ酸置換の直接予測
+#### [x] 5. 予測対象（ターゲット）の拡張：具体的な塩基置換・アミノ酸置換の直接予測
 * **カテゴリ**: `【アーキテクチャ・モデル】`
 * **内容**: 変異が発生する位置情報だけでなく、具体的に「どの文字からどの文字へ変化したか」という遷移確率（4x4の塩基置換、および20x20のアミノ酸置換）自体を直接予測するヘッドを追加します。
 * **効果**: 変異の「発生位置」と「置換内容」の双方を完全予測可能とし、進化シミュレータとしての実用性を飛躍的に高めます。
+* **ステータス**: **【実装済み】** `config.USE_SUBSTITUTION_HEAD = True` で有効化。塩基変化先（7クラス）・アミノ酸変化先（23クラス）のヘッドを追加。
 
-#### 6. 共起変異数 $R$ に応じた動的評価指標（R-Precision）の追加
+#### [x] 6. 共起変異数 $R$ に応じた動的評価指標（R-Precision）の追加
 * **カテゴリ**: `【評価・検証機構】`
 * **内容**: 一律の固定値 $K$ (Top-1, Top-5等) ではなく、サンプルごとに実際の変異共起数（ユニークな正解数 $R$）を $K$ とした動的な Top-$R$ 予測精度・再現率を計測する評価機構。
 * **効果**: 共起数が $K$ を上回るとRecallが100%に到達できない問題を完全に解消し、モデル本来のカバー能力を正確に可視化します。
+* **ステータス**: **【実装済み】** `config.USE_R_PRECISION = True` で有効化。`evaluate_topk()` が固定K結果と並列に `'r_precision'` キーで結果を出力。
 
 #### [x] 7. 基準日ベースの時系列分割（Temporal Split）と時間軸評価（Temporal Evaluation）の統合
 * **カテゴリ**: `【評価・検証機構】` / `【DB・データパイプライン】`
@@ -186,16 +210,19 @@ ABLATION_MASKS = {
 * **カテゴリ**: `【特徴量・ドメイン知識】` / `【アーキテクチャ・モデル】`
 * **内容**: 軽量な **ESM-2**（例: `esm2_t6_8M_UR50D`）を用い、変異位置の周辺30〜50アミノ酸の局所配列から文脈依存の表現（Embedding）ベクトルを抽出。これを既存の `combined` 特徴量に結合します。
 * **効果**: タンパク質の3次元立体構造や進化的な変異許容度（保存度）といった数億規模の事前知識を、モデル構造を大きく変えることなく安全かつ低コストに既存パイプラインへ注入できます。
+* **ステータス**: **【config・モデルフック実装済み】** `config.USE_ESM2 = True` で有効化（フラグ・射影層のみ）。実際の ESM-2 特徴量抽出（`preprocess.py` との連携）は未実装。
 
 #### 9. 立体構造特性（3D座標・SASA・B-factor）の明示的特徴量の統合
 * **カテゴリ**: `【特徴量・ドメイン知識】`
 * **内容**: Spike等のAlphaFold/PDB構造情報から、変異位置の **SASA（溶媒露出表面積：表面か内部か）** や **B-factor（分子のゆらぎ）**、立体中心からの距離等を直接数値特徴量としてマージします。
 * **効果**: AIが塩基置換から間接的に立体構造変化を推測する学習負担を排除し、構造依存の予測性能を極限まで高めます。
+* **ステータス**: **【config実装済み】** `config.USE_STRUCTURE_FEATURES = True`、`STRUCTURE_CSV` でCSVパス指定。構造データファイルの準備と `preprocess.py` 統合は未実装。
 
 #### 10. ウイルスの進化適応度・免疫逃避能（先行研究 EVEscape）の統合
 * **カテゴリ**: `【特徴量・ドメイン知識】`
 * **内容**: 著名なゼロショット進化適合度モデル **EVEscape** のスコアリングロジック、あるいは変異ごとのEVEscape予測スコア自体を新たな数値特徴量としてマージします。
 * **効果**: 「生化学的に発生しやすい変異（塩基置換特性）」と「環境下で生存・免疫逃避しやすい変異（Fitness）」の両面から多角的に将来変異をシミュレーションできるようになります。
+* **ステータス**: **【config実装済み】** `config.USE_EVESCAPE = True`、`EVESCAPE_CSV` でCSVパス指定。スコアデータファイルの準備と `preprocess.py` 統合は未実装。
 
 ---
 
@@ -208,15 +235,17 @@ ABLATION_MASKS = {
 * **効果**: 基本的な変異しやすい位置（位置バイアス）を定着させてから高度な共起関係を学ばせるため、収束を劇的に助け、不必要な過学習を効果的に防ぎます。
 * **ステータス**: **【完了】** (v260625) `config.CURRICULUM_WARMUP_EPOCHS` でウォームアップ期間を指定。`max_length` フィルタで短パスから段階的に開放する方式で実装。
 
-#### 12. 教師あり対照学習（SupCon）による構造化表現学習
+#### [x] 12. 教師あり対照学習（SupCon）による構造化表現学習
 * **カテゴリ**: `【学習・訓練ロジック】`
 * **内容**: 同一系統や同一流行度のシーケンスを引き合わせ、異なる特性のシーケンスを引き離す対照損失（SupCon Loss）による表現学習。
 * **効果**: モデルがウイルスの系統樹トポロジーや進化マップを高次元空間に美しく構造化して記憶できるようになり、未知の系統や出現初期の変異株に対する汎化性能を飛躍的に高めます。
+* **ステータス**: **【実装済み】** `config.USE_SUPCON = True` で有効化。温度パラメータ `SUPCON_TEMPERATURE`、損失重み `SUPCON_WEIGHT`、射影次元 `SUPCON_PROJECTION_DIM` で調整可能。
 
-#### 13. 時系列＆アーキテクチャのマルチビュー・アンサンブル
+#### [x] 13. 時系列＆アーキテクチャのマルチビュー・アンサンブル
 * **カテゴリ**: `【学習・訓練ロジック】` / `【評価・検証機構】`
 * **内容**: 異なる基準日（時間窓）で学習させたモデルや、局所文脈抽出の有無（Local/Global）が異なる異種モデルをブレンディング（重み付き平均）して予測するアンサンブル機構。
 * **効果**: 将来の進化トレンドシフトに対する極めて頑健な予測と、予測確率の最終安定化を達成します。
+* **ステータス**: **【実装済み】** `config.USE_ENSEMBLE = True` かつ `ENSEMBLE_CHECKPOINT_PATHS` にチェックポイントパスのリストを設定することで、`main.py` 実行後に自動的にアンサンブル評価が実行される。
 
 #### 14. 他ウイルスへの汎化検証（先行研究 PETra を踏まえたマルチバイラル展開）
 * **カテゴリ**: `【評価・検証機構】` (ドメイン汎化検証)

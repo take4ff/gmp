@@ -152,28 +152,80 @@ class InputEmbedding(nn.Module):
 
 
 class CoOccurrenceAttention(nn.Module):
-    """共起変異をAttentionで集約"""
+    """共起変異を Attention で集約。
+
+    CO_ATTN_N_LAYERS > 1 の場合:
+        最初の N-1 層で Self-Attention（変異間の多段相互作用）を行い、
+        最終層で学習クエリによる Cross-Attention でスカラーへ集約する。
+    CO_ATTN_DIM != FEATURE_DIM の場合:
+        in_proj で広い次元に投影して集約し、out_proj で FEATURE_DIM に戻す。
+    """
     def __init__(self):
         super().__init__()
-        self.query = nn.Parameter(torch.randn(1, 1, config.FEATURE_DIM))
+        n_heads  = getattr(config, 'CO_ATTN_N_HEADS', config.N_HEADS)
+        n_layers = getattr(config, 'CO_ATTN_N_LAYERS', 1)
+        attn_dim = getattr(config, 'CO_ATTN_DIM', config.FEATURE_DIM)
+
+        self.attn_dim = attn_dim
+        self.n_layers = n_layers
+
+        # 次元変換: FEATURE_DIM → attn_dim → FEATURE_DIM
+        if attn_dim != config.FEATURE_DIM:
+            self.in_proj  = nn.Linear(config.FEATURE_DIM, attn_dim)
+            self.out_proj = nn.Linear(attn_dim, config.FEATURE_DIM)
+        else:
+            self.in_proj  = None
+            self.out_proj = None
+
+        # 集約用学習クエリ
+        self.query = nn.Parameter(torch.randn(1, 1, attn_dim))
+
+        # Self-Attention 層（最初の N-1 層: 変異間相互作用）
+        n_self = max(0, n_layers - 1)
+        self.self_attn_layers = nn.ModuleList([
+            nn.MultiheadAttention(attn_dim, n_heads, dropout=config.DROPOUT, batch_first=True)
+            for _ in range(n_self)
+        ])
+        self.self_attn_norms = nn.ModuleList([
+            nn.LayerNorm(attn_dim) for _ in range(n_self)
+        ])
+
+        # 最終 Cross-Attention 層（クエリ → 変異集合 → スカラー集約）
         self.attention = nn.MultiheadAttention(
-            embed_dim=config.FEATURE_DIM,
-            num_heads=config.N_HEADS,
+            embed_dim=attn_dim,
+            num_heads=n_heads,
             dropout=config.DROPOUT,
-            batch_first=True
+            batch_first=True,
         )
 
     def forward(self, x, need_weights=False):
         # x: [B, T, C, F]
         B, T, C, F = x.shape
-        x_flat = x.reshape(B * T, C, F)
-        q_flat = self.query.repeat(B * T, 1, 1)
-        attn_output, attn_weights = self.attention(
+        x_flat = x.reshape(B * T, C, F)  # [B*T, C, F]
+
+        # 次元変換 (FEATURE_DIM → attn_dim)
+        if self.in_proj is not None:
+            x_flat = self.in_proj(x_flat)
+
+        # Self-Attention 層（変異間相互作用）
+        for sa, norm in zip(self.self_attn_layers, self.self_attn_norms):
+            sa_out, _ = sa(x_flat, x_flat, x_flat, need_weights=False)
+            x_flat = norm(x_flat + sa_out)
+
+        # Cross-Attention（クエリ → 変異集合 → スカラーへ集約）
+        q_flat = self.query.repeat(B * T, 1, 1)  # [B*T, 1, attn_dim]
+        attn_out, attn_weights = self.attention(
             q_flat, x_flat, x_flat,
             need_weights=need_weights,
             average_attn_weights=True,
-        )
-        output = attn_output.reshape(B, T, F)
+        )  # attn_out: [B*T, 1, attn_dim]
+
+        output = attn_out.reshape(B, T, self.attn_dim)  # [B, T, attn_dim]
+
+        # attn_dim → FEATURE_DIM に戻す
+        if self.out_proj is not None:
+            output = self.out_proj(output)
+
         # need_weights=True のとき: attn_weights shape は [B*T, 1, C]
         return (output, attn_weights) if need_weights else output
 
@@ -236,6 +288,16 @@ class HierarchicalTransformer(nn.Module):
 
         self.input_embed = InputEmbedding()
         self.co_attn = CoOccurrenceAttention()
+
+        # ③ USE_FLAT_COATTN: 共起集約をスキップし全変異を独立トークンとして Transformer に渡す
+        # 2D 位置エンコーディング: タイムステップ次元 + 共起内インデックス次元
+        self.use_flat_coattn = getattr(config, 'USE_FLAT_COATTN', False)
+        if self.use_flat_coattn:
+            self.flat_ts_embed = nn.Embedding(config.MAX_SEQ_LEN + 2, config.FEATURE_DIM)
+            self.flat_co_embed = nn.Embedding(config.MAX_CO_OCCURRENCE + 1, config.FEATURE_DIM)
+        else:
+            self.flat_ts_embed = None
+            self.flat_co_embed = None
 
         # 局所的な文脈情報を抽出するConv1d (Ablation Study用に切り替え可能)
         self.use_local_conv = getattr(config, 'USE_LOCAL_CONV1D', True)
@@ -426,84 +488,102 @@ class HierarchicalTransformer(nn.Module):
         # 1. 入力埋め込み
         x = self.input_embed(x_cat, x_num)
 
-        # 2. 共起集約 (ベース情報)
-        x_agg = self.co_attn(x)
+        if self.use_flat_coattn:
+            # ③ Flat Co-occurrence: 全変異を独立トークンとして Transformer に渡す
+            # [B, T, C, F] → [B, T*C, F] + 2D 位置エンコーディング
+            B, T, C, F_dim = x.shape
 
-        # 3. 局所特徴抽出 (文脈情報) - Ablation Study用に条件分岐
-        if self.use_local_conv and self.local_feature_extractor is not None:
-            x_context = self.local_feature_extractor(x_agg)
-            # 残差結合 (ベース + 文脈)
-            x_combined = x_agg + x_context
+            ts_idx = torch.arange(T, device=x.device)
+            co_idx = torch.arange(C, device=x.device)
+            # タイムステップ PE + 共起内インデックス PE を足し合わせて [T*C, F] を作成
+            pos_2d = (self.flat_ts_embed(ts_idx).unsqueeze(1) +
+                      self.flat_co_embed(co_idx).unsqueeze(0)).reshape(T * C, F_dim)
+
+            x_flat_seq = x.reshape(B, T * C, F_dim) + pos_2d.unsqueeze(0)  # [B, T*C, F]
+            x_flat_seq = self.pos_encoder.dropout(x_flat_seq)
+
+            # PAD マスク: x_cat[..., 0] == 0 は PAD 変異（base_before=PAD トークン）
+            mutation_pad  = (x_cat[..., 0] == 0)            # [B, T, C]
+            flat_pad_mask = mutation_pad.reshape(B, T * C)   # [B, T*C]
+
+            x_enc = self.transformer_encoder(
+                x_flat_seq,
+                mask=None,
+                src_key_padding_mask=flat_pad_mask,
+            )  # [B, T*C, F]
+
+            # 最終タイムステップの変異ベクトルを PAD 除外平均して latest_context を作成
+            last_start  = (T - 1) * C
+            last_tokens = x_enc[:, last_start:last_start + C, :]              # [B, C, F]
+            last_valid  = (~flat_pad_mask[:, last_start:last_start + C]).float().unsqueeze(-1)  # [B, C, 1]
+            latest_context = (last_tokens * last_valid).sum(1) / last_valid.sum(1).clamp(min=1)
+
         else:
-            # Conv1D層をスキップ
-            x_combined = x_agg
+            # 2. 共起集約 (ベース情報)
+            x_agg = self.co_attn(x)
 
-        # 4. Origin Attention: 原点との比較情報を注入 - Ablation Study用に条件分岐
-        if self.use_origin_attention and self.origin_attn is not None:
-            batch_size = x_combined.size(0)
-            origin_emb = self.origin_embedding.expand(batch_size, -1, -1)  # [B, 1, Dim]
-            origin_context = self.origin_attn(x_seq=x_combined, x_origin=origin_emb)
-            x_combined = x_combined + origin_context
-
-        # 5. Transformer (大局的文脈)
-        #    TEMPORAL_POOLING='cls' の場合: pos_encoder の前に [CLS] トークンを先頭に差し込む
-        pooling = getattr(config, 'TEMPORAL_POOLING', 'last')
-        key_padding_mask = src_key_padding_mask  # forward 引数を破壊しないようローカル変数に
-
-        if pooling == 'cls':
-            B = x_combined.size(0)
-            cls_tokens = self.cls_token.expand(B, -1, -1)              # [B, 1, F]
-            x_combined = torch.cat([cls_tokens, x_combined], dim=1)   # [B, T+1, F]
-            if key_padding_mask is not None:
-                cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=key_padding_mask.device)
-                key_padding_mask = torch.cat([cls_mask, key_padding_mask], dim=1)  # [B, T+1]
-
-        # ALiBi RPE: USE_RPE=True の場合は正弦波 PE をスキップし、
-        #            ALiBi バイアスを attn_mask に注入する
-        if self.alibi is not None:
-            B_ = x_combined.size(0)
-            T_ = x_combined.size(1)
-            # Dropout は正弦波 PE に内包されているので、RPE 時は別途 Dropout を適用
-            x = self.pos_encoder.dropout(x_combined)
-            alibi_mask = self.alibi(T_, B_, config.N_HEADS, x.device)  # [B*n_heads, T, T]
-            effective_mask = src_mask if src_mask is not None else alibi_mask
-            if src_mask is not None:
-                # src_mask と alibi を加算で合成
-                effective_mask = src_mask + alibi_mask
-        else:
-            x = self.pos_encoder(x_combined)
-            effective_mask = src_mask
-
-        x = self.transformer_encoder(
-            x,
-            mask=effective_mask,
-            src_key_padding_mask=key_padding_mask
-        )
-
-        # 6. 予測ヘッドへの入力 vector を TEMPORAL_POOLING に従って選択
-        #
-        # 'last': x[:, -1, :]  末尾固定（デフォルト）
-        #   ※ PADトークンが末尾に来るサンプルでは無効な表現を読む可能性あり
-        #
-        # 'mean': Global Average Pooling（PADを除外した加重平均）
-        #   全タイムステップの情報を均等にブレンドする
-        #   src_key_padding_mask が None の場合は単純平均にフォールバック
-        #
-        # 'cls': [CLS] トークン（BERT方式）
-        #   先頭に追加した専用トークンの出力 x[:, 0, :] を使う
-        #   Self-Attention を通じてシーケンス全体の情報が集約されている
-        if pooling == 'mean':
-            if key_padding_mask is not None:
-                # PAD位置を除外して平均を計算 (PAD=True, 有効=False)
-                mask_float = (~key_padding_mask).float().unsqueeze(-1)  # [B, T, 1]
-                latest_context = (x * mask_float).sum(dim=1) / mask_float.sum(dim=1).clamp(min=1)
+            # 3. 局所特徴抽出 (文脈情報) - Ablation Study用に条件分岐
+            if self.use_local_conv and self.local_feature_extractor is not None:
+                x_context = self.local_feature_extractor(x_agg)
+                # 残差結合 (ベース + 文脈)
+                x_combined = x_agg + x_context
             else:
-                latest_context = x.mean(dim=1)
-        elif pooling == 'cls':
-            # [CLS] の出力（index=0）をシーケンス全体の圧縮表現として使う
-            latest_context = x[:, 0, :]
-        else:  # 'last'
-            latest_context = x[:, -1, :]
+                # Conv1D層をスキップ
+                x_combined = x_agg
+
+            # 4. Origin Attention: 原点との比較情報を注入 - Ablation Study用に条件分岐
+            if self.use_origin_attention and self.origin_attn is not None:
+                batch_size = x_combined.size(0)
+                origin_emb = self.origin_embedding.expand(batch_size, -1, -1)  # [B, 1, Dim]
+                origin_context = self.origin_attn(x_seq=x_combined, x_origin=origin_emb)
+                x_combined = x_combined + origin_context
+
+            # 5. Transformer (大局的文脈)
+            #    TEMPORAL_POOLING='cls' の場合: pos_encoder の前に [CLS] トークンを先頭に差し込む
+            pooling = getattr(config, 'TEMPORAL_POOLING', 'last')
+            key_padding_mask = src_key_padding_mask  # forward 引数を破壊しないようローカル変数に
+
+            if pooling == 'cls':
+                B = x_combined.size(0)
+                cls_tokens = self.cls_token.expand(B, -1, -1)              # [B, 1, F]
+                x_combined = torch.cat([cls_tokens, x_combined], dim=1)   # [B, T+1, F]
+                if key_padding_mask is not None:
+                    cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=key_padding_mask.device)
+                    key_padding_mask = torch.cat([cls_mask, key_padding_mask], dim=1)  # [B, T+1]
+
+            # ALiBi RPE: USE_RPE=True の場合は正弦波 PE をスキップし、
+            #            ALiBi バイアスを attn_mask に注入する
+            if self.alibi is not None:
+                B_ = x_combined.size(0)
+                T_ = x_combined.size(1)
+                # Dropout は正弦波 PE に内包されているので、RPE 時は別途 Dropout を適用
+                x = self.pos_encoder.dropout(x_combined)
+                alibi_mask = self.alibi(T_, B_, config.N_HEADS, x.device)  # [B*n_heads, T, T]
+                effective_mask = src_mask if src_mask is not None else alibi_mask
+                if src_mask is not None:
+                    # src_mask と alibi を加算で合成
+                    effective_mask = src_mask + alibi_mask
+            else:
+                x = self.pos_encoder(x_combined)
+                effective_mask = src_mask
+
+            x = self.transformer_encoder(
+                x,
+                mask=effective_mask,
+                src_key_padding_mask=key_padding_mask
+            )
+
+            # 6. 予測ヘッドへの入力 vector を TEMPORAL_POOLING に従って選択
+            if pooling == 'mean':
+                if key_padding_mask is not None:
+                    mask_float = (~key_padding_mask).float().unsqueeze(-1)  # [B, T, 1]
+                    latest_context = (x * mask_float).sum(dim=1) / mask_float.sum(dim=1).clamp(min=1)
+                else:
+                    latest_context = x.mean(dim=1)
+            elif pooling == 'cls':
+                latest_context = x[:, 0, :]
+            else:  # 'last'
+                latest_context = x[:, -1, :]
 
         # Shared Trunk: 実験時は USE_SHARED_TRUNK=True に変更
         if self.shared_trunk is not None:
