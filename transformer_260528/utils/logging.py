@@ -65,33 +65,6 @@ def print_sample_structure(sample, sample_idx=0):
     print("=" * 60 + "\n")
 
 
-def calculate_topk_hit_rate(pred_sets, target_sets):
-    """Top-Nヒット率を計算する。
-
-    予測セット(Top-K)と正解セット(共起)の積集合が空でなければヒット。
-
-    Args:
-        pred_sets: list of set (予測集合のリスト)
-        target_sets: list of set (正解集合のリスト)
-
-    Returns:
-        float: ヒット率 (%)
-    """
-    total_samples = len(pred_sets)
-    if total_samples == 0:
-        return 0.0
-
-    hits = 0
-    for pred_s, target_s in zip(pred_sets, target_sets):
-        if not target_s:
-            total_samples -= 1
-            continue
-        if len(pred_s.intersection(target_s)) > 0:
-            hits += 1
-
-    return (hits / total_samples) * 100 if total_samples > 0 else 0.0
-
-
 def calculate_metrics(pred_sets, target_sets):
     """Hit Rate・Precision・Recall・F1スコアを計算する。
 

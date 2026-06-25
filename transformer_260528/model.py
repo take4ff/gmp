@@ -88,12 +88,14 @@ class ALibiPositionalBias(nn.Module):
 
 
 class InputEmbedding(nn.Module):
-    """15つのID特徴量 + 6つの数値特徴量を受け取り、FEATURE_DIM次元に射影
+    """15のカテゴリ特徴量 + 10の数値特徴量を受け取り、FEATURE_DIM次元に射影
 
-    ID特徴量 (15つ): base_before, position, base_after, codon_pos,
-                          aa_before, aa_pos, aa_after, region, synonymous,
-                          left3, left2, left1, right1, right2, right3
-    数値特徴量 (6つ): freq, hydro, charge, size, dissimilarity, pam250
+    カテゴリ特徴量 (15): base_before[0], position[1], base_after[2], codon_pos[3],
+                         aa_before[4], aa_pos[5], aa_after[6], region[7], synonymous[8],
+                         left3[9], left2[10], left1[11], right1[12], right2[13], right3[14]
+    数値特徴量    (10): freq, hydro, charge, size, blsm, pam250,
+                         codon_log_ratio_diff, codon_log_ratio_before,
+                         human_codon_rscu_diff, scv2_codon_rscu_diff
     """
     def __init__(self):
         super().__init__()
@@ -453,7 +455,7 @@ class MultiTaskLoss(nn.Module):
     複数のタスクの損失を、不確実性(Uncertainty)に基づいて自動重み付けする層。
     Alex Kendall et al. "Multi-Task Learning Using Uncertainty to Weigh Losses"
     """
-    def __init__(self, num_tasks=4):
+    def __init__(self, num_tasks=6):
         super().__init__()
         # log_vars: 損失の重みを制御する学習可能パラメータ (初期値0)
         self.log_vars = nn.Parameter(torch.zeros(num_tasks))

@@ -356,14 +356,28 @@ class DBIterableDataset(IterableDataset):
                 # num構造: [freq(0), hydro(1), charge(2), size(3), blsm(4), pam250(5),
                 #           codon_log_ratio_diff(6), codon_log_ratio_before(7),
                 #           human_codon_rscu_diff(8), scv2_codon_rscu_diff(9)]
-                mask_keys = [
+                num_mask_keys = [
                     'FREQ', 'HYDRO', 'CHARGE', 'SIZE', 'BLSM', 'PAM250',
                     'CODON_LOG_RATIO_DIFF', 'CODON_LOG_RATIO_BEFORE',
                     'HUMAN_CODON_RSCU_DIFF', 'SCV2_CODON_RSCU_DIFF'
                 ]
-                for i, key in enumerate(mask_keys):
+                for i, key in enumerate(num_mask_keys):
                     if config.ABLATION_MASKS[key]:
                         num[i] = 0.0
+
+                # カテゴリ特徴量: 前後3塩基コンテキストの個別マスク (PAD index=0 に置換)
+                # cat構造: [9]=left3, [10]=left2, [11]=left1, [12]=right1, [13]=right2, [14]=right3
+                if config.ABLATION_MASKS.get('MUTATION_CONTEXT', False):
+                    for ci in range(9, 15):
+                        cat[ci] = 0
+                else:
+                    ctx_mask_keys = [
+                        'MUTATION_CONTEXT_L3', 'MUTATION_CONTEXT_L2', 'MUTATION_CONTEXT_L1',
+                        'MUTATION_CONTEXT_R1', 'MUTATION_CONTEXT_R2', 'MUTATION_CONTEXT_R3',
+                    ]
+                    for j, key in enumerate(ctx_mask_keys):
+                        if config.ABLATION_MASKS.get(key, False):
+                            cat[9 + j] = 0
 
                 padded_cat[target_idx, c] = cat
                 padded_num[target_idx, c] = num

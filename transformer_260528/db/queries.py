@@ -41,8 +41,8 @@ def get_db_data_info(db_path=None, split_type=None, max_cooccurrence=None):
     strength_stats = con.execute(f"SELECT MIN({strength_col}), MAX({strength_col}) FROM strains").fetchone()
     min_s, max_s = strength_stats
     score_range = (max_s - min_s) if max_s and min_s else 10
-    low_max = int(min_s + score_range / 3) + 1 if min_s else 6
-    med_max = int(min_s + 2 * score_range / 3) + 1 if min_s else 10
+    low_max = int(min_s + score_range / 3) + 1 if min_s is not None else 6
+    med_max = int(min_s + 2 * score_range / 3) + 1 if min_s is not None else 10
 
     con.close()
 
@@ -423,8 +423,6 @@ def get_combined_sampled_strength(db_path=None):
             # （dataset.py: split_ratio = total_count / max(1, global_total_count)）
             # ここで、total_count は unique フィルタ適用前の DB から引いた件数。
             # したがって、一括シミュレーションでも、unique フィルタ適用前の該当 split の件数を total_count_pre_unique とする。
-            total_count_pre_unique = len(result) # この簡略化で問題ない（全体割合を維持するため）
-            # もしくは、正確に元の result から split_type の件数を数える
             total_count_split = sum(1 for r in result if r[3] == split_type)
             split_ratio = total_count_split / max(1, global_total_count)
             target_num = max(1, int(config.MAX_NUM * split_ratio))

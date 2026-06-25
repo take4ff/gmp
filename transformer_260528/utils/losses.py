@@ -34,7 +34,7 @@ def get_class_weights(counts, loss_type, beta=0.9999):
     else:  # 'ce'
         weights = torch.ones_like(counts_float)
 
-    if getattr(config, 'NORMALIZE_LOSS_WEIGHTS', True) and weights.sum() > 0:
+    if getattr(config, 'NORMALIZE_LOSS_WEIGHTS', False) and weights.sum() > 0:
         # [Fix] weights.mean() は0クラスを含む全体平均のため、大語彙タスク（position等）では
         # ほぼ全クラスが0件 → mean≈0 → weights/mean が inf/nan になる問題を修正。
         # 非ゼロクラスのみの mean で正規化することで数値安定性を確保する。

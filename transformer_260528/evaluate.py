@@ -150,10 +150,15 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
             topk_indices_codon_pos = safe_topk(predictions_codon_pos, config.TOP_K_EVAL)
             topk_indices_synonymous= safe_topk(predictions_synonymous,config.TOP_K_EVAL)
 
-            # 確率の計算
-            probs_region = torch.nn.functional.softmax(predictions_region, dim=-1)
-            probs_position = torch.nn.functional.softmax(predictions_position, dim=-1)
-            probs_aa_pos = torch.nn.functional.softmax(predictions_aa_pos, dim=-1)
+            # 確率の計算 (TTA時はすでにsoftmax済みのため再適用しない)
+            if getattr(config, 'USE_TTA', False):
+                probs_region   = predictions_region
+                probs_position = predictions_position
+                probs_aa_pos   = predictions_aa_pos
+            else:
+                probs_region   = torch.nn.functional.softmax(predictions_region,   dim=-1)
+                probs_position = torch.nn.functional.softmax(predictions_position, dim=-1)
+                probs_aa_pos   = torch.nn.functional.softmax(predictions_aa_pos,   dim=-1)
 
             # 損失計算 (utils/losses.py 共通ロジック)
             losses = compute_task_losses(

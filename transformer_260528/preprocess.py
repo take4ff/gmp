@@ -28,9 +28,10 @@ from .legacy.dataset import (
 )
 
 
-def load_static_data():
+def load_static_data(silent=False):
     """静的データ（コドン、頻度、物性値、コドン特徴量）を読み込む。"""
-    force_print("[INFO] Loading static data...")
+    if not silent:
+        force_print("[INFO] Loading static data...")
 
     df_codon = pd.read_csv(config.CODON_CSV)
     df_freq = pd.read_csv(config.FREQ_CSV, index_col=0)
@@ -40,27 +41,10 @@ def load_static_data():
     df_human_rscu = pd.read_csv(config.HUMAN_CODON_RSCU_CSV)
     df_scv2_rscu = pd.read_csv(config.SCV2_CODON_RSCU_CSV)
 
-    codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = preprocess_static_data(
-        df_codon, df_freq, df_dissimilarity, df_pam250, df_log_ratio, df_human_rscu, df_scv2_rscu
+    return preprocess_static_data(
+        df_codon, df_freq, df_dissimilarity, df_pam250, df_log_ratio, df_human_rscu, df_scv2_rscu,
+        silent=silent
     )
-
-    return codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict
-
-
-def load_static_data_minimal():
-    """静的データを読み込む（並列処理用、ログなし）。"""
-    df_codon = pd.read_csv(config.CODON_CSV)
-    df_freq = pd.read_csv(config.FREQ_CSV, index_col=0)
-    df_dissimilarity = pd.read_csv(config.DISSIMILARITY_CSV)
-    df_pam250 = pd.read_csv(config.PAM250_CSV, index_col=0)
-    df_log_ratio = pd.read_csv(config.CODON_LOG_RATIO_CSV)
-    df_human_rscu = pd.read_csv(config.HUMAN_CODON_RSCU_CSV)
-    df_scv2_rscu = pd.read_csv(config.SCV2_CODON_RSCU_CSV)
-
-    codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = preprocess_static_data(
-        df_codon, df_freq, df_dissimilarity, df_pam250, df_log_ratio, df_human_rscu, df_scv2_rscu, silent=True
-    )
-    return codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict
 
 
 def load_collection_dates():
@@ -408,7 +392,7 @@ def process_strain_wrapper(args):
 
     # 3. どちらのキャッシュもない場合は新規に再計算
     try:
-        codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = load_static_data_minimal()
+        codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = load_static_data(silent=True)
         chunk_paths, stats = process_strain_features_core_chunked(
             strain_name, codon_data, freq_dict, dissim_dict, pam250_dict,
             log_ratio_dict, human_rscu_dict, scv2_rscu_dict, config_hash
