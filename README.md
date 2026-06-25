@@ -1,11 +1,11 @@
-# 🧬 Viral Genome Mutation Prediction Model (v260528)
+# 🧬 Viral Genome Mutation Prediction Model (v260625)
 
 本プロジェクトは、新型コロナウイルス（SARS-CoV-2）をはじめとするウイルスゲノムの変異発生予測を行う、高度な時系列マルチタスク・ディープラーニングモデル（Hierarchical Transformer）のコードベースです。
 変異の時系列的な蓄積ステップ（Mutation Step）と、同時に発生した共起変異の集合を高度にモデル化し、将来のパンデミックを引き起こす変異の早期予測と進化シミュレーションを実現します。
 
 ---
 
-## ✨ 主要機能（v260528 搭載機能）
+## ✨ 主要機能（v260625 搭載機能）
 
 - **NCBI/UShERダブル系統名・流行度システムの統合（動的切り替え）**
   - 配列メタデータ上の系統名（NCBI）と、系統樹トポロジー上の placements から得られる系統名（UShER）の双方をDBに抽出し、保持・表示。
@@ -56,14 +56,14 @@ graph TD
 前処理に必要な前後3塩基特徴量を含んだ高速データベースを構築します。
 ```bash
 # 既存の重い学習プロセスを阻害しないよう、nice で優先度を下げて実行することを推奨
-nice -n 19 python -m transformer_260528.preprocess
+nice -n 19 python -m transformer_260625.preprocess
 ```
 
 ### 3. モデルの学習および評価の実行
 ```bash
-python -m transformer_260528.main
+python -m transformer_260625.main
 ```
-実行完了後、`outputs/transformer_260528/results/<timestamp>/` にすべてのログ、学習曲線、集計CSV、および評価プロット画像が自動保存されます。
+実行完了後、`outputs/transformer_260625/results/<timestamp>/` にすべてのログ、学習曲線、集計CSV、および評価プロット画像が自動保存されます。
 
 ---
 
@@ -143,12 +143,12 @@ ABLATION_MASKS = {
 #### [x] 1. 系統未分類（Unclassified）サンプルの受容設計（一律 `0.0` フォールバック）
 * **カテゴリ**: `【DB・データパイプライン】`
 * **内容**: NCBI等の unclassified 株を一律で `"c"` に丸めず、`unclassified_[AccessionID]` として擬似系統名（Pseudo-strain）化して登録することでキャッシュ衝突を防止し、流行度を一律 `0.0`（最小値）に強制設定します。
-* **ステータス**: **【完了】** (v260528) 擬似系統名による受容と、流行度最小値フォールバック処理を実装。->できていないかも、Unclassifiedの流行度が11になっている
+* **ステータス**: **【完了】** (v260625) 擬似系統名による受容と、流行度最小値フォールバック処理を実装。->できていないかも、Unclassifiedの流行度が11になっている
 
 #### [x] 2. UShERの `clades.txt` を用いた真の系統ベースの流行度集計
 * **カテゴリ**: `【DB・データパイプライン】`
 * **内容**: メタデータの Lineage テキスト集計ではなく、UShERの系統樹トポロジー placements が出力する `clades.txt` を直接パースして系統別のサンプル数を集計する機構。
-* **ステータス**: **【完了】** (v260528) `clades.txt` をパースし、UShERサンプル数およびNextclade最頻値の集計・DB登録機構を実装。さらに、NCBI基準（メタデータ）とUShER基準（系統樹トポロジー）の動的切り替え（`config.STRENGTH_SOURCE`）に対応。
+* **ステータス**: **【完了】** (v260625) `clades.txt` をパースし、UShERサンプル数およびNextclade最頻値の集計・DB登録機構を実装。さらに、NCBI基準（メタデータ）とUShER基準（系統樹トポロジー）の動的切り替え（`config.STRENGTH_SOURCE`）に対応。
 
 #### 3. 変異シーケンスの事前学習（MLM/CLM 選択式）
 * **カテゴリ**: `【アーキテクチャ・モデル】` / `【学習・訓練ロジック】`

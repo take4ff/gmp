@@ -12,9 +12,9 @@ __pycache__/
 # ==========================================
 /data/
 /db/
-/meta_data/sequences-241017.csv
-/meta_data/problematic_sites_sarsCov2.vcf
-/meta_data/public-2024-10-17.all.masked.pb
+/reference/sequences-241017.csv
+/reference/genome/problematic_sites_sarsCov2.vcf
+/reference/phylogeny/public-2024-10-17.all.masked.pb
 
 # ==========================================
 # Outputs & Logs
@@ -29,7 +29,7 @@ nohup*.out
 /old_file/
 /usher/
 /usher_old/
-/meta_data/sequences-241017_old.csv
+/reference/sequences-241017_old.csv
 
 
 # Claude code
