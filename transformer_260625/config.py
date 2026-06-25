@@ -8,16 +8,39 @@ SEED = 42
 # --- Ablation実験用マスク設定 ---
 # Trueにすると、その数値特徴量を強制的に0にして学習・推論を行う
 ABLATION_MASKS = {
+    # --- 既存の物理化学的特徴量 ---
     'FREQ': False,       # 変異頻度を無効化
     'HYDRO': False,      # 疎水性差 (Eisenberg-Weiss) を無効化
     'CHARGE': False,     # 電荷差を無効化
     'SIZE': False,       # サイズ差を無効化
     'BLSM': False,       # BLOSUM62差を無効化
     'PAM250': False,     # PAM250スコアを無効化
-    'CODON_LOG_RATIO_DIFF': False,
-    'CODON_LOG_RATIO_BEFORE': False,
-    'HUMAN_CODON_RSCU_DIFF': False,
-    'SCV2_CODON_RSCU_DIFF': False,
+    # --- ホスト適応特徴量 (SCV2_host_adaptation_features.csv) ---
+    'HOST_LOG_RATIO_DIFF': False,        # host_distance_log_ratio_diff
+    'HOST_LOG_RATIO_BEFORE': False,      # host_distance_log_ratio_before
+    'HUMAN_RSCU_DIFF': False,            # human_RSCU_diff
+    'SCV2_RSCU_DIFF': False,             # SCV2_RSCU_diff
+    'OPTIMAL_TO_OPTIMAL': False,         # optimal_to_optimal (2値)
+    'NON_OPTIMAL_TO_OPTIMAL': False,     # non_optimal_to_optimal (2値)
+    'OPTIMAL_TO_NON_OPTIMAL': False,     # optimal_to_non_optimal (2値)
+    'IS_TRANSITION': False,              # is_transition (2値)
+    'TRANSITION_HUMAN_RSCU_DIFF': False, # transition_human_RSCU_diff
+    'TRANSITION_SCV2_RSCU_DIFF': False,  # transition_SCV2_RSCU_diff
+    'CPG_DIFF': False,                   # CpG_diff
+    'UPA_DIFF': False,                   # UpA_diff
+    'HUMAN_RSCU_BEFORE': False,          # human_RSCU_before
+    'SCV2_RSCU_BEFORE': False,           # SCV2_RSCU_before
+    'HUMAN_FREQ_BEFORE': False,          # human_freq_before
+    'HUMAN_FREQ_DIFF': False,            # human_freq_diff
+    'SCV2_FREQ_BEFORE': False,           # SCV2_freq_before
+    'SCV2_FREQ_DIFF': False,             # SCV2_freq_diff
+    'HUMAN_CAI_BEFORE': False,           # human_CAI_before
+    'HUMAN_CAI_DIFF': False,             # human_CAI_diff
+    'SCV2_CAI_BEFORE': False,            # SCV2_CAI_before
+    'SCV2_CAI_DIFF': False,              # SCV2_CAI_diff
+    'HOST_RSCU_RATIO_BEFORE': False,     # host_distance_RSCU_ratio_before
+    'HOST_RSCU_RATIO_DIFF': False,       # host_distance_RSCU_ratio_diff
+    # --- 前後塩基コンテキスト ---
     'MUTATION_CONTEXT': False,     # 前後3文字（6塩基）をすべて無効化
         'MUTATION_CONTEXT_L3': False,  # 3文字前の塩基を無効化
         'MUTATION_CONTEXT_L2': False,  # 2文字前の塩基を無効化
@@ -61,9 +84,7 @@ FREQ_CSV          = "reference/table_set.csv"
 DISSIMILARITY_CSV = "reference/aa_properties/dissimilarity_metrics.csv"
 PAM250_CSV        = "reference/aa_properties/PAM250.csv"
 SEQUENCES_CSV     = "reference/sequences-241017.csv"  # 株別サンプル数CSV
-CODON_LOG_RATIO_CSV  = "reference/codon/Codon_log_ratio.csv"
-HUMAN_CODON_RSCU_CSV = "reference/codon/human_Codon_RSCU.csv"
-SCV2_CODON_RSCU_CSV  = "reference/codon/SCV2_Codon_RSCU.csv"
+HOST_ADAPTATION_CSV  = "reference/codon/SCV2_host_adaptation_features.csv"
 
 OUTPUT_DIR = 'outputs/transformer_260625/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
@@ -138,7 +159,7 @@ PROTEIN_VOCABS = {
 
 # --- モデルアーキテクチャ設定 ---
 NUM_FEATURE_STRING = 15  # 特徴量文字列数 (シノニマス + 前後3塩基)
-NUM_CHEM_FEATURES = 10
+NUM_CHEM_FEATURES = 30
 
 VOCAB_SIZE_POSITION = 30006
 VOCAB_SIZE_BASE = 7

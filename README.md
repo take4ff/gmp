@@ -264,3 +264,25 @@ ABLATION_MASKS = {
 ---
 
 **Author:** Takeru Aiba
+
+
+---
+
+## 🗒️ 開発メモ（未整理タスク）
+
+### 評価・出力の改善
+- **感染規模別の精度ファイル分割**: 現状は一括出力になっているため、感染規模カテゴリ（Low/Med/High）ごとにファイルを分けて保存する
+- **感染規模区分の細分化**: 大中小の3区分に加え、対数スケール（〜1,000 / 〜1万 / 〜10万 / 〜100万）でも精度を集計・保存（`{prefix}_strength_fine.csv`）。各系統がどの規模区分に該当するかもセットで保存する
+- **亜系統別の精度出力**: timestep 軸とは独立した切り口で、系統（clade）単位に集計した精度を `{prefix}_lineage_metrics.csv` として常時出力する（現状は株単位の `strain_metrics.csv` のみ）
+- **亜系統別の予測難易度の可視化**: ターゲット変異分布の偏り（エントロピー等）を定量化し、亜系統ごとの「予測しやすさ」を評価結果に付加する
+- **run_summary.json の追加**: 主要指標（HitRate@1/3/5・Macro Recall・Val/Test Loss）だけをまとめた軽量 JSON を毎回出力し、実験間のスクリプト比較を容易にする
+- **R-Precision 結果の独立保存**: `USE_R_PRECISION=True` 時の結果を `topk_precision.csv` とは別ファイルに保存する
+
+### 出力ファイルの整理（削減・統合）
+- **削除候補**: `{prefix}_random_baseline.csv`（データ統計から決まる固定値に近く毎回生成は冗長）、`{prefix}_prediction_distribution.csv`（`confusion_matrix.csv` と情報が重複）、`{prefix}_recall_summary.csv`（`metrics_by_timestep.csv` / `region_metrics.csv` と内容が被りやすい）
+- **フラグ制御化候補**: `{prefix}_strain_metrics.csv`（1万株×複数指標で巨大、詳細分析時のみ生成）、`synonymous_distribution_csv` / `strain_info_csv`（`USE_DB=False` 時のみ意味があり現状ほぼ死にコード）
+
+### 特徴量の拡充
+- **シノニマス/ノンシノニマス変異の蓄積数**: 入力パスにおけるシノニマス変異・ノンシノニマス変異それぞれの累積カウントを数値特徴量として追加する
+- **コドン頻度の生値（差分）**: 現状は対数比（`Codon_log_ratio`）のみ。RSCU と同じ構造で `HUMAN_CODON_FREQ_DIFF`（ヒト）・`SCV2_CODON_FREQ_DIFF`（SCV2）の変異前後の差分を追加する。さらに絶対レベルの情報として `HUMAN_CODON_FREQ_BEFORE` / `SCV2_CODON_FREQ_BEFORE`（変異前の生値）も候補だが、特徴量増加とのトレードオフをアブレーションで確認してから判断する
+- **前後塩基の窓幅拡張**: 現状は前後 ±3 塩基。±5 〜 ±7 程度まで拡張して文脈情報を増やす

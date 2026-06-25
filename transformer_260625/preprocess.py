@@ -37,12 +37,10 @@ def load_static_data(silent=False):
     df_freq = pd.read_csv(config.FREQ_CSV, index_col=0)
     df_dissimilarity = pd.read_csv(config.DISSIMILARITY_CSV)
     df_pam250 = pd.read_csv(config.PAM250_CSV, index_col=0)
-    df_log_ratio = pd.read_csv(config.CODON_LOG_RATIO_CSV)
-    df_human_rscu = pd.read_csv(config.HUMAN_CODON_RSCU_CSV)
-    df_scv2_rscu = pd.read_csv(config.SCV2_CODON_RSCU_CSV)
+    df_host_adapt = pd.read_csv(config.HOST_ADAPTATION_CSV)
 
     return preprocess_static_data(
-        df_codon, df_freq, df_dissimilarity, df_pam250, df_log_ratio, df_human_rscu, df_scv2_rscu,
+        df_codon, df_freq, df_dissimilarity, df_pam250, df_host_adapt,
         silent=silent
     )
 
@@ -230,7 +228,7 @@ def save_strain_cache(data, cache_path):
 
 
 def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dissim_dict, pam250_dict,
-                                         log_ratio_dict, human_rscu_dict, scv2_rscu_dict, config_hash):
+                                         host_adapt_dict, config_hash):
     """1つの株の特徴量をチャンクに分割しながら生成し、キャッシュに保存する。
 
     Returns:
@@ -287,7 +285,7 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
                     try:
                         feature_path = Feature_path_fast(
                             path_str, codon_data, freq_dict, dissim_dict, pam250_dict,
-                            log_ratio_dict, human_rscu_dict, scv2_rscu_dict
+                            host_adapt_dict
                         )
                     except Exception:
                         stats['excluded_feature_gen_error'] += 1
@@ -392,10 +390,10 @@ def process_strain_wrapper(args):
 
     # 3. どちらのキャッシュもない場合は新規に再計算
     try:
-        codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = load_static_data(silent=True)
+        codon_data, freq_dict, dissim_dict, pam250_dict, host_adapt_dict = load_static_data(silent=True)
         chunk_paths, stats = process_strain_features_core_chunked(
             strain_name, codon_data, freq_dict, dissim_dict, pam250_dict,
-            log_ratio_dict, human_rscu_dict, scv2_rscu_dict, config_hash
+            host_adapt_dict, config_hash
         )
         return strain_name, chunk_paths, False, stats
     except Exception as e:
@@ -505,7 +503,7 @@ def main():
     num_workers = min(multiprocessing.cpu_count(), config.NUM_PREPROCESS_WORKERS)
     force_print(f"[INFO] Using {num_workers} parallel workers")
 
-    codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = load_static_data()
+    codon_data, freq_dict, dissim_dict, pam250_dict, host_adapt_dict = load_static_data()
     strain_to_strength = compute_strain_strength_from_csv()
     
     # 採取日マッピングをロード

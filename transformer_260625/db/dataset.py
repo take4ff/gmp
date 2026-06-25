@@ -385,12 +385,26 @@ class DBIterableDataset(IterableDataset):
 
                 # 数値特徴量の個別マスク
                 # num構造: [freq(0), hydro(1), charge(2), size(3), blsm(4), pam250(5),
-                #           codon_log_ratio_diff(6), codon_log_ratio_before(7),
-                #           human_codon_rscu_diff(8), scv2_codon_rscu_diff(9)]
+                #           host_distance_log_ratio_diff(6), host_distance_log_ratio_before(7),
+                #           human_RSCU_diff(8), SCV2_RSCU_diff(9),
+                #           optimal_to_optimal(10), non_optimal_to_optimal(11), optimal_to_non_optimal(12),
+                #           is_transition(13), transition_human_RSCU_diff(14), transition_SCV2_RSCU_diff(15),
+                #           CpG_diff(16), UpA_diff(17),
+                #           human_RSCU_before(18), SCV2_RSCU_before(19),
+                #           human_freq_before(20), human_freq_diff(21), SCV2_freq_before(22), SCV2_freq_diff(23),
+                #           human_CAI_before(24), human_CAI_diff(25), SCV2_CAI_before(26), SCV2_CAI_diff(27),
+                #           host_distance_RSCU_ratio_before(28), host_distance_RSCU_ratio_diff(29)]
                 num_mask_keys = [
                     'FREQ', 'HYDRO', 'CHARGE', 'SIZE', 'BLSM', 'PAM250',
-                    'CODON_LOG_RATIO_DIFF', 'CODON_LOG_RATIO_BEFORE',
-                    'HUMAN_CODON_RSCU_DIFF', 'SCV2_CODON_RSCU_DIFF'
+                    'HOST_LOG_RATIO_DIFF', 'HOST_LOG_RATIO_BEFORE',
+                    'HUMAN_RSCU_DIFF', 'SCV2_RSCU_DIFF',
+                    'OPTIMAL_TO_OPTIMAL', 'NON_OPTIMAL_TO_OPTIMAL', 'OPTIMAL_TO_NON_OPTIMAL',
+                    'IS_TRANSITION', 'TRANSITION_HUMAN_RSCU_DIFF', 'TRANSITION_SCV2_RSCU_DIFF',
+                    'CPG_DIFF', 'UPA_DIFF',
+                    'HUMAN_RSCU_BEFORE', 'SCV2_RSCU_BEFORE',
+                    'HUMAN_FREQ_BEFORE', 'HUMAN_FREQ_DIFF', 'SCV2_FREQ_BEFORE', 'SCV2_FREQ_DIFF',
+                    'HUMAN_CAI_BEFORE', 'HUMAN_CAI_DIFF', 'SCV2_CAI_BEFORE', 'SCV2_CAI_DIFF',
+                    'HOST_RSCU_RATIO_BEFORE', 'HOST_RSCU_RATIO_DIFF',
                 ]
                 for i, key in enumerate(num_mask_keys):
                     if config.ABLATION_MASKS[key]:

@@ -347,14 +347,30 @@ def import_strains(usher_dir, max_num=None, max_cooccur=10):
 # 3. 特徴量計算ロジック (Pandas排除・高速化)
 # ==========================================
 
-def preprocess_static_data(df_codon, df_freq, df_dissimilarity, df_pam250, 
-                           df_log_ratio, df_human_rscu, df_scv2_rscu, silent=False):
+_ADAPT_COLS = [
+    'host_distance_log_ratio_diff', 'host_distance_log_ratio_before',
+    'human_RSCU_diff', 'SCV2_RSCU_diff',
+    'optimal_to_optimal', 'non_optimal_to_optimal', 'optimal_to_non_optimal',
+    'is_transition', 'transition_human_RSCU_diff', 'transition_SCV2_RSCU_diff',
+    'CpG_diff', 'UpA_diff',
+    'human_RSCU_before', 'SCV2_RSCU_before',
+    'human_freq_before', 'human_freq_diff',
+    'SCV2_freq_before', 'SCV2_freq_diff',
+    'human_CAI_before', 'human_CAI_diff',
+    'SCV2_CAI_before', 'SCV2_CAI_diff',
+    'host_distance_RSCU_ratio_before', 'host_distance_RSCU_ratio_diff',
+]
+_ADAPT_ZERO = (0.0,) * len(_ADAPT_COLS)
+
+
+def preprocess_static_data(df_codon, df_freq, df_dissimilarity, df_pam250,
+                           df_host_adapt, silent=False):
     """
     DataFrameを高速アクセス可能なPythonネイティブ型(Dict, List)に変換する
     """
     if not silent:
         force_print("[INFO] Converting DataFrames to optimized structures...")
-    
+
     codon_data = {
         'base': df_codon['base'].tolist(),
         'protein': df_codon['protein'].tolist(),
@@ -362,9 +378,9 @@ def preprocess_static_data(df_codon, df_freq, df_dissimilarity, df_pam250,
         'codon': df_codon['codon'].tolist(),
         'codon_pos': df_codon['codon_pos'].tolist()
     }
-    
+
     freq_dict = df_freq.to_dict(orient='list')
-    
+
     dissim_dict = {}
     for row in df_dissimilarity.itertuples():
         dissim_dict[(row.wt, row.mut)] = {
@@ -378,27 +394,18 @@ def preprocess_static_data(df_codon, df_freq, df_dissimilarity, df_pam250,
     for aa1 in df_pam250.index:
         for aa2 in df_pam250.columns:
             pam250_dict[(aa1, aa2)] = float(df_pam250.at[aa1, aa2])
-            
-    log_ratio_dict = {}
-    for row in df_log_ratio.itertuples():
-        log_ratio_dict[(row.before_codon, row.after_codon)] = {
-            'diff': float(row.diff),
-            'before': float(row.before)
-        }
 
-    human_rscu_dict = {}
-    for row in df_human_rscu.itertuples():
-        human_rscu_dict[(row.before_codon, row.after_codon)] = float(row.diff)
+    host_adapt_dict = {}
+    for row in df_host_adapt.itertuples():
+        host_adapt_dict[(row.before_codon, row.after_codon)] = tuple(
+            float(getattr(row, col)) for col in _ADAPT_COLS
+        )
 
-    scv2_rscu_dict = {}
-    for row in df_scv2_rscu.itertuples():
-        scv2_rscu_dict[(row.before_codon, row.after_codon)] = float(row.diff)
-        
-    return codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict
+    return codon_data, freq_dict, dissim_dict, pam250_dict, host_adapt_dict
 
 
 def Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_dict,
-                          log_ratio_dict, human_rscu_dict, scv2_rscu_dict, undo_list=None):
+                          host_adapt_dict, undo_list=None):
     base_pos = int(mutation[1:-1])
     bef = mutation[0]
     aft = mutation[-1]
@@ -452,27 +459,22 @@ def Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_
         hydro = charge = size = blsm = 0.0
     
     pam250 = pam250_dict.get((bef_aa, aft_aa), 0.0)
-    log_ratio_metrics = log_ratio_dict.get((codon, new_codon))
-    log_ratio_diff = log_ratio_metrics['diff'] if log_ratio_metrics else 0.0
-    log_ratio_before = log_ratio_metrics['before'] if log_ratio_metrics else 0.0
-
-    human_rscu_diff = human_rscu_dict.get((codon, new_codon), 0.0)
-    scv2_rscu_diff = scv2_rscu_dict.get((codon, new_codon), 0.0)
+    host_adapt = host_adapt_dict.get((codon, new_codon), _ADAPT_ZERO)
 
     return codon, new_codon, codon_pos, protein, aa_pos, freq, hydro, charge, size, blsm, pam250, \
-           log_ratio_diff, log_ratio_before, human_rscu_diff, scv2_rscu_diff, \
+           host_adapt, \
            left3_base, left2_base, left1_base, right1_base, right2_base, right3_base
 
 
 def Mutation_features_fast(mutations_str, codon_state, freq_dict, dissim_dict, pam250_dict,
-                           log_ratio_dict, human_rscu_dict, scv2_rscu_dict, undo_list=None):
+                           host_adapt_dict, undo_list=None):
     features = []
     for mutation in mutations_str.split(','):
         codon, new_codon, codon_pos, protein, aa_pos, freq, hydro, charge, size, blsm, pam250, \
-        log_ratio_diff, log_ratio_before, human_rscu_diff, scv2_rscu_diff, \
+        host_adapt, \
         left3_base, left2_base, left1_base, right1_base, right2_base, right3_base = \
             Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_dict,
-                                  log_ratio_dict, human_rscu_dict, scv2_rscu_dict, undo_list=undo_list)
+                                  host_adapt_dict, undo_list=undo_list)
         
         codon = codon if codon != 'none' else 'nnn'
         new_codon = new_codon if new_codon != 'none' else 'nnn'
@@ -495,14 +497,13 @@ def Mutation_features_fast(mutations_str, codon_state, freq_dict, dissim_dict, p
         cat_feat = [bef_token, int(mutation[1:-1]), aft_token, codon_pos, 
                     aa_bef_token, aa_pos, aa_aft_token, protein_token, is_synonymous,
                     left3_token, left2_token, left1_token, right1_token, right2_token, right3_token]
-        num_feat = [freq, hydro, charge, size, blsm, pam250,
-                    log_ratio_diff, log_ratio_before, human_rscu_diff, scv2_rscu_diff]
+        num_feat = [freq, hydro, charge, size, blsm, pam250] + list(host_adapt)
         features.append((cat_feat, num_feat))
     return features
 
 
 def Feature_path_fast(mutation_path, codon_state_shared, freq_dict, dissim_dict, pam250_dict,
-                      log_ratio_dict, human_rscu_dict, scv2_rscu_dict):
+                      host_adapt_dict):
     """
     1パス分の処理 (超低メモリ・高速なUndo/Rollbackトランザクション方式)
     codon_state_shared: Wuhan株のcodon_state初期状態。処理中に一時的に変更されるが、finallyで完全に復元される。
@@ -513,7 +514,7 @@ def Feature_path_fast(mutation_path, codon_state_shared, freq_dict, dissim_dict,
         for mutations_str in mutation_path:
             ts_features = Mutation_features_fast(
                 mutations_str, codon_state_shared, freq_dict, dissim_dict, pam250_dict,
-                log_ratio_dict, human_rscu_dict, scv2_rscu_dict, undo_list=undo_list
+                host_adapt_dict, undo_list=undo_list
             )
             path_features.append(ts_features)
     finally:
@@ -527,32 +528,32 @@ def Feature_path_fast(mutation_path, codon_state_shared, freq_dict, dissim_dict,
 # ==========================================
 
 def process_batch_paths(paths, codon_data, freq_dict, dissim_dict, pam250_dict,
-                        log_ratio_dict, human_rscu_dict, scv2_rscu_dict):
+                        host_adapt_dict):
     """シングルプロセスでのバッチ処理 (高速版)"""
     batch_features = []
     for path in paths:
         features = Feature_path_fast(path, codon_data, freq_dict, dissim_dict, pam250_dict,
-                                     log_ratio_dict, human_rscu_dict, scv2_rscu_dict)
+                                     host_adapt_dict)
         batch_features.append(features)
     return batch_features
 
 def process_batch_parallel(paths, codon_data, freq_dict, dissim_dict, pam250_dict,
-                           log_ratio_dict, human_rscu_dict, scv2_rscu_dict):
+                           host_adapt_dict):
     """マルチスレッドでのバッチ処理"""
     results = []
     max_workers = min(multiprocessing.cpu_count(), 8)
-    
+
     chunk_size = (len(paths) + max_workers - 1) // max_workers
     chunks = [paths[i:i + chunk_size] for i in range(0, len(paths), chunk_size)]
-    
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for chunk in chunks:
             futures.append(
                 executor.submit(process_batch_paths, chunk, codon_data, freq_dict, dissim_dict, pam250_dict,
-                                log_ratio_dict, human_rscu_dict, scv2_rscu_dict)
+                                host_adapt_dict)
             )
-        
+
         for future in futures:
             try:
                 results.extend(future.result())
@@ -562,14 +563,14 @@ def process_batch_parallel(paths, codon_data, freq_dict, dissim_dict, pam250_dic
     return results
 
 def get_mutation_data(names, lengths, paths, df_codon, df_freq, df_dissimilarity, df_pam250,
-                      df_log_ratio, df_human_rscu, df_scv2_rscu):
+                      df_host_adapt):
     """
     メイン関数: DataFrameを最適化してから処理を開始
     """
     force_print(f"[INFO] Pre-processing data structures for speed...")
     # ここでDataFrameを高速なDict/Listに変換
-    codon_data, freq_dict, dissim_dict, pam250_dict, log_ratio_dict, human_rscu_dict, scv2_rscu_dict = preprocess_static_data(
-        df_codon, df_freq, df_dissimilarity, df_pam250, df_log_ratio, df_human_rscu, df_scv2_rscu
+    codon_data, freq_dict, dissim_dict, pam250_dict, host_adapt_dict = preprocess_static_data(
+        df_codon, df_freq, df_dissimilarity, df_pam250, df_host_adapt
     )
 
     force_print(f"[INFO] Generating mutation features for {len(paths)} paths (Incremental Cache Mode)...")
@@ -603,10 +604,10 @@ def get_mutation_data(names, lengths, paths, df_codon, df_freq, df_dissimilarity
             # 高速化されたデータ構造を渡す
             if config.ENABLE_PARALLEL_PROCESSING:
                 batch_data = process_batch_parallel(batch_paths, codon_data, freq_dict, dissim_dict, pam250_dict,
-                                                     log_ratio_dict, human_rscu_dict, scv2_rscu_dict)
+                                                     host_adapt_dict)
             else:
                 batch_data = process_batch_paths(batch_paths, codon_data, freq_dict, dissim_dict, pam250_dict,
-                                                 log_ratio_dict, human_rscu_dict, scv2_rscu_dict)
+                                                 host_adapt_dict)
             
             save_batch_cache(batch_data, cache_path)
             all_features_paths.extend(batch_data)
@@ -942,10 +943,8 @@ def prepare_all_data():
         df_codon = pd.read_csv(config.CODON_CSV)
         df_pam250 = pd.read_csv(config.PAM250_CSV, index_col=0)
         
-        # 新コドン特徴量の読み込み
-        df_log_ratio = pd.read_csv(config.CODON_LOG_RATIO_CSV)
-        df_human_rscu = pd.read_csv(config.HUMAN_CODON_RSCU_CSV)
-        df_scv2_rscu = pd.read_csv(config.SCV2_CODON_RSCU_CSV)
+        # ホスト適応特徴量の読み込み
+        df_host_adapt = pd.read_csv(config.HOST_ADAPTATION_CSV)
         
         # フィルタリング（重複除去）
         df_unique = filter_unique(all_names, all_lengths, all_paths, all_strains)
@@ -986,20 +985,17 @@ def prepare_all_data():
         force_print("[INFO] Processing Train features...")
         _, _, train_feats = get_mutation_data(
             train_df['name'].tolist(), train_df['original_len'].tolist(), train_df['path'].tolist(),
-            df_codon, df_freq, df_dissimilarity, df_pam250,
-            df_log_ratio, df_human_rscu, df_scv2_rscu
+            df_codon, df_freq, df_dissimilarity, df_pam250, df_host_adapt
         )
         force_print("[INFO] Processing Validation features...")
         _, _, valid_feats = get_mutation_data(
             valid_df['name'].tolist(), valid_df['original_len'].tolist(), valid_df['path'].tolist(),
-            df_codon, df_freq, df_dissimilarity, df_pam250,
-            df_log_ratio, df_human_rscu, df_scv2_rscu
+            df_codon, df_freq, df_dissimilarity, df_pam250, df_host_adapt
         )
         force_print("[INFO] Processing Test features...")
         _, _, test_feats = get_mutation_data(
             test_df['name'].tolist(), test_df['original_len'].tolist(), test_df['path'].tolist(),
-            df_codon, df_freq, df_dissimilarity, df_pam250,
-            df_log_ratio, df_human_rscu, df_scv2_rscu
+            df_codon, df_freq, df_dissimilarity, df_pam250, df_host_adapt
         )
         
         # 流行度別の分布を表示

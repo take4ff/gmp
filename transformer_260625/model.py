@@ -88,14 +88,21 @@ class ALibiPositionalBias(nn.Module):
 
 
 class InputEmbedding(nn.Module):
-    """15のカテゴリ特徴量 + 10の数値特徴量を受け取り、FEATURE_DIM次元に射影
+    """15のカテゴリ特徴量 + 30の数値特徴量を受け取り、FEATURE_DIM次元に射影
 
     カテゴリ特徴量 (15): base_before[0], position[1], base_after[2], codon_pos[3],
                          aa_before[4], aa_pos[5], aa_after[6], region[7], synonymous[8],
                          left3[9], left2[10], left1[11], right1[12], right2[13], right3[14]
-    数値特徴量    (10): freq, hydro, charge, size, blsm, pam250,
-                         codon_log_ratio_diff, codon_log_ratio_before,
-                         human_codon_rscu_diff, scv2_codon_rscu_diff
+    数値特徴量    (30): freq[0], hydro[1], charge[2], size[3], blsm[4], pam250[5],
+                         host_distance_log_ratio_diff[6], host_distance_log_ratio_before[7],
+                         human_RSCU_diff[8], SCV2_RSCU_diff[9],
+                         optimal_to_optimal[10], non_optimal_to_optimal[11], optimal_to_non_optimal[12],
+                         is_transition[13], transition_human_RSCU_diff[14], transition_SCV2_RSCU_diff[15],
+                         CpG_diff[16], UpA_diff[17],
+                         human_RSCU_before[18], SCV2_RSCU_before[19],
+                         human_freq_before[20], human_freq_diff[21], SCV2_freq_before[22], SCV2_freq_diff[23],
+                         human_CAI_before[24], human_CAI_diff[25], SCV2_CAI_before[26], SCV2_CAI_diff[27],
+                         host_distance_RSCU_ratio_before[28], host_distance_RSCU_ratio_diff[29]
     """
     def __init__(self):
         super().__init__()

@@ -102,7 +102,17 @@ def main():
                          'Charge': f"{num_feat[2]:.2f}", 'Size': f"{num_feat[3]:.2f}",
                          'BLSM62': f"{num_feat[4]:.1f}", 'PAM250': f"{num_feat[5]:.1f}",
                          'LogRatioDiff': f"{num_feat[6]:.4f}", 'LogRatioBef': f"{num_feat[7]:.4f}",
-                         'RSCU_Human': f"{num_feat[8]:.4f}", 'RSCU_SCV2': f"{num_feat[9]:.4f}"})
+                         'RSCU_Human_Diff': f"{num_feat[8]:.4f}", 'RSCU_SCV2_Diff': f"{num_feat[9]:.4f}",
+                         'Opt2Opt': f"{num_feat[10]:.0f}", 'NonOpt2Opt': f"{num_feat[11]:.0f}",
+                         'Opt2NonOpt': f"{num_feat[12]:.0f}", 'IsTrans': f"{num_feat[13]:.0f}",
+                         'TransHumanRSCU': f"{num_feat[14]:.4f}", 'TransSCV2RSCU': f"{num_feat[15]:.4f}",
+                         'CpGDiff': f"{num_feat[16]:.0f}", 'UpADiff': f"{num_feat[17]:.0f}",
+                         'HumanRSCUBef': f"{num_feat[18]:.4f}", 'SCV2RSCUBef': f"{num_feat[19]:.4f}",
+                         'HumanFreqBef': f"{num_feat[20]:.2f}", 'HumanFreqDiff': f"{num_feat[21]:.2f}",
+                         'SCV2FreqBef': f"{num_feat[22]:.2f}", 'SCV2FreqDiff': f"{num_feat[23]:.2f}",
+                         'HumanCAIBef': f"{num_feat[24]:.4f}", 'HumanCAIDiff': f"{num_feat[25]:.4f}",
+                         'SCV2CAIBef': f"{num_feat[26]:.4f}", 'SCV2CAIDiff': f"{num_feat[27]:.4f}",
+                         'RSCURatioBef': f"{num_feat[28]:.4f}", 'RSCURatioDiff': f"{num_feat[29]:.4f}"})
 
     df_cat      = pd.DataFrame(cat_rows)
     df_num      = pd.DataFrame(num_rows)
