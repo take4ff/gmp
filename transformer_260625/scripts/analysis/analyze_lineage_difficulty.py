@@ -236,7 +236,11 @@ def main():
     # ----------------------------------------------------------------
     rng = np.random.default_rng(42)
 
-    def scatter_with_marginals(x_vals, x_label, x_log, filename, top_df):
+    def scatter_with_marginals(source_df, x_vals, x_label, x_log, filename, top_df,
+                               color_col='difficulty_score',
+                               color_label='Difficulty score',
+                               cmap='RdYlGn_r', vmin=None, vmax=None,
+                               title_ref_col=None):
         fig = plt.figure(figsize=(11, 9))
         gs  = fig.add_gridspec(2, 2, width_ratios=[4, 1], height_ratios=[1, 4],
                                hspace=0.05, wspace=0.05)
@@ -245,17 +249,22 @@ def main():
         ax_right = fig.add_subplot(gs[1, 1], sharey=ax_main)
 
         # Y: phylo_dist (integer) + jitter
-        y_raw    = df['phylo_dist'].values.astype(float)
+        y_raw    = source_df['phylo_dist'].values.astype(float)
         y_jitter = y_raw + rng.uniform(-0.35, 0.35, len(y_raw))
+
+        if vmin is None and color_col == 'difficulty_score':
+            vmin = 0
+        if vmax is None and color_col == 'difficulty_score':
+            vmax = 1
 
         sc = ax_main.scatter(
             x_vals, y_jitter,
-            s=np.log1p(df['n_test_samples']) * 6,
-            c=df['difficulty_score'], cmap='RdYlGn_r',
-            vmin=0, vmax=1,
+            s=np.log1p(source_df['n_test_samples']) * 6,
+            c=source_df[color_col], cmap=cmap,
+            vmin=vmin, vmax=vmax,
             alpha=0.65, edgecolors='none',
         )
-        plt.colorbar(sc, ax=ax_right, label='Difficulty score', fraction=0.8, pad=0.1)
+        plt.colorbar(sc, ax=ax_right, label=color_label, fraction=0.8, pad=0.1)
 
         # 上位10系統にラベル
         top_x = x_vals[top_df.index]
@@ -264,10 +273,9 @@ def main():
             ax_main.annotate(row.lineage, (xi, yi), fontsize=7, alpha=0.9,
                              xytext=(4, 2), textcoords='offset points')
 
-        r_val, p_val = stats.pearsonr(x_vals, df['phylo_dist'])
         ax_main.set_ylabel('Phylo distance to nearest train lineage')
         ax_main.set_xlabel(x_label)
-        ax_main.set_yticks(sorted(df['phylo_dist'].unique()))
+        ax_main.set_yticks(sorted(source_df['phylo_dist'].unique()))
         ax_main.grid(linestyle='--', alpha=0.3)
 
         # 上部ヒストグラム
@@ -277,15 +285,21 @@ def main():
         ax_top.grid(linestyle='--', alpha=0.3)
 
         # 右部ヒストグラム（phylo_dist の整数分布）
-        dist_counts = df['phylo_dist'].value_counts().sort_index()
+        dist_counts = source_df['phylo_dist'].value_counts().sort_index()
         ax_right.barh(dist_counts.index, dist_counts.values, height=0.6,
                       color='steelblue', alpha=0.7)
         ax_right.set_xlabel('Count')
         plt.setp(ax_right.get_yticklabels(), visible=False)
         ax_right.grid(linestyle='--', alpha=0.3)
 
-        fig.suptitle(f'Lineage prediction difficulty  (Pearson r={r_val:.3f}, p={p_val:.3e}, n={len(df)})',
-                     y=0.98, fontsize=11)
+        ref_col = title_ref_col if title_ref_col and title_ref_col in source_df.columns else 'phylo_dist'
+        ref_label = title_ref_col if title_ref_col else 'phylo_dist'
+        try:
+            r_val, p_val = stats.pearsonr(x_vals, source_df[ref_col])
+            title_str = f'Pearson r={r_val:.3f}, p={p_val:.3e} (x vs {ref_label}), n={len(source_df)}'
+        except Exception:
+            title_str = f'Pearson r=N/A (x vs {ref_label}), n={len(source_df)}'
+        fig.suptitle(f'Lineage prediction difficulty  ({title_str})', y=0.98, fontsize=11)
         if x_log:
             ax_main.set_xscale('log')
             ax_top.set_xscale('log')
@@ -299,6 +313,7 @@ def main():
     # 図A: Shannon entropy H (bits)
     out_a = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy.png')
     scatter_with_marginals(
+        df,
         df['target_entropy_bits'].values,
         'Shannon entropy H  (bits)',
         x_log=False,
@@ -309,6 +324,7 @@ def main():
     # 図B: n_unique_positions (log10 scale)
     out_b = os.path.join(output_dir, 'lineage_difficulty_scatter_unique.png')
     scatter_with_marginals(
+        df,
         (df['n_unique_positions'] + 1).values.astype(float),
         'Unique target mutation positions  (log10 scale)',
         x_log=True,
@@ -323,7 +339,12 @@ def main():
         metrics_df = pd.read_csv(args.metrics)
         # 系統名カラムを探す
         name_col   = next((c for c in metrics_df.columns if 'lineage' in c.lower()), None)
-        recall_col = next((c for c in metrics_df.columns if 'recall' in c.lower()), None)
+        # 優先順: position_hit_rate → 他の hit_rate → recall
+        recall_col = (
+            next((c for c in metrics_df.columns if 'position_hit_rate' in c.lower()), None)
+            or next((c for c in metrics_df.columns if 'hit_rate' in c.lower()), None)
+            or next((c for c in metrics_df.columns if 'recall' in c.lower()), None)
+        )
         if name_col and recall_col:
             merged = df.merge(metrics_df[[name_col, recall_col]].rename(
                 columns={name_col: 'lineage', recall_col: 'recall'}), on='lineage', how='inner')
@@ -339,26 +360,65 @@ def main():
                     ax.scatter(xv, merged['recall'],
                                s=np.log1p(merged['n_test_samples']) * 6,
                                alpha=0.6, edgecolors='none', c='steelblue')
-                    r, p = stats.pearsonr(xv, merged['recall'])
-                    z = np.polyfit(xv, merged['recall'], 1)
-                    xline = np.linspace(xv.min(), xv.max(), 100)
-                    ax.plot(xline, np.polyval(z, xline), 'r--', lw=1.2)
                     xl = f'log10({xlabel})' if xcol == 'n_unique_positions' else xlabel
                     ax.set_xlabel(xl)
-                    ax.set_ylabel('Recall (lineage-level)')
-                    ax.set_title(f'r={r:.3f}, p={p:.3e}')
+                    ax.set_ylabel(f'{recall_col} (lineage-level)')
                     ax.grid(linestyle='--', alpha=0.3)
+                    try:
+                        r, p = stats.pearsonr(xv, merged['recall'])
+                        z = np.polyfit(xv, merged['recall'], 1)
+                        xline = np.linspace(xv.min(), xv.max(), 100)
+                        ax.plot(xline, np.polyval(z, xline), 'r--', lw=1.2)
+                        ax.set_title(f'r={r:.3f}, p={p:.3e}')
+                    except Exception:
+                        r, p = float('nan'), float('nan')
+                        ax.set_title('r=N/A (constant input)')
                 plt.suptitle('Prediction difficulty vs Recall', fontsize=12)
                 plt.tight_layout()
                 out2 = os.path.join(output_dir, 'lineage_difficulty_vs_recall.png')
                 plt.savefig(out2, dpi=150)
                 plt.close()
                 print(f"[INFO] Saved: {out2}")
-                print(f"\n[相関サマリ]")
+                print(f"\n[相関サマリ] ({recall_col})")
                 for xcol, xlabel in cols:
                     xv = np.log10(merged[xcol] + 1) if xcol == 'n_unique_positions' else merged[xcol]
-                    r, p = stats.pearsonr(xv, merged['recall'])
-                    print(f"  {xlabel:<35} vs recall: r={r:.3f}, p={p:.3e}")
+                    try:
+                        r, p = stats.pearsonr(xv, merged['recall'])
+                        print(f"  {xlabel:<35} vs {recall_col}: r={r:.3f}, p={p:.3e}")
+                    except Exception:
+                        print(f"  {xlabel:<35} vs {recall_col}: r=N/A (constant input)")
+
+                # 図C/D: recall カラーリング版の scatter_with_marginals
+                merged_sorted = merged.sort_values('difficulty_score', ascending=False).reset_index(drop=True)
+                top10_merged = merged_sorted.head(10)
+
+                out_c = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy_recall.png')
+                scatter_with_marginals(
+                    merged_sorted,
+                    merged_sorted['target_entropy_bits'].values,
+                    'Shannon entropy H  (bits)',
+                    x_log=False,
+                    filename=out_c,
+                    top_df=top10_merged,
+                    color_col='recall',
+                    color_label=f'{recall_col} (lineage-level)',
+                    cmap='RdYlGn',
+                    title_ref_col='recall',
+                )
+
+                out_d = os.path.join(output_dir, 'lineage_difficulty_scatter_unique_recall.png')
+                scatter_with_marginals(
+                    merged_sorted,
+                    (merged_sorted['n_unique_positions'] + 1).values.astype(float),
+                    'Unique target mutation positions  (log10 scale)',
+                    x_log=True,
+                    filename=out_d,
+                    top_df=top10_merged,
+                    color_col='recall',
+                    color_label=f'{recall_col} (lineage-level)',
+                    cmap='RdYlGn',
+                    title_ref_col='recall',
+                )
     else:
         if args.metrics:
             print(f"[WARNING] metrics file not found: {args.metrics}")

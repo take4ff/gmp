@@ -6,27 +6,6 @@ DBリビルドが必要な設定変更: `CONTEXT_WINDOW`, `NUM_CHEM_FEATURES`, `
 
 ---
 
-## グループ A: 最優先
-
-| # | 実験 | 変更設定 | 選択肢 | DBリビルド |
-|---|---|---|---|---|
-| A1 | ホスト適応24特徴量 | `ABLATION_MASKS`: `HOST_LOG_RATIO_DIFF`〜`HOST_RSCU_RATIO_DIFF` を一括 | 全 `False`(あり) / 全 `True`(なし) | 不要 |
-
----
-
-## グループ B: 特徴量アブレーション
-
-| # | 実験 | 変更設定 | 選択肢 | DBリビルド |
-|---|---|---|---|---|
-| B1 | 累積変異カウント | `ABLATION_MASKS`: `CUM_SYN`, `CUM_NONSYN` | 両 `False`(あり) / 両 `True`(なし) / 個別 | 不要 |
-| B2 | コンテキスト塩基（一括） | `ABLATION_MASKS`: `MUTATION_CONTEXT` | `False` / `True` | 不要 |
-| B3 | コンテキスト窓幅 | `CONTEXT_WINDOW` | `3` / `5` | **必要** |
-| B4 | ホスト適応グループ別 | RSCU系 / CAI系 / CpG系 / Transition系 などグループ単位でOFF | グループ別 | 不要 |
-
----
-
-->グループA,Bはなしで。損失重みやモデル内部重みで評価。E3優先。
-
 ## グループ C: アーキテクチャ
 
 | # | 実験 | 変更設定 | 選択肢 | DBリビルド |
@@ -37,8 +16,7 @@ DBリビルドが必要な設定変更: `CONTEXT_WINDOW`, `NUM_CHEM_FEATURES`, `
 | C4 | Co-Attn Heads | `CO_ATTN_N_HEADS` | `4` / `8` | 不要 |
 | C5 | Co-Attn 層数 | `CO_ATTN_N_LAYERS` | `1` / `2` | 不要 |
 | C6 | Co-Attn 内部次元 | `CO_ATTN_DIM` | `256` / `512` | 不要 |
-| C7 | 正規化位置 | `NORM_FIRST` | `True`(Pre-Norm) / `False`(Post-Norm) | 不要 |
-| C8 | FFN 倍率 | `FFN_RATIO` | `2` / `4` / `8` | 不要 |
+| C8 | FFN 倍率 | `FFN_RATIO` | `4` / `8` | 不要 |
 | C9 | 活性化関数 | `ACTIVATION` | `'gelu'` / `'relu'` / `'silu'` | 不要 |
 | C9 | Substitution Head | `USE_SUBSTITUTION_HEAD` | `False` / `True` | 不要 |
 | C10 | Autoregressive Decoder | `USE_AUTOREGRESSIVE_DECODER` | `False` / `True` | 不要 |
@@ -80,3 +58,13 @@ val / test:
   top1/3/5_position_hit_rate_pct
   top1/3/5_aa_pos_hit_rate_pct
 ```
+
+nohup
+0: ひとまず
+1: mlm
+2: clm
+3: default
+4: CO_ATTN_N_HEADS 8
+5: CO_ATTN_N_LAYERS 2
+6: CO_ATTN_DIM 512
+7: FFN_RATIO 8

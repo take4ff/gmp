@@ -22,12 +22,14 @@ import os
 import time
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import numpy as np
 from datetime import datetime
+from tqdm import tqdm
 
-from .. import config
-from ..model import HierarchicalTransformer
-from ..utils.logging import force_print
+from ... import config
+from ...model import HierarchicalTransformer
+from ...utils.logging import force_print
 
 
 # ─────────────────────────────────────────────────────────────
@@ -156,16 +158,21 @@ def run_pretraining():
         force_print("[INFO] USE_PRETRAINING=False — スキップします。")
         return
 
-    mode        = getattr(config, 'PRETRAINING_MODE', 'mlm').lower()
-    mask_ratio  = getattr(config, 'PRETRAINING_MASK_RATIO', 0.15)
-    epochs      = getattr(config, 'PRETRAINING_EPOCHS', 5)
-    lr          = getattr(config, 'PRETRAINING_LR', 1e-4)
+    mode           = getattr(config, 'PRETRAINING_MODE', 'mlm').lower()
+    mask_ratio     = getattr(config, 'PRETRAINING_MASK_RATIO', 0.15)
+    epochs         = getattr(config, 'PRETRAINING_EPOCHS', 5)
+    lr             = getattr(config, 'PRETRAINING_LR', 1e-4)
+    warmup_epochs  = getattr(config, 'PRETRAINING_WARMUP_EPOCHS', 1)
+    eta_min        = getattr(config, 'PRETRAINING_ETA_MIN', 1e-6)
 
-    force_print(f"[INFO] 事前学習開始: mode={mode}, mask_ratio={mask_ratio}, epochs={epochs}, lr={lr}")
+    force_print(
+        f"[INFO] 事前学習開始: mode={mode}, mask_ratio={mask_ratio}, "
+        f"epochs={epochs}, lr={lr}, warmup={warmup_epochs}, eta_min={eta_min}"
+    )
 
     # データローダー構築
-    from ..db.connection import check_db_exists, get_db_path
-    from ..db.dataset import create_db_dataloader
+    from ...db.connection import check_db_exists, get_db_path
+    from ...db.dataset import create_db_dataloader
 
     db_exists, msg = check_db_exists()
     if not db_exists:
@@ -188,6 +195,31 @@ def run_pretraining():
         pt_model.parameters(), lr=lr, weight_decay=config.WEIGHT_DECAY
     )
 
+    # LinearWarmup + CosineAnnealing（main.py と同じパターン）
+    if warmup_epochs > 0 and epochs > warmup_epochs:
+        warmup_sched = optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=1.0 / max(warmup_epochs, 1),
+            end_factor=1.0,
+            total_iters=warmup_epochs,
+        )
+        cosine_sched = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(epochs - warmup_epochs, 1),
+            eta_min=eta_min,
+        )
+        scheduler = optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_sched, cosine_sched],
+            milestones=[warmup_epochs],
+        )
+        force_print(f"[INFO] Scheduler: LinearWarmup({warmup_epochs} epochs) + CosineAnnealingLR(eta_min={eta_min})")
+    elif epochs > 0:
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=eta_min)
+        force_print(f"[INFO] Scheduler: CosineAnnealingLR(eta_min={eta_min})")
+    else:
+        scheduler = None
+
     ce_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
 
     # 出力ディレクトリ
@@ -200,7 +232,8 @@ def run_pretraining():
         n_batches  = 0
         t_start    = time.time()
 
-        for (x_cat, x_num, mask), y_batch, *_ in train_loader:
+        pbar = tqdm(train_loader, desc=f"Pretrain Epoch {epoch+1}/{epochs}", dynamic_ncols=True)
+        for (x_cat, x_num, mask), y_batch, *_ in pbar:
             x_cat = x_cat.to(config.DEVICE)
             x_num = x_num.to(config.DEVICE)
             mask  = mask.to(config.DEVICE)  # [B, T] True=PAD
@@ -274,10 +307,15 @@ def run_pretraining():
 
             total_loss += batch_loss.item()
             n_batches  += 1
+            pbar.set_postfix(loss=f"{total_loss / n_batches:.4f}")
 
         elapsed = time.time() - t_start
         avg_loss = total_loss / max(n_batches, 1)
-        force_print(f"[Pretrain] Epoch {epoch+1}/{epochs} — loss={avg_loss:.4f} ({elapsed:.1f}s)")
+        current_lr = optimizer.param_groups[0]['lr']
+        force_print(f"[Pretrain] Epoch {epoch+1}/{epochs} — loss={avg_loss:.4f}, lr={current_lr:.2e} ({elapsed:.1f}s)")
+
+        if scheduler is not None:
+            scheduler.step()
 
         # チェックポイント保存
         ckpt_path = os.path.join(
@@ -289,6 +327,7 @@ def run_pretraining():
             'backbone_state_dict': backbone.state_dict(),
             'pt_model_state_dict': pt_model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
             'loss': avg_loss,
             'mode': mode,
         }, ckpt_path)

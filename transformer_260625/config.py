@@ -491,11 +491,13 @@ AR_DECODER_HEADS           = 4   # Decoder ヘッド数
 
 # --- Item 3: MLM / CLM Pretraining ---
 # 事前学習モードを有効にする (scripts/pretrain.py で使用)
-USE_PRETRAINING        = False
+USE_PRETRAINING        = True
 PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
 PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
-PRETRAINING_EPOCHS     = 5       # 事前学習エポック数
-PRETRAINING_LR         = 1e-4    # 事前学習の学習率
+PRETRAINING_EPOCHS        = 5       # 事前学習エポック数
+PRETRAINING_LR            = 1e-4    # 事前学習の学習率（ピーク値）
+PRETRAINING_WARMUP_EPOCHS = 1       # LinearWarmup エポック数（0 で無効）
+PRETRAINING_ETA_MIN       = 1e-6    # CosineAnnealing の最小学習率
 
 # --- Item 8: ESM-2 外部タンパク質言語モデル特徴量 ---
 # ESM-2 埋め込みを追加特徴量として使用 (実際の抽出は preprocess.py で行う)

@@ -667,7 +667,7 @@ def save_strain_metrics_csv(details, output_dir, prefix="test"):
 
 
 def save_lineage_metrics_csv(details, output_dir, prefix="test"):
-    """系統（Pango上位2階層）単位で精度・予測難易度（エントロピー）を集計したCSVを保存する。"""
+    """系統（フルPango名）単位で精度・予測難易度（エントロピー）を集計したCSVを保存する。"""
     import math
     from collections import Counter
 
@@ -679,8 +679,7 @@ def save_lineage_metrics_csv(details, output_dir, prefix="test"):
 
     for r in details:
         strain = r.get('strain', 'unknown') or 'unknown'
-        parts = strain.split('.')
-        lineage = '.'.join(parts[:2]) if len(parts) >= 2 else parts[0]
+        lineage = strain
 
         if lineage not in lineage_stats:
             lineage_stats[lineage] = {

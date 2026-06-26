@@ -108,8 +108,8 @@ def plot_cooccurrence_distribution(output_dir=None):
 
     # 2022年前
     ax = axes[0]
-    ax.bar(x_pre, y_pre_le5, label='Target Co-occur $\leq$ 5', color='#2b5c8f', alpha=0.85)
-    ax.bar(x_pre, y_pre_gt5, bottom=y_pre_le5, label='Target Co-occur $\geq$ 6', color='#d95f02', alpha=0.85)
+    ax.bar(x_pre, y_pre_le5, label=r'Target Co-occur $\leq$ 5', color='#2b5c8f', alpha=0.85)
+    ax.bar(x_pre, y_pre_gt5, bottom=y_pre_le5, label=r'Target Co-occur $\geq$ 6', color='#d95f02', alpha=0.85)
     ax.set_title('Max Co-occurrence Distribution in Input Path (Before 2022)', fontsize=14)
     ax.set_xlabel('Max Co-occurrence', fontsize=11)
     ax.set_ylabel('Sample Count', fontsize=11)
@@ -121,8 +121,8 @@ def plot_cooccurrence_distribution(output_dir=None):
 
     # 2022年以降
     ax = axes[1]
-    ax.bar(x_post, y_post_le5, label='Target Co-occur $\leq$ 5', color='#2b5c8f', alpha=0.85)
-    ax.bar(x_post, y_post_gt5, bottom=y_post_le5, label='Target Co-occur $\geq$ 6', color='#d95f02', alpha=0.85)
+    ax.bar(x_post, y_post_le5, label=r'Target Co-occur $\leq$ 5', color='#2b5c8f', alpha=0.85)
+    ax.bar(x_post, y_post_gt5, bottom=y_post_le5, label=r'Target Co-occur $\geq$ 6', color='#d95f02', alpha=0.85)
     ax.set_title('Max Co-occurrence Distribution in Input Path (2022 and After)', fontsize=14)
     ax.set_xlabel('Max Co-occurrence', fontsize=11)
     ax.set_ylabel('Sample Count', fontsize=11)
