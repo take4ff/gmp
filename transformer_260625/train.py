@@ -62,6 +62,11 @@ def train_one_epoch(model, dataloader, optimizer, loss_fn, loss_wrapper=None):
                 losses['codon_pos'], # [4]
                 losses['synonymous'],# [5]
             )
+            # MultiTaskLoss は6タスク固定のため substitution head 損失を別途加算
+            if getattr(config, 'USE_SUBSTITUTION_HEAD', False):
+                w_base = getattr(config, 'LOSS_WEIGHT_BASE_AFTER', 0.05)
+                w_aa   = getattr(config, 'LOSS_WEIGHT_AA_AFTER',   0.05)
+                total_loss = total_loss + w_base * losses['base_after'] + w_aa * losses['aa_after']
         else:
             total_loss = losses['total']
 

@@ -124,7 +124,7 @@ DB_WRITE_BATCH_SIZE = 10000     # DB書き込み時のバッチサイズ
 WEIGHT_DECAY = 0.01
 
 # --- 保存・ログ設定 ---
-SAVE_PREDICTIONS = True         # 予測結果の詳細をファイルに出力するか
+SAVE_PREDICTIONS = False        # 予測結果の詳細をファイルに出力するか（数100MB の CSV 書き込みのため通常は False）
 SAVE_STRAIN_INFO = True         # 使用した株の情報を保存するか（USE_DB=False 時のみ有効）
 SAVE_STRAIN_METRICS = False     # 株単位の精度CSV（1万株×複数指標で巨大、詳細分析時のみ）
 
@@ -195,15 +195,15 @@ N_HEADS = 4
 N_LAYERS = 4
 DROPOUT = 0.1
 
-# --- Conv1D局所特徴抽出の有無（Ablation Study用） ---
+# --- Conv1D局所特徴抽出の有無 ---
+# 実験結果: 精度向上なし。CONTEXT_WINDOW による前後塩基埋め込みで局所文脈は十分カバー済み。
 # Trueの場合: Conv1D層を使用して局所的な文脈情報を抽出
-# Falseの場合: Conv1D層をスキップ（ベースラインとの比較用）
 USE_LOCAL_CONV1D = False
 LOCAL_CONTEXT_KERNEL_SIZE = 3
 
-# --- Origin Attentionの有無（Ablation Study用） ---
+# --- Origin Attentionの有無 ---
+# 実験結果: 精度向上なし。武漢株との差分は変異特徴量として既に入力に含まれている。
 # Trueの場合: 原点（Wuhan株）を常に参照するCross-Attentionを使用
-# Falseの場合: Origin Attentionをスキップ
 USE_ORIGIN_ATTENTION = False
 ORIGIN_ATTENTION_HEADS = 4  # Origin Attentionのヘッド数
 
@@ -235,9 +235,9 @@ USE_SHARED_TRUNK = False
 #    CO_ATTN_DIM は CO_ATTN_N_HEADS で割り切れる必要あり
 # ② CO_ATTN_N_LAYERS: 1=現状と同じ（Cross-Attention のみ）。
 #    2以上にすると最初の N-1 層で Self-Attention（変異間相互作用）、最終層で Cross-Attention 集約
-CO_ATTN_N_HEADS  = 4       # 共起 Attention のヘッド数（デフォルト = N_HEADS = 4）
+CO_ATTN_N_HEADS  = N_HEADS        # 共起 Attention のヘッド数（デフォルト = N_HEADS）
 CO_ATTN_N_LAYERS = 1             # 共起 Attention の層数
-CO_ATTN_DIM      = 256  # 共起 Attention の内部次元（デフォルト = FEATURE_DIM = 256）
+CO_ATTN_DIM      = FEATURE_DIM   # 共起 Attention の内部次元（デフォルト = FEATURE_DIM）
 
 # ③ USE_FLAT_COATTN: 共起集約をスキップし、全変異を独立トークンとして Transformer に渡す
 #    [B, T, C, F] → [B, T*C, F] + 2D 位置エンコーディング（タイムステップ + 共起内インデックス）
@@ -245,7 +245,7 @@ CO_ATTN_DIM      = 256  # 共起 Attention の内部次元（デフォルト = F
 USE_FLAT_COATTN = False
 
 # --- 訓練設定 ---
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 LEARNING_RATE = 1e-4
 EPOCHS = 15              # Soft Target収束のため余裕を持たせる
 TOP_K_EVAL = 1 # Top-5でのRecallなども見たい場合はここを変更
@@ -289,10 +289,10 @@ HYBRID_ALPHA = 1.0
 SOFT_TARGET_TEMPERATURE = 1.0
 
 # --- 損失関数設定 ---
-# 実験結果: 中規模データでFLはCEより精度低下、大規模では維持したため cbce を採用
-#   'cbce'    : Class-Balanced CrossEntropyLoss（推奨：安定性高、Soft Targetと相性良好）
-#   'cb_focal': Class-Balanced + FocalLoss アプローチA（大規模データで再試する場合）
-#   'ce'      : 通常のCrossEntropyLoss（デバッグ・ベースライン用）
+# 実験結果: CE が最も精度が高く安定。cbce・focal は精度改善なし。
+#   'ce'      : 通常のCrossEntropyLoss（推奨）
+#   'cbce'    : Class-Balanced CrossEntropyLoss
+#   'cb_focal': Class-Balanced + FocalLoss（大規模データで再試する場合）
 # 選択肢: 'ce', 'wce', 'cbce', 'focal', 'cb_focal'
 LOSS_FUNCTION_TYPE = 'ce'
 FOCAL_LOSS_GAMMA = 1.0           # focal/cb_focal用
@@ -347,7 +347,7 @@ EARLY_STOPPING_PATIENCE = 7   # [260417] エポック増加に合わせて余裕
 # --- 評価・可視化のハードコード解除 (新規追加) ---
 EVAL_TOP_KS = (1, 3, 5)             # Top-K 評価で計算する K のリスト
 PLOT_TOP_N_POSITIONS = 40           # 塩基位置の Recall でプロットする上位 N 件
-SAVE_ATTENTION_HEATMAP = True       # Attentionヒートマップを保存するかどうか
+SAVE_ATTENTION_HEATMAP = False      # Attentionヒートマップを保存するかどうか（可視化のみ・学習時間に影響）
 
 # --- strength ヘッドの損失関数 ---
 # 'mse'  : 均乗誤差（現状・外れ値に弱い）
@@ -359,7 +359,7 @@ STRENGTH_HUBER_DELTA = 1.0  # Huber Lossの間屠パラメータ (huber選択時
 # --- ECE (期待キャリブレーション誤差) 設定 ---
 # True の場合: evaluate() 内で ECE を計算し、final_metrics_by_ts に追加する
 # 安定性のため n_bins 分割した単純隣値分割方式 (Equal-Width Binning)
-SAVE_ECE = True        # True | False
+SAVE_ECE = False       # True | False（学習ループ内で全サンプル計算するため重い。分析時のみ True に）
 ECE_N_BINS = 10        # ビン数 (10 が標準定義)
 
 # ============================================================
