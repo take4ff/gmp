@@ -121,8 +121,8 @@ def prepare_data():
             f"{data_info['val_count']} validation, {data_info['test_count']} test samples."
         )
 
-        # SPLIT_MODE='date' かつ FORCE_DATE_REASSIGN=True のとき split を再計算
-        if (getattr(config, 'SPLIT_MODE', 'timestep') == 'date'
+        # SPLIT_MODE='date'/'walk_forward' かつ FORCE_DATE_REASSIGN=True のとき split を再計算
+        if (getattr(config, 'SPLIT_MODE', 'timestep') in ('date', 'walk_forward')
                 and getattr(config, 'FORCE_DATE_REASSIGN', False)):
             force_print("[INFO] FORCE_DATE_REASSIGN=True: re-assigning splits by date...")
             from .db.queries import assign_date_splits
@@ -179,6 +179,26 @@ def build_components(class_counts_dict=None):
         Tuple[nn.Module, nn.Module/dict, Optional[MultiTaskLoss], Optimizer, Optional[Scheduler]]
     """
     model = HierarchicalTransformer().to(config.DEVICE)
+
+    # 事前学習済み backbone 重みのロード
+    if getattr(config, 'USE_PRETRAINING', False):
+        mode = getattr(config, 'PRETRAINING_MODE', 'mlm').lower()
+        pretrain_path = os.path.join(
+            config.OUTPUT_DIR, 'pretrain', f'pretrain_{mode}_final.pth'
+        )
+        if os.path.exists(pretrain_path):
+            ckpt = torch.load(pretrain_path, map_location=config.DEVICE, weights_only=True)
+            missing, unexpected = model.load_state_dict(
+                ckpt['backbone_state_dict'], strict=False
+            )
+            force_print(f"[INFO] Loaded pretrained backbone ({mode}) from {pretrain_path}")
+            if missing:
+                force_print(f"[INFO]   Missing keys : {missing}")
+            if unexpected:
+                force_print(f"[INFO]   Unexpected keys: {unexpected}")
+        else:
+            force_print(f"[WARNING] USE_PRETRAINING=True but checkpoint not found: {pretrain_path}")
+            force_print("[WARNING]   Falling back to random initialization.")
 
     loss_wrapper = None
     if config.USE_MULTITASK_LOSS:
@@ -730,5 +750,125 @@ def main():
     finish_wandb(wandb)
 
 
+# ──────────────────────────────────────────────
+# Walk-forward 検証ユーティリティ
+# ──────────────────────────────────────────────
+
+def _wf_patch_config(split_date: str, split_end, fold_id: int, wf_run_dir: str):
+    """1 フォールド分の config 属性をインプロセスで書き換える。"""
+    config.SPLIT_MODE              = 'walk_forward'
+    config.TEMPORAL_SPLIT_DATE     = split_date
+    config.TEMPORAL_SPLIT_TEST_END = split_end
+    config.FORCE_DATE_REASSIGN     = True
+    config.EXPERIMENT_NAME         = f'walk_forward/{os.path.basename(wf_run_dir)}/fold_{fold_id}'
+    config.WANDB_RUN_NAME          = f'wf_fold{fold_id}_{split_date}'
+
+
+def _wf_clear_split_cache():
+    """フォールド間でクラスカウントキャッシュを削除して再計算を強制する。"""
+    cache_file = os.path.join(config.CACHE_DIR, 'class_counts.pkl')
+    if os.path.exists(cache_file):
+        os.remove(cache_file)
+
+
+def _wf_summarize(folds, wf_run_dir: str):
+    """全フォールドの run_summary.json を集約して CSV に出力する。"""
+    import csv, json as _json
+
+    rows = []
+    for fold_id, *_ in folds:
+        fold_dir = os.path.join(config.RESULT_SAVE_DIR, 'walk_forward',
+                                os.path.basename(wf_run_dir), f'fold_{fold_id}')
+        if not os.path.isdir(fold_dir):
+            continue
+        subdirs = sorted(d for d in os.listdir(fold_dir)
+                         if os.path.isdir(os.path.join(fold_dir, d)))
+        if not subdirs:
+            continue
+        summary_path = os.path.join(fold_dir, subdirs[-1], 'run_summary.json')
+        if not os.path.exists(summary_path):
+            continue
+        with open(summary_path) as f:
+            summary = _json.load(f)
+        summary['fold'] = fold_id
+        rows.append(summary)
+
+    if not rows:
+        return
+
+    force_print("\n" + "="*60)
+    force_print("  Walk-forward Summary")
+    force_print("="*60)
+    headers = ['fold', 'test_position_hit@1', 'test_r_precision', 'test_loss']
+    force_print("  " + "  ".join(f"{h:>22}" for h in headers))
+    for r in rows:
+        vals = [str(r.get('fold', '?')),
+                f"{r.get('test_position_hit@1', float('nan')):.4f}",
+                f"{r.get('test_r_precision',    float('nan')):.4f}",
+                f"{r.get('test_loss',           float('nan')):.4f}"]
+        force_print("  " + "  ".join(f"{v:>22}" for v in vals))
+
+    csv_path = os.path.join(wf_run_dir, 'walk_forward_summary.csv')
+    keys = sorted({k for r in rows for k in r})
+    with open(csv_path, 'w', newline='') as f:
+        w = csv.DictWriter(f, fieldnames=keys)
+        w.writeheader()
+        w.writerows(rows)
+    force_print(f"\n  Summary CSV → {csv_path}")
+
+
+def run_walk_forward(folds, wf_run_dir: str):
+    """Walk-forward 検証：フォールドを順番に学習＋評価して集計する。
+
+    Args:
+        folds     : [(fold_id, split_date, split_end, desc), ...]
+        wf_run_dir: walk-forward 全体の出力ルートディレクトリ
+    """
+    import json as _json
+
+    # メタ情報を保存
+    meta = {
+        'wf_run_dir': wf_run_dir,
+        'folds': [{'fold': fid, 'split_date': sd, 'split_end': se, 'desc': desc}
+                  for fid, sd, se, desc in folds],
+    }
+    with open(os.path.join(wf_run_dir, 'walk_forward_meta.json'), 'w') as f:
+        _json.dump(meta, f, indent=2, ensure_ascii=False)
+
+    for fold_id, split_date, split_end, desc in folds:
+        force_print(f"\n{'='*60}")
+        force_print(f"  Walk-forward Fold {fold_id}: {desc}")
+        force_print(f"  Train : collection_date < {split_date}")
+        if split_end:
+            force_print(f"  Test  : {split_date} <= collection_date < {split_end}")
+        else:
+            force_print(f"  Test  : {split_date} <= collection_date (no upper bound)")
+        force_print(f"{'='*60}")
+
+        _wf_patch_config(split_date, split_end, fold_id, wf_run_dir)
+        _wf_clear_split_cache()
+        main()
+
+    _wf_summarize(folds, wf_run_dir)
+    force_print(f"\n[INFO] Walk-forward complete. Results root: {wf_run_dir}")
+
+
+def _run_entry():
+    """config.SPLIT_MODE に応じて単一実行 or Walk-forward を切り替えるエントリポイント。"""
+    if getattr(config, 'SPLIT_MODE', 'timestep') == 'walk_forward':
+        from .scripts.eval.walk_forward import FOLDS
+        wf_folds = getattr(config, 'WALK_FORWARD_FOLDS', None)
+        selected = [(fid, sd, se, desc) for fid, sd, se, desc in FOLDS
+                    if wf_folds is None or fid in set(wf_folds)]
+        if not selected:
+            raise ValueError(f"WALK_FORWARD_FOLDS={wf_folds} に該当するフォールドが FOLDS に存在しません")
+        wf_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        wf_run_dir = os.path.join(config.RESULT_SAVE_DIR, 'walk_forward', wf_timestamp)
+        os.makedirs(wf_run_dir, exist_ok=True)
+        run_walk_forward(selected, wf_run_dir)
+    else:
+        main()
+
+
 if __name__ == "__main__":
-    main()
+    _run_entry()

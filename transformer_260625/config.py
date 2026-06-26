@@ -121,7 +121,6 @@ CACHE_MAX_SIZE = 10000
 NUM_PREPROCESS_WORKERS = 1    # 前処理時の並列ワーカー数上限 (OOM安全策として1を推奨)
 PREPROCESS_CHUNK_SIZE = 1000    # 前処理ワーカー内でのチャンクバッファサイズ (小さくして省メモリ化)
 DB_WRITE_BATCH_SIZE = 10000     # DB書き込み時のバッチサイズ
-EARLY_STOPPING_PATIENCE = 7   # [260417] エポック増加に合わせて余裕を持たせる
 WEIGHT_DECAY = 0.01
 
 # --- 保存・ログ設定 ---
@@ -236,9 +235,9 @@ USE_SHARED_TRUNK = False
 #    CO_ATTN_DIM は CO_ATTN_N_HEADS で割り切れる必要あり
 # ② CO_ATTN_N_LAYERS: 1=現状と同じ（Cross-Attention のみ）。
 #    2以上にすると最初の N-1 層で Self-Attention（変異間相互作用）、最終層で Cross-Attention 集約
-CO_ATTN_N_HEADS  = N_HEADS       # 共起 Attention のヘッド数（デフォルト = N_HEADS = 4）
+CO_ATTN_N_HEADS  = 4       # 共起 Attention のヘッド数（デフォルト = N_HEADS = 4）
 CO_ATTN_N_LAYERS = 1             # 共起 Attention の層数
-CO_ATTN_DIM      = FEATURE_DIM  # 共起 Attention の内部次元（デフォルト = FEATURE_DIM = 256）
+CO_ATTN_DIM      = 256  # 共起 Attention の内部次元（デフォルト = FEATURE_DIM = 256）
 
 # ③ USE_FLAT_COATTN: 共起集約をスキップし、全変異を独立トークンとして Transformer に渡す
 #    [B, T, C, F] → [B, T*C, F] + 2D 位置エンコーディング（タイムステップ + 共起内インデックス）
@@ -327,9 +326,23 @@ MAX_GRAD_NORM = 1.0              # 勾配クリッピングの値 (Noneで無効
 OPTIMIZER_BETA1 = 0.9            # AdamW の Beta1
 OPTIMIZER_BETA2 = 0.999          # AdamW の Beta2
 
-# --- Early Stopping 設定 (新規追加) ---
-EARLY_STOPPING_METRIC = "val_loss"  # 早期停止の基準 ('val_loss', 'val_macro_recall' 等)
-EARLY_STOPPING_MODE = "min"         # 'min' (loss等, 小さいほど良い) または 'max' (accuracy等, 大きいほど良い)
+# --- Early Stopping 設定 ---
+# 【学習損失 vs モデル選択基準の分離】
+# 学習損失は CE (Soft Target) のまま維持する。R-Precision は離散指標のため微分不可能であり、
+# 勾配を流すには ListNet 等のサロゲート損失が必要になるが複雑化に見合わない。
+# Soft Target + CE はすでに R-Precision と方向が一致している：
+#   共起変異全体に確率質量を均等分配 → 全正解変異を高くランク付け → R-Precision が上がる。
+#
+# 一方、モデル選択（Early Stopping）の基準を "val_r_precision" にすると、
+# 学習損失を変えずに「実際に評価したい指標が最も高いエポック」のモデルを残せる。
+# ただし R-Precision はエポック間でノイジーになりやすいため、
+# PATIENCE を val_loss 時より大きめに設定することを推奨する（例: 10）。
+#
+#   val_loss       : 滑らか・安定。収束の検出に優れる。
+#   val_r_precision: 評価指標と直結。高エントロピー変異ではノイジーになりうる。
+EARLY_STOPPING_METRIC = "val_loss"  # 'val_loss' | 'val_r_precision' | 'val_macro_recall' 等
+EARLY_STOPPING_MODE = "min"         # 'min' (loss等) | 'max' (val_r_precision 等、大きいほど良い)
+EARLY_STOPPING_PATIENCE = 7   # [260417] エポック増加に合わせて余裕を持たせる
 
 # --- 評価・可視化のハードコード解除 (新規追加) ---
 EVAL_TOP_KS = (1, 3, 5)             # Top-K 評価で計算する K のリスト
@@ -438,21 +451,31 @@ STRENGTH_SOURCE = 'usher'
 # ============================================================
 
 # --- データ分割モード ---
-# 'timestep' : 現状通り（path_length ベースの分割）← デフォルト
-# 'date'     : TEMPORAL_SPLIT_DATE を基準に train/valid/test を分割
-SPLIT_MODE = 'timestep'          # 'timestep' | 'date'
+# 'timestep'     : 現状通り（path_length ベースの分割）← デフォルト
+# 'date'         : TEMPORAL_SPLIT_DATE を基準に train/valid/test を分割（単一カットオフ）
+# 'walk_forward' : 半年次フォールドを順番に学習＋評価（scripts/eval/walk_forward.py の FOLDS を参照）
+SPLIT_MODE = 'timestep'          # 'timestep' | 'date' | 'walk_forward'
 
 # 基準日（ISO 形式: YYYY-MM-DD）
-# SPLIT_MODE='date' のときのみ有効。この日より前 → train/valid、この日以降 → test
+# SPLIT_MODE='date' / 'walk_forward' のときのみ有効。この日より前 → train/valid、この日以降 → test
 TEMPORAL_SPLIT_DATE = '2024-01-01'
 
-# date モードでの Validation 比率（基準日前のデータからランダムに抽出）
+# テスト期間の終端日（ISO 形式: YYYY-MM-DD）。None の場合は上限なし
+# TEMPORAL_SPLIT_DATE <= collection_date < TEMPORAL_SPLIT_TEST_END → test
+# collection_date >= TEMPORAL_SPLIT_TEST_END → 除外（split_type_date = -1）
+# walk_forward モードでは各フォールド実行時に自動設定される。
+TEMPORAL_SPLIT_TEST_END = None
+
+# date / walk_forward モードでの Validation 比率（基準日前のデータからランダムに抽出）
 DATE_VALID_RATIO = 0.1
 
 # True のとき main.py 起動時に split を再計算する
 # （TEMPORAL_SPLIT_DATE を変更した場合などに使用）
 # False のとき preprocess.py 実行時の分割をそのまま使用
 FORCE_DATE_REASSIGN = False
+
+# walk_forward モードで実行するフォールド番号のリスト（None = 全フォールド、例: [2, 6]）
+WALK_FORWARD_FOLDS = None
 
 # --- 評価 X 軸モード ---
 # 'timestep' : X 軸 = path_length ← デフォルト
@@ -491,7 +514,7 @@ AR_DECODER_HEADS           = 4   # Decoder ヘッド数
 
 # --- Item 3: MLM / CLM Pretraining ---
 # 事前学習モードを有効にする (scripts/pretrain.py で使用)
-USE_PRETRAINING        = True
+USE_PRETRAINING        = False
 PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
 PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
 PRETRAINING_EPOCHS        = 5       # 事前学習エポック数

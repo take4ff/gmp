@@ -129,7 +129,7 @@ def calc_entropy_stats(positions):
 # データ読み込み
 # ------------------------------------------------------------------ #
 def load_from_db(alias_key):
-    split_col = 'split_type_date' if getattr(config, 'SPLIT_MODE', 'timestep') == 'date' else 'split_type'
+    split_col = 'split_type_date' if getattr(config, 'SPLIT_MODE', 'timestep') in ('date', 'walk_forward') else 'split_type'
     sn_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
     con = connect_db(get_db_path(), read_only=True)
 
@@ -142,9 +142,10 @@ def load_from_db(alias_key):
     """).fetchall()
     train_lineages = [r[0] for r in train_rows]
 
-    print("[INFO] Loading test lineages and raw_paths...")
+    print("[INFO] Loading test lineages, raw_paths, and collection_dates...")
     test_rows = con.execute(f"""
-        SELECT st.{sn_col}, s.raw_path, COUNT(*) OVER (PARTITION BY st.{sn_col}) as n
+        SELECT st.{sn_col}, s.raw_path, COUNT(*) OVER (PARTITION BY st.{sn_col}) as n,
+               s.collection_date
         FROM samples s JOIN strains st ON s.strain_id = st.strain_id
         WHERE s.{split_col} = 2 AND st.{sn_col} IS NOT NULL
           AND st.{sn_col} != 'unclassifiable'
@@ -154,12 +155,15 @@ def load_from_db(alias_key):
     # 系統ごとにグループ化
     lineage_paths = defaultdict(list)
     lineage_count = {}
-    for lineage, raw_path, n in test_rows:
+    lineage_dates = defaultdict(list)
+    for lineage, raw_path, n, collection_date in test_rows:
         lineage_count[lineage] = n
         if len(lineage_paths[lineage]) < MAX_SAMPLES_ENTROPY:
             lineage_paths[lineage].append(raw_path)
+        if collection_date:
+            lineage_dates[lineage].append(str(collection_date)[:10])
 
-    return train_lineages, lineage_paths, lineage_count
+    return train_lineages, lineage_paths, lineage_count, lineage_dates
 
 
 # ------------------------------------------------------------------ #
@@ -177,7 +181,7 @@ def main():
     print("[INFO] Loading alias key...")
     alias_key, rev = load_alias(ALIAS_KEY_PATH)
 
-    train_lineages, lineage_paths, lineage_count = load_from_db(alias_key)
+    train_lineages, lineage_paths, lineage_count, lineage_dates = load_from_db(alias_key)
     print(f"[INFO] Train lineages: {len(train_lineages)}, Test lineages: {len(lineage_paths)}")
 
     # 最小サンプル数フィルタ
@@ -202,18 +206,31 @@ def main():
         entropy_map[lineage]  = h
         n_unique_map[lineage] = n_unique
 
+    # 系統ごとの採取日中央値を計算
+    print("[INFO] Computing median collection dates...")
+    median_date_map = {}
+    for l in test_lineages:
+        dates = lineage_dates.get(l, [])
+        valid = [d for d in dates if d and len(d) >= 7]
+        if valid:
+            valid_sorted = sorted(valid)
+            median_date_map[l] = valid_sorted[len(valid_sorted) // 2]
+        else:
+            median_date_map[l] = None
+
     # DataFrame構築
     records = []
     max_dist = max(phylo_dist.values()) or 1
     for l in test_lineages:
         nd = phylo_dist[l] / max_dist
         records.append({
-            'lineage':           l,
-            'n_test_samples':    lineage_count[l],
-            'phylo_dist':        phylo_dist[l],
-            'norm_phylo_dist':   round(nd, 4),
-            'target_entropy_bits': round(entropy_map[l], 4),
-            'n_unique_positions':  n_unique_map[l],
+            'lineage':               l,
+            'n_test_samples':        lineage_count[l],
+            'phylo_dist':            phylo_dist[l],
+            'norm_phylo_dist':       round(nd, 4),
+            'target_entropy_bits':   round(entropy_map[l], 4),
+            'n_unique_positions':    n_unique_map[l],
+            'median_collection_date': median_date_map.get(l),
         })
     df = pd.DataFrame(records)
 
@@ -308,6 +325,99 @@ def main():
         plt.close()
         print(f"[INFO] Saved: {filename}")
 
+    def scatter_with_date_y(source_df, x_vals, x_label, filename, top_df,
+                            color_col='difficulty_score',
+                            color_label='Difficulty score',
+                            cmap='RdYlGn_r', vmin=None, vmax=None):
+        """縦軸を採取日中央値にした散布図（周辺ヒストグラム付き）。"""
+        import matplotlib.dates as mdates
+
+        def _normalize_date(d):
+            """YYYY-MM → YYYY-MM-01 に補完し、パース不可なら None を返す。"""
+            if not d or not isinstance(d, str):
+                return None
+            d = d.strip()
+            if len(d) == 7:
+                d = d + '-01'
+            try:
+                return pd.Timestamp(d)
+            except Exception:
+                return None
+
+        # source_df をリセットして numpy と 1:1 対応させる
+        src = source_df.reset_index(drop=True)
+        timestamps = [_normalize_date(src.at[i, 'median_collection_date']) for i in range(len(src))]
+        valid_mask = np.array([t is not None for t in timestamps])
+
+        if valid_mask.sum() < 5:
+            print(f"[WARNING] scatter_with_date_y: 有効な採取日が不足 ({valid_mask.sum()} 件). スキップ.")
+            return
+
+        x_date = x_vals[valid_mask]
+        src_valid = src[valid_mask].reset_index(drop=True)
+        y_ts = [timestamps[i] for i, v in enumerate(valid_mask) if v]
+        y_num = np.array(mdates.date2num(y_ts))
+
+        if vmin is None and color_col == 'difficulty_score':
+            vmin = 0
+        if vmax is None and color_col == 'difficulty_score':
+            vmax = 1
+
+        fig = plt.figure(figsize=(11, 9))
+        gs = fig.add_gridspec(2, 2, width_ratios=[4, 1], height_ratios=[1, 4],
+                              hspace=0.05, wspace=0.05)
+        ax_main  = fig.add_subplot(gs[1, 0])
+        ax_top   = fig.add_subplot(gs[0, 0], sharex=ax_main)
+        ax_right = fig.add_subplot(gs[1, 1], sharey=ax_main)
+
+        sc = ax_main.scatter(
+            x_date, y_num,
+            s=np.log1p(src_valid['n_test_samples']) * 6,
+            c=src_valid[color_col], cmap=cmap,
+            vmin=vmin, vmax=vmax,
+            alpha=0.65, edgecolors='none',
+        )
+        plt.colorbar(sc, ax=ax_right, label=color_label, fraction=0.8, pad=0.1)
+
+        top_lineages = set(top_df['lineage'])
+        for idx, row in src_valid.iterrows():
+            if row['lineage'] in top_lineages:
+                ax_main.annotate(
+                    row['lineage'],
+                    (x_date[idx], y_num[idx]),
+                    fontsize=7, alpha=0.9,
+                    xytext=(4, 2), textcoords='offset points',
+                )
+
+        ax_main.yaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax_main.yaxis.set_major_locator(mdates.MonthLocator(interval=3))
+        plt.setp(ax_main.get_yticklabels(), rotation=45, ha='right')
+        ax_main.set_ylabel('Median collection date')
+        ax_main.set_xlabel(x_label)
+        ax_main.grid(linestyle='--', alpha=0.3)
+
+        ax_top.hist(x_date, bins=40, color='steelblue', alpha=0.7)
+        ax_top.set_ylabel('Count')
+        plt.setp(ax_top.get_xticklabels(), visible=False)
+        ax_top.grid(linestyle='--', alpha=0.3)
+
+        ax_right.hist(y_num, bins=20, color='steelblue', alpha=0.7, orientation='horizontal')
+        ax_right.yaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax_right.set_xlabel('Count')
+        plt.setp(ax_right.get_yticklabels(), visible=False)
+        ax_right.grid(linestyle='--', alpha=0.3)
+
+        try:
+            r_val, p_val = stats.pearsonr(x_date, y_num)
+            title_str = f'Pearson r={r_val:.3f}, p={p_val:.3e} (x vs median date), n={len(src_valid)}'
+        except Exception:
+            title_str = f'n={len(src_valid)}'
+        fig.suptitle(f'Lineage difficulty vs Collection date  ({title_str})', y=0.98, fontsize=11)
+
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"[INFO] Saved: {filename}")
+
     top10 = df.head(10)
 
     # 図A: Shannon entropy H (bits)
@@ -329,6 +439,16 @@ def main():
         'Unique target mutation positions  (log10 scale)',
         x_log=True,
         filename=out_b,
+        top_df=top10,
+    )
+
+    # 図E: 採取日中央値 × Shannon entropy（difficulty_score カラー）
+    out_e = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy_date.png')
+    scatter_with_date_y(
+        df,
+        df['target_entropy_bits'].values,
+        'Shannon entropy H  (bits)',
+        filename=out_e,
         top_df=top10,
     )
 
@@ -418,6 +538,21 @@ def main():
                     color_label=f'{recall_col} (lineage-level)',
                     cmap='RdYlGn',
                     title_ref_col='recall',
+                )
+
+                # 図F: 採取日中央値 × Shannon entropy（recall カラー）
+                out_f = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy_date_recall.png')
+                scatter_with_date_y(
+                    merged_sorted,
+                    merged_sorted['target_entropy_bits'].values,
+                    'Shannon entropy H  (bits)',
+                    filename=out_f,
+                    top_df=top10_merged,
+                    color_col='recall',
+                    color_label=f'{recall_col} (lineage-level)',
+                    cmap='RdYlGn',
+                    vmin=merged_sorted['recall'].min(),
+                    vmax=merged_sorted['recall'].max(),
                 )
     else:
         if args.metrics:

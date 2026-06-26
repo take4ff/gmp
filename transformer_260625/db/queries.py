@@ -9,7 +9,7 @@ from .. import config
 
 def get_split_col():
     """現在設定されている SPLIT_MODE に応じて参照すべき DB のカラム名を返す。"""
-    return 'split_type_date' if getattr(config, 'SPLIT_MODE', 'timestep').lower() == 'date' else 'split_type'
+    return 'split_type_date' if getattr(config, 'SPLIT_MODE', 'timestep').lower() in ('date', 'walk_forward') else 'split_type'
 
 
 def get_db_data_info(db_path=None, split_type=None, max_cooccurrence=None):
@@ -195,38 +195,59 @@ def assign_splits(con, train_ratio=0.8, valid_ratio=None):
 def assign_date_splits(con):
     """collection_date の基準日を用いて train/valid/test を分割し、DB を更新する。
 
-    - collection_date < TEMPORAL_SPLIT_DATE  → train / valid（DATE_VALID_RATIO でランダム分割）
-    - collection_date >= TEMPORAL_SPLIT_DATE → test
-    - collection_date が NULL または空文字   → train に割り当て
+    - collection_date < TEMPORAL_SPLIT_DATE                                       → train / valid
+    - TEMPORAL_SPLIT_DATE <= collection_date < TEMPORAL_SPLIT_TEST_END (or None) → test (2)
+    - collection_date >= TEMPORAL_SPLIT_TEST_END (TEMPORAL_SPLIT_TEST_END != None) → 除外 (-1)
+    - collection_date が NULL または空文字                                         → train に割り当て
 
     config キー:
-        TEMPORAL_SPLIT_DATE : str  基準日（ISO 形式: YYYY-MM-DD）
-        DATE_VALID_RATIO    : float 基準日前データのうち Valid に充てる比率
-        SEED                : int   再現性のためのランダムシード
+        TEMPORAL_SPLIT_DATE     : str        基準日（ISO 形式: YYYY-MM-DD）
+        TEMPORAL_SPLIT_TEST_END : str | None テスト期間終端日（None = 上限なし）
+        DATE_VALID_RATIO        : float      基準日前データのうち Valid に充てる比率
+        SEED                    : int        再現性のためのランダムシード
     """
     from datetime import datetime
 
     split_date = getattr(config, 'TEMPORAL_SPLIT_DATE', '2023-12-31')
+    split_end  = getattr(config, 'TEMPORAL_SPLIT_TEST_END', None)
     valid_ratio = getattr(config, 'DATE_VALID_RATIO', 0.1)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     print(f"[{timestamp}] [INFO] Assigning splits by date (split_date={split_date}, "
-          f"valid_ratio={valid_ratio})...")
+          f"split_end={split_end}, valid_ratio={valid_ratio})...")
 
     # まず全サンプルを train (0) にリセット
     con.execute("UPDATE samples SET split_type_date = 0")
 
-    # 基準日以降 → test (2)
-    # RPADを用いて YYYY や YYYY-MM 形式の日付を補完し、正確に文字列比較を行う
-    con.execute(f"""
-        UPDATE samples
-        SET split_type_date = 2
-        WHERE RPAD(collection_date, 10, '-01-01') >= '{split_date}'
-          AND collection_date IS NOT NULL
-          AND collection_date != ''
-    """)
+    # テスト窓を設定。RPAD で YYYY や YYYY-MM 形式を補完して文字列比較
+    if split_end is None:
+        # 従来動作: 基準日以降がすべて test
+        con.execute(f"""
+            UPDATE samples
+            SET split_type_date = 2
+            WHERE RPAD(collection_date, 10, '-01-01') >= '{split_date}'
+              AND collection_date IS NOT NULL
+              AND collection_date != ''
+        """)
+    else:
+        # Walk-forward: [split_date, split_end) → test、split_end 以降 → 除外
+        con.execute(f"""
+            UPDATE samples
+            SET split_type_date = 2
+            WHERE RPAD(collection_date, 10, '-01-01') >= '{split_date}'
+              AND RPAD(collection_date, 10, '-01-01') <  '{split_end}'
+              AND collection_date IS NOT NULL
+              AND collection_date != ''
+        """)
+        con.execute(f"""
+            UPDATE samples
+            SET split_type_date = -1
+            WHERE RPAD(collection_date, 10, '-01-01') >= '{split_end}'
+              AND collection_date IS NOT NULL
+              AND collection_date != ''
+        """)
 
-    # 基準日前 (NULL / 空文字も含む) の sample_id を取得して valid を確率的に割り当て
+    # 基準日前 (NULL / 空文字も含む、split_type_date = 0) の sample_id を取得して valid を確率的に割り当て
     before_rows = con.execute("""
         SELECT sample_id FROM samples
         WHERE split_type_date = 0
@@ -246,10 +267,16 @@ def assign_date_splits(con):
                 f"WHERE sample_id IN ({','.join(map(str, valid_ids))})"
             )
 
-    # 統計を表示
+    # 統計を表示（-1 = 除外 も含む）
     stats = con.execute("""
         SELECT split_type_date,
-               CASE split_type_date WHEN 0 THEN 'train' WHEN 1 THEN 'valid' WHEN 2 THEN 'test' END as split_name,
+               CASE split_type_date
+                   WHEN -1 THEN 'excluded'
+                   WHEN  0 THEN 'train'
+                   WHEN  1 THEN 'valid'
+                   WHEN  2 THEN 'test'
+                   ELSE 'unknown'
+               END as split_name,
                COUNT(*) as sample_count
         FROM samples
         GROUP BY split_type_date
@@ -260,7 +287,7 @@ def assign_date_splits(con):
 
 
 def assign_splits_auto(con):
-    """従来の `split_type` (timestep) と新設 of `split_type_date` (date) の両方を常に更新・初期化する。"""
+    """従来の `split_type` (timestep) と `split_type_date` (date / walk_forward) の両方を更新・初期化する。"""
     assign_splits(con)
     assign_date_splits(con)
 

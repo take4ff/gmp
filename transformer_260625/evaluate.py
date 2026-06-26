@@ -81,7 +81,8 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
         "preds_aa_pos": [], "targets_aa_pos": [],
         "preds_codon_pos": [], "targets_codon_pos": [],
         "preds_synonymous": [], "targets_synonymous": [],
-        "preds_strength": [], "targets_strength": []
+        "preds_strength": [], "targets_strength": [],
+        "hits_base_after": [], "hits_aa_after": [],   # USE_SUBSTITUTION_HEAD 用
     })
 
     # 流行度カテゴリ別
@@ -143,10 +144,14 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 predictions_tuple = _predict_tta(model, x_cat, x_num, mask, n_passes)
             else:
                 predictions_tuple = model(x_cat, x_num, src_key_padding_mask=mask)
-            # 8-tuple への拡張に対応（base_after / aa_after は現在未使用）
+            # 8-tuple への拡張に対応
             (predictions_region, predictions_position, predictions_aa_pos,
              predictions_strength, predictions_codon_pos, predictions_synonymous,
              *_extra_preds) = predictions_tuple
+
+            use_sub = getattr(config, 'USE_SUBSTITUTION_HEAD', False)
+            predictions_base_after = _extra_preds[0] if use_sub and len(_extra_preds) > 0 else None
+            predictions_aa_after   = _extra_preds[1] if use_sub and len(_extra_preds) > 1 else None
 
             # Top-K 推論
             def safe_topk(tensor, k):
@@ -228,6 +233,16 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
 
                 pred_strength = predictions_strength[i].item()
 
+                # base_after / aa_after Top-1 ヒット判定
+                hit_base_after = hit_aa_after = None
+                if predictions_base_after is not None and predictions_aa_after is not None:
+                    pred_base = int(torch.argmax(predictions_base_after[i]).item())
+                    pred_aa   = int(torch.argmax(predictions_aa_after[i]).item())
+                    target_base_set = set(t[5] for t in targets_tuples if len(t) > 5)
+                    target_aa_set   = set(t[6] for t in targets_tuples if len(t) > 6)
+                    hit_base_after = pred_base in target_base_set
+                    hit_aa_after   = pred_aa   in target_aa_set
+
                 detailed_results.append({
                     'len': ts_len, 'strain': strain,
                     'strength_score': strength_score, 'pred_strength': pred_strength,
@@ -238,6 +253,8 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                     'targets_aa_pos': target_set_aa_pos,   'preds_aa_pos': pred_set_aa_pos, 'pred_prob_aa_pos': pred_prob_aa_pos,  'hit_aa_pos': hit_aa_pos,
                     'targets_codon_pos': target_set_codon_pos,'preds_codon_pos': pred_set_codon_pos,'hit_codon_pos': hit_codon_pos,
                     'targets_synonymous': target_set_synonymous,'preds_synonymous': pred_set_synonymous,'hit_synonymous': hit_synonymous,
+                    'hit_base_after': hit_base_after,
+                    'hit_aa_after': hit_aa_after,
                 })
 
                 if not example_printed and targets_tuples:
@@ -253,6 +270,8 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                     print(f"  AA Pos Preds: {pred_set_aa_pos}")
                     print(f"  Codon Pos Preds: {pred_set_codon_pos}")
                     print(f"  Synonymous Preds: {pred_set_synonymous}")
+                    if hit_base_after is not None:
+                        print(f"  Base After Hit: {hit_base_after}, AA After Hit: {hit_aa_after}")
                     print("--------------------------")
                     example_printed = True
 
@@ -269,6 +288,9 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 results_by_timestep[ts_len]["targets_synonymous"].append(target_set_synonymous)
                 results_by_timestep[ts_len]["preds_strength"].append(pred_strength)
                 results_by_timestep[ts_len]["targets_strength"].append(strength_score)
+                if hit_base_after is not None:
+                    results_by_timestep[ts_len]["hits_base_after"].append(hit_base_after)
+                    results_by_timestep[ts_len]["hits_aa_after"].append(hit_aa_after)
 
                 # ECE 用データの蓄積 (SAVE_ECE=True の場合のみ)
                 if getattr(config, 'SAVE_ECE', True):
@@ -370,7 +392,15 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 sum(abs(p - t) for p, t in zip(data["preds_strength"], data["targets_strength"])) /
                 len(data["preds_strength"])
                 if data["preds_strength"] else 0.0
-            )
+            ),
+            "base_after_accuracy": (
+                sum(data["hits_base_after"]) / len(data["hits_base_after"])
+                if data["hits_base_after"] else None
+            ),
+            "aa_after_accuracy": (
+                sum(data["hits_aa_after"]) / len(data["hits_aa_after"])
+                if data["hits_aa_after"] else None
+            ),
         }
 
         # ECE (Expected Calibration Error) 計算 (SAVE_ECE=True の場合のみ)
