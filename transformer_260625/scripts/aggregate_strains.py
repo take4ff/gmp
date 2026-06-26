@@ -8,7 +8,7 @@ from transformer_260625.db.connection import get_db_path, connect_db
 
 def main():
     db_path = get_db_path()
-    output_dir = os.path.join(config.OUTPUT_DIR, 'scripts')
+    output_dir = os.path.join(config.OUTPUT_DIR, 'scripts', 'lineage')
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Connecting to {db_path}...")

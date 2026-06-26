@@ -25,7 +25,7 @@ DBリビルドが必要な設定変更: `CONTEXT_WINDOW`, `NUM_CHEM_FEATURES`, `
 
 ---
 
-->グループA,Bはなしで。損失重みやモデル内部重みで評価。
+->グループA,Bはなしで。損失重みやモデル内部重みで評価。E3優先。
 
 ## グループ C: アーキテクチャ
 
@@ -34,11 +34,12 @@ DBリビルドが必要な設定変更: `CONTEXT_WINDOW`, `NUM_CHEM_FEATURES`, `
 | C1 | Temporal Pooling | `TEMPORAL_POOLING` | `'last'` / `'mean'` / `'cls'` | 不要 |
 | C2 | Shared Trunk | `USE_SHARED_TRUNK` | `False` / `True` | 不要 |
 | C3 | 相対位置エンコーディング（ALiBi） | `USE_RPE` | `False` / `True` | 不要 |
-| C4 | Co-Attn 層数 | `CO_ATTN_N_LAYERS` | `1` / `2` / `3` | 不要 |
-| C5 | Co-Attn 内部次元 | `CO_ATTN_DIM` | `128` / `256` / `512` | 不要 |
-| C6 | 正規化位置 | `NORM_FIRST` | `True`(Pre-Norm) / `False`(Post-Norm) | 不要 |
-| C7 | FFN 倍率 | `FFN_RATIO` | `2` / `4` / `8` | 不要 |
-| C8 | 活性化関数 | `ACTIVATION` | `'gelu'` / `'relu'` / `'silu'` | 不要 |
+| C4 | Co-Attn Heads | `CO_ATTN_N_HEADS` | `4` / `8` | 不要 |
+| C5 | Co-Attn 層数 | `CO_ATTN_N_LAYERS` | `1` / `2` | 不要 |
+| C6 | Co-Attn 内部次元 | `CO_ATTN_DIM` | `256` / `512` | 不要 |
+| C7 | 正規化位置 | `NORM_FIRST` | `True`(Pre-Norm) / `False`(Post-Norm) | 不要 |
+| C8 | FFN 倍率 | `FFN_RATIO` | `2` / `4` / `8` | 不要 |
+| C9 | 活性化関数 | `ACTIVATION` | `'gelu'` / `'relu'` / `'silu'` | 不要 |
 | C9 | Substitution Head | `USE_SUBSTITUTION_HEAD` | `False` / `True` | 不要 |
 | C10 | Autoregressive Decoder | `USE_AUTOREGRESSIVE_DECODER` | `False` / `True` | 不要 |
 | C11 | ESM-2 タンパク質言語モデル特徴量 | `USE_ESM2` | `False` / `True` | **必要**（埋め込み抽出も別途必要） |

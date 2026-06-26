@@ -9,7 +9,7 @@ from transformer_260625 import config
 
 def main():
     csv_path = os.path.abspath(config.SEQUENCES_CSV)
-    output_dir = os.path.join(config.OUTPUT_DIR, 'scripts')
+    output_dir = os.path.join(config.OUTPUT_DIR, 'scripts', 'variants')
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"Reading CSV from {csv_path}...")

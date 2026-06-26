@@ -121,7 +121,7 @@ def main():
     df_num      = pd.DataFrame(num_rows)
     df_combined = pd.merge(df_cat, df_num, on=['TS', 'Mutation'])
 
-    output_dir = os.path.join(config.OUTPUT_DIR, 'scripts')
+    output_dir = os.path.join(config.OUTPUT_DIR, 'scripts', 'samples')
     os.makedirs(output_dir, exist_ok=True)
     info_csv_path     = os.path.join(output_dir, f"sample_{sample_id}_info.csv")
     combined_csv_path = os.path.join(output_dir, f"sample_{sample_id}.csv")
