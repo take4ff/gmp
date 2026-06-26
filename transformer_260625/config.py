@@ -231,12 +231,14 @@ TEMPORAL_POOLING = "last"  # 'last' | 'mean' | 'cls'
 USE_SHARED_TRUNK = False
 
 # --- Co-occurrence Attention 設定 ---
-# ① CO_ATTN_DIM: 集約の内部次元。FEATURE_DIM より大きくすると表現力UP（最後に FEATURE_DIM へ投影）
+# ① CO_ATTN_DIM: 集約の内部次元。FEATURE_DIM と同値なら in_proj/out_proj は不要（デフォルト推奨）
 #    CO_ATTN_DIM は CO_ATTN_N_HEADS で割り切れる必要あり
-# ② CO_ATTN_N_LAYERS: 1=現状と同じ（Cross-Attention のみ）。
-#    2以上にすると最初の N-1 層で Self-Attention（変異間相互作用）、最終層で Cross-Attention 集約
+# ② CO_ATTN_N_LAYERS:
+#    1 = Cross-Attention のみ（学習クエリによる重み付き平均）
+#    2 = Self-Attention（変異間相互作用）→ Cross-Attention（集約）← 現在値・推奨
+#    3 以上 = Self-Attention を N-1 層重ねてから Cross-Attention 集約
 CO_ATTN_N_HEADS  = N_HEADS        # 共起 Attention のヘッド数（デフォルト = N_HEADS）
-CO_ATTN_N_LAYERS = 1             # 共起 Attention の層数
+CO_ATTN_N_LAYERS = 2             # 共起 Attention の層数（2: Self-Attn + Cross-Attn）
 CO_ATTN_DIM      = FEATURE_DIM   # 共起 Attention の内部次元（デフォルト = FEATURE_DIM）
 
 # ③ USE_FLAT_COATTN: 共起集約をスキップし、全変異を独立トークンとして Transformer に渡す
