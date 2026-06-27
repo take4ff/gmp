@@ -9,7 +9,12 @@ from .. import config
 
 def get_split_col():
     """現在設定されている SPLIT_MODE に応じて参照すべき DB のカラム名を返す。"""
-    return 'split_type_date' if getattr(config, 'SPLIT_MODE', 'timestep').lower() in ('date', 'walk_forward') else 'split_type'
+    mode = getattr(config, 'SPLIT_MODE', 'timestep').lower()
+    if mode == 'walk_forward':
+        return 'split_type_wf'
+    if mode == 'date':
+        return 'split_type_date'
+    return 'split_type'
 
 
 def get_db_data_info(db_path=None, split_type=None, max_cooccurrence=None):
@@ -286,10 +291,103 @@ def assign_date_splits(con):
         print(f"[{timestamp}]   {split_name}: {count:,} samples")
 
 
+def assign_wf_splits(con):
+    """walk_forward モード専用の split_type_wf カラムを更新する。
+
+    split_type_date を汚染しないよう専用カラム split_type_wf に書き込む。
+    フォールドごとに呼ばれ上書きされる。
+
+    訓練ウィンドウ:
+      Fold 1 (WALK_FORWARD_TRAIN_START=None): collection_date < split_date OR NULL/空
+      Fold N (WALK_FORWARD_TRAIN_START 設定): [train_start, split_date) のみ
+    テストウィンドウ: [split_date, split_end)
+    それ以外: -1 (excluded)
+    """
+    from datetime import datetime
+
+    train_start = getattr(config, 'WALK_FORWARD_TRAIN_START', None)
+    split_date  = getattr(config, 'TEMPORAL_SPLIT_DATE', '2023-12-31')
+    split_end   = getattr(config, 'TEMPORAL_SPLIT_TEST_END', None)
+    valid_ratio = getattr(config, 'DATE_VALID_RATIO', 0.1)
+    timestamp   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print(f"[{timestamp}] [INFO] Assigning walk_forward splits to split_type_wf "
+          f"(train_start={train_start}, split_date={split_date}, "
+          f"split_end={split_end}, valid_ratio={valid_ratio})...")
+
+    # まず全件を除外扱いにリセット
+    con.execute("UPDATE samples SET split_type_wf = -1")
+
+    # 訓練ウィンドウを 0 (train) に設定
+    if train_start is None:
+        # Fold 1: 上限なし（全歴史データ）。NULL/空文字も train に含める
+        con.execute(f"""
+            UPDATE samples SET split_type_wf = 0
+            WHERE collection_date IS NULL OR collection_date = ''
+               OR RPAD(collection_date, 10, '-01-01') < '{split_date}'
+        """)
+    else:
+        # Fold N: [train_start, split_date) のみ
+        con.execute(f"""
+            UPDATE samples SET split_type_wf = 0
+            WHERE collection_date IS NOT NULL AND collection_date != ''
+              AND RPAD(collection_date, 10, '-01-01') >= '{train_start}'
+              AND RPAD(collection_date, 10, '-01-01') <  '{split_date}'
+        """)
+
+    # テストウィンドウを 2 (test) に設定（訓練と重複しない前提）
+    if split_end is None:
+        con.execute(f"""
+            UPDATE samples SET split_type_wf = 2
+            WHERE collection_date IS NOT NULL AND collection_date != ''
+              AND RPAD(collection_date, 10, '-01-01') >= '{split_date}'
+        """)
+    else:
+        con.execute(f"""
+            UPDATE samples SET split_type_wf = 2
+            WHERE collection_date IS NOT NULL AND collection_date != ''
+              AND RPAD(collection_date, 10, '-01-01') >= '{split_date}'
+              AND RPAD(collection_date, 10, '-01-01') <  '{split_end}'
+        """)
+
+    # 訓練データを train/valid に分割（DATE_VALID_RATIO）
+    before_rows = con.execute(
+        "SELECT sample_id FROM samples WHERE split_type_wf = 0 ORDER BY sample_id"
+    ).fetchall()
+
+    if before_rows:
+        before_ids = [r[0] for r in before_rows]
+        random.seed(config.SEED)
+        random.shuffle(before_ids)
+        n_valid = int(len(before_ids) * valid_ratio)
+        valid_ids = before_ids[:n_valid]
+        if valid_ids:
+            con.execute(
+                f"UPDATE samples SET split_type_wf = 1 "
+                f"WHERE sample_id IN ({','.join(map(str, valid_ids))})"
+            )
+
+    stats = con.execute("""
+        SELECT split_type_wf,
+               CASE split_type_wf
+                   WHEN -1 THEN 'excluded'
+                   WHEN  0 THEN 'train'
+                   WHEN  1 THEN 'valid'
+                   WHEN  2 THEN 'test'
+                   ELSE 'unknown'
+               END, COUNT(*)
+        FROM samples
+        GROUP BY split_type_wf ORDER BY split_type_wf
+    """).fetchall()
+    for val, label, count in stats:
+        print(f"[{timestamp}]   {label}: {count:,} samples")
+
+
 def assign_splits_auto(con):
-    """従来の `split_type` (timestep) と `split_type_date` (date / walk_forward) の両方を更新・初期化する。"""
+    """全3カラム（timestep / date / walk_forward）を初期化する。"""
     assign_splits(con)
     assign_date_splits(con)
+    assign_wf_splits(con)
 
 
 def get_processed_strains(con):

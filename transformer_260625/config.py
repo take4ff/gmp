@@ -238,7 +238,7 @@ USE_SHARED_TRUNK = False
 #    2 = Self-Attention（変異間相互作用）→ Cross-Attention（集約）← 現在値・推奨
 #    3 以上 = Self-Attention を N-1 層重ねてから Cross-Attention 集約
 CO_ATTN_N_HEADS  = N_HEADS        # 共起 Attention のヘッド数（デフォルト = N_HEADS）
-CO_ATTN_N_LAYERS = 2             # 共起 Attention の層数（2: Self-Attn + Cross-Attn）
+CO_ATTN_N_LAYERS = 1             # 共起 Attention の層数（2: Self-Attn + Cross-Attn）
 CO_ATTN_DIM      = FEATURE_DIM   # 共起 Attention の内部次元（デフォルト = FEATURE_DIM）
 
 # ③ USE_FLAT_COATTN: 共起集約をスキップし、全変異を独立トークンとして Transformer に渡す
@@ -342,6 +342,7 @@ OPTIMIZER_BETA2 = 0.999          # AdamW の Beta2
 #
 #   val_loss       : 滑らか・安定。収束の検出に優れる。
 #   val_r_precision: 評価指標と直結。高エントロピー変異ではノイジーになりうる。
+# 基本固定、他の選択肢は未対応
 EARLY_STOPPING_METRIC = "val_loss"  # 'val_loss' | 'val_r_precision' | 'val_macro_recall' 等
 EARLY_STOPPING_MODE = "min"         # 'min' (loss等) | 'max' (val_r_precision 等、大きいほど良い)
 EARLY_STOPPING_PATIENCE = 5   # [260417] エポック増加に合わせて余裕を持たせる
@@ -355,7 +356,7 @@ SAVE_ATTENTION_HEATMAP = False      # Attentionヒートマップを保存する
 # 'mse'  : 均乗誤差（現状・外れ値に弱い）
 # 'mae'  : 平均絶対誤差（外れ値に強健）
 # 'huber': Huber Loss（MAEとMSEの中間、delta内はMSE、delta外はMAE）
-STRENGTH_LOSS_TYPE = 'mse'  # 'mse' | 'mae' | 'huber'
+STRENGTH_LOSS_TYPE = 'mae'  # 'mse' | 'mae' | 'huber'
 STRENGTH_HUBER_DELTA = 1.0  # Huber Lossの間屠パラメータ (huber選択時のみ有効)
 
 # --- ECE (期待キャリブレーション誤差) 設定 ---
@@ -459,7 +460,7 @@ STRENGTH_SOURCE = 'usher'
 SPLIT_MODE = 'timestep'          # 'timestep' | 'date' | 'walk_forward'
 
 # 基準日（ISO 形式: YYYY-MM-DD）
-# SPLIT_MODE='date' / 'walk_forward' のときのみ有効。この日より前 → train/valid、この日以降 → test
+# SPLIT_MODE='date'のときのみ有効。この日より前 → train/valid、この日以降 → test
 TEMPORAL_SPLIT_DATE = '2024-01-01'
 
 # テスト期間の終端日（ISO 形式: YYYY-MM-DD）。None の場合は上限なし
@@ -479,10 +480,13 @@ FORCE_DATE_REASSIGN = False
 # walk_forward モードで実行するフォールド番号のリスト（None = 全フォールド、例: [2, 6]）
 WALK_FORWARD_FOLDS = None
 
-# --- 評価 X 軸モード ---
-# 'timestep' : X 軸 = path_length ← デフォルト
-# 'date'     : X 軸 = collection_date の年月 (YYYY-MM)、valid と test を凡例で区別
-EVAL_X_AXIS = 'timestep'         # 'timestep' | 'date'
+# walk_forward: 各フォールドの訓練ウィンドウ開始日（None = 上限なし = Fold 1 のみ）
+# run_walk_forward() が自動的に各フォールドに設定する。手動変更不要。
+WALK_FORWARD_TRAIN_START = None
+
+# walk_forward: 直前フォールドの best_model.pth パス（run_walk_forward() が自動設定）
+# Fold 1 = None（事前学習 or ランダム初期化）、Fold N = Fold N-1 の重み
+WF_PREV_FOLD_CHECKPOINT = None
 
 
 # ============================================================

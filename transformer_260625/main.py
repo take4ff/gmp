@@ -54,6 +54,11 @@ from .utils.plotting import (
     plot_topk_precision,
     plot_attention_heatmap,
     plot_metrics_by_date,
+    plot_strength_fine,
+    plot_lineage_metrics,
+    plot_calibration,
+    plot_region_metrics,
+    plot_r_precision,
 )
 
 
@@ -127,11 +132,19 @@ def prepare_data():
         # SPLIT_MODE='date'/'walk_forward' かつ FORCE_DATE_REASSIGN=True のとき split を再計算
         if (getattr(config, 'SPLIT_MODE', 'timestep') in ('date', 'walk_forward')
                 and getattr(config, 'FORCE_DATE_REASSIGN', False)):
-            force_print("[INFO] FORCE_DATE_REASSIGN=True: re-assigning splits by date...")
-            from .db.queries import assign_date_splits
-            from .db.connection import connect_db
-            _con = connect_db(db_path)
-            assign_date_splits(_con)
+            _split_mode = getattr(config, 'SPLIT_MODE', 'timestep')
+            if _split_mode == 'walk_forward':
+                force_print("[INFO] FORCE_DATE_REASSIGN=True: re-assigning walk_forward splits (split_type_wf)...")
+                from .db.queries import assign_wf_splits
+                from .db.connection import connect_db
+                _con = connect_db(db_path)
+                assign_wf_splits(_con)
+            else:
+                force_print("[INFO] FORCE_DATE_REASSIGN=True: re-assigning date splits (split_type_date)...")
+                from .db.queries import assign_date_splits
+                from .db.connection import connect_db
+                _con = connect_db(db_path)
+                assign_date_splits(_con)
             _con.close()
             # 再分割後に data_info を更新
             data_info = get_db_data_info(db_path, max_cooccurrence=config.MAX_CO_OCCURRENCE)
@@ -183,8 +196,18 @@ def build_components(class_counts_dict=None):
     """
     model = HierarchicalTransformer().to(config.DEVICE)
 
-    # 事前学習済み backbone 重みのロード
-    if getattr(config, 'USE_PRETRAINING', False):
+    # Walk-forward: 直前フォールドの fine-tuned 重みをロード（Fold 2 以降）
+    wf_prev_ckpt = getattr(config, 'WF_PREV_FOLD_CHECKPOINT', None)
+    if wf_prev_ckpt and os.path.exists(wf_prev_ckpt):
+        ckpt = torch.load(wf_prev_ckpt, map_location=config.DEVICE, weights_only=True)
+        missing, unexpected = model.load_state_dict(ckpt['model_state_dict'], strict=False)
+        force_print(f"[INFO] Loaded previous fold weights from {wf_prev_ckpt}")
+        if missing:
+            force_print(f"[INFO]   Missing keys : {missing}")
+        if unexpected:
+            force_print(f"[INFO]   Unexpected keys: {unexpected}")
+    # 事前学習済み backbone 重みのロード（Fold 1 or 非 walk_forward）
+    elif getattr(config, 'USE_PRETRAINING', False):
         mode = getattr(config, 'PRETRAINING_MODE', 'mlm').lower()
         pretrain_path = os.path.join(
             config.OUTPUT_DIR, 'pretrain', f'pretrain_{mode}_final.pth'
@@ -430,6 +453,10 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         plot_category_metrics(cat_metrics, run_output_dir, prefix=prefix)
         plot_strength_calibration(details, run_output_dir, prefix=prefix)
         plot_per_position_recall(details, run_output_dir, prefix=prefix, top_n=getattr(config, "PLOT_TOP_N_POSITIONS", 40))
+        plot_strength_fine(details, run_output_dir, prefix=prefix)
+        plot_lineage_metrics(details, run_output_dir, prefix=prefix,
+                             top_n=getattr(config, 'PLOT_TOP_N_LINEAGES', 30))
+        plot_region_metrics(details, run_output_dir, prefix=prefix)
         return df_ts, df_cat
 
     # Validation
@@ -440,6 +467,7 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     val_df_ts, val_df_cat = _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
     if val_calib_bins:
         save_calibration_csv(val_calib_bins, run_output_dir, prefix="valid")
+        plot_calibration(val_calib_bins, run_output_dir, prefix="valid")
 
     # Test
     test_loss = None
@@ -454,6 +482,7 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         test_df_ts, test_df_cat = _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
         if test_calib_bins:
             save_calibration_csv(test_calib_bins, run_output_dir, prefix="test")
+            plot_calibration(test_calib_bins, run_output_dir, prefix="test")
 
     # 統合レポート
     print_combined_report(val_details, test_details, strength_thresholds)
@@ -466,12 +495,10 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         save_combined_metrics_csv(val_df_ts, test_df_ts, run_output_dir, 'combined_metrics_by_timestep.csv')
         save_combined_metrics_csv(val_df_cat, test_df_cat, run_output_dir, 'combined_metrics_by_category.csv')
 
-    # EVAL_X_AXIS='date' のとき月別 CSV とグラフを出力
-    if getattr(config, 'EVAL_X_AXIS', 'timestep') == 'date':
-        force_print("[INFO] EVAL_X_AXIS='date': saving date-based metrics...")
-        save_date_metrics_csv(val_metrics_ym,  run_output_dir, prefix='valid')
-        save_date_metrics_csv(test_metrics_ym, run_output_dir, prefix='test')
-        plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
+    # 月別 CSV とグラフを常に出力
+    save_date_metrics_csv(val_metrics_ym,  run_output_dir, prefix='valid')
+    save_date_metrics_csv(test_metrics_ym, run_output_dir, prefix='test')
+    plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
 
     # Top-K 評価 (Validation)
     eval_ks = getattr(config, "EVAL_TOP_KS", (1, 3, 5))
@@ -481,6 +508,7 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     plot_topk_precision(val_topk, run_output_dir, prefix='valid')
     if getattr(config, 'USE_R_PRECISION', False):
         save_r_precision_csv(val_topk, run_output_dir, prefix='valid')
+        plot_r_precision(val_topk, run_output_dir, prefix='valid')
 
     test_topk = None
     if len(test_loader) > 0:
@@ -490,6 +518,7 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         plot_topk_precision(test_topk, run_output_dir, prefix='test')
         if getattr(config, 'USE_R_PRECISION', False):
             save_r_precision_csv(test_topk, run_output_dir, prefix='test')
+            plot_r_precision(test_topk, run_output_dir, prefix='test')
 
     save_run_summary_json(
         val_metrics, test_metrics, val_topk, test_topk,
@@ -756,20 +785,22 @@ def main():
 
     force_print(f"[INFO] Process completed. Results saved to {run_output_dir}")
     finish_wandb(wandb)
+    return best_model_path
 
 
 # ──────────────────────────────────────────────
 # Walk-forward 検証ユーティリティ
 # ──────────────────────────────────────────────
 
-def _wf_patch_config(split_date: str, split_end, fold_id: int, wf_run_dir: str):
+def _wf_patch_config(train_start, split_date: str, split_end, fold_id: int, wf_run_dir: str):
     """1 フォールド分の config 属性をインプロセスで書き換える。"""
-    config.SPLIT_MODE              = 'walk_forward'
-    config.TEMPORAL_SPLIT_DATE     = split_date
-    config.TEMPORAL_SPLIT_TEST_END = split_end
-    config.FORCE_DATE_REASSIGN     = True
-    config.EXPERIMENT_NAME         = f'walk_forward/{os.path.basename(wf_run_dir)}/fold_{fold_id}'
-    config.WANDB_RUN_NAME          = f'wf_fold{fold_id}_{split_date}'
+    config.SPLIT_MODE                = 'walk_forward'
+    config.WALK_FORWARD_TRAIN_START  = train_start
+    config.TEMPORAL_SPLIT_DATE       = split_date
+    config.TEMPORAL_SPLIT_TEST_END   = split_end
+    config.FORCE_DATE_REASSIGN       = False  # run_walk_forward が事前に assign_wf_splits を呼ぶ
+    config.EXPERIMENT_NAME           = f'walk_forward/{os.path.basename(wf_run_dir)}/fold_{fold_id}'
+    config.WANDB_RUN_NAME            = f'wf_fold{fold_id}_{split_date}'
 
 
 def _wf_clear_split_cache():
@@ -787,8 +818,8 @@ def _wf_summarize(folds, wf_run_dir: str):
     """
     import csv, json as _json
 
-    fold_meta = {fold_id: (split_date, split_end, desc)
-                 for fold_id, split_date, split_end, desc in folds}
+    fold_meta = {fold_id: (train_start, split_date, split_end, desc)
+                 for fold_id, train_start, split_date, split_end, desc in folds}
 
     rows = []
     for fold_id, *_ in folds:
@@ -807,9 +838,10 @@ def _wf_summarize(folds, wf_run_dir: str):
             summary = _json.load(f)
 
         # フォールドメタ情報
-        split_date, split_end, desc = fold_meta.get(fold_id, ('', '', ''))
+        train_start, split_date, split_end, desc = fold_meta.get(fold_id, (None, '', '', ''))
         row = {
             'fold': fold_id,
+            'train_start': train_start or '',
             'split_date': split_date,
             'split_end': split_end or '',
             'description': desc,
@@ -841,7 +873,7 @@ def _wf_summarize(folds, wf_run_dir: str):
     csv_path = os.path.join(wf_run_dir, 'walk_forward_summary.csv')
     keys = sorted({k for r in rows for k in r})
     # 見やすい順に並べ替え（メタ列を先頭に）
-    meta_keys = ['fold', 'split_date', 'split_end', 'description', 'val_loss', 'test_loss']
+    meta_keys = ['fold', 'train_start', 'split_date', 'split_end', 'description', 'val_loss', 'test_loss']
     ordered_keys = meta_keys + [k for k in keys if k not in meta_keys]
     with open(csv_path, 'w', newline='') as f:
         w = csv.DictWriter(f, fieldnames=ordered_keys, extrasaction='ignore')
@@ -853,8 +885,13 @@ def _wf_summarize(folds, wf_run_dir: str):
 def run_walk_forward(folds, wf_run_dir: str):
     """Walk-forward 検証：フォールドを順番に学習＋評価して集計する。
 
+    設計:
+      - Fold 1: 全歴史データ (< split_date) で学習。USE_PRETRAINING=True なら事前学習も実行。
+      - Fold N (N>=2): 直前フォールドの best_model.pth を起点に、直近6ヶ月のみで学習 (Method B)。
+      - 事前学習は Fold 1 のみ。Fold 2 以降は WF_PREV_FOLD_CHECKPOINT で初期化。
+
     Args:
-        folds     : [(fold_id, split_date, split_end, desc), ...]
+        folds     : [(fold_id, train_start, split_date, split_end, desc), ...]
         wf_run_dir: walk-forward 全体の出力ルートディレクトリ
     """
     import json as _json
@@ -862,25 +899,51 @@ def run_walk_forward(folds, wf_run_dir: str):
     # メタ情報を保存
     meta = {
         'wf_run_dir': wf_run_dir,
-        'folds': [{'fold': fid, 'split_date': sd, 'split_end': se, 'desc': desc}
-                  for fid, sd, se, desc in folds],
+        'folds': [{'fold': fid, 'train_start': ts, 'split_date': sd, 'split_end': se, 'desc': desc}
+                  for fid, ts, sd, se, desc in folds],
     }
     with open(os.path.join(wf_run_dir, 'walk_forward_meta.json'), 'w') as f:
         _json.dump(meta, f, indent=2, ensure_ascii=False)
 
-    for fold_id, split_date, split_end, desc in folds:
+    prev_best_model_path = None
+
+    for idx, (fold_id, train_start, split_date, split_end, desc) in enumerate(folds):
         force_print(f"\n{'='*60}")
         force_print(f"  Walk-forward Fold {fold_id}: {desc}")
-        force_print(f"  Train : collection_date < {split_date}")
+        if train_start:
+            force_print(f"  Train : {train_start} <= collection_date < {split_date}")
+        else:
+            force_print(f"  Train : collection_date < {split_date} (全歴史データ)")
         if split_end:
             force_print(f"  Test  : {split_date} <= collection_date < {split_end}")
         else:
             force_print(f"  Test  : {split_date} <= collection_date (no upper bound)")
         force_print(f"{'='*60}")
 
-        _wf_patch_config(split_date, split_end, fold_id, wf_run_dir)
+        # 1. このフォールドの config を設定
+        _wf_patch_config(train_start, split_date, split_end, fold_id, wf_run_dir)
         _wf_clear_split_cache()
-        main()
+
+        # 2. このフォールドの split_type_wf を事前に確定（pretrain より前に実行）
+        from .db.connection import connect_db, get_db_path
+        from .db.queries import assign_wf_splits
+        _con = connect_db(get_db_path())
+        assign_wf_splits(_con)
+        _con.close()
+
+        # 3. Fold 1 のみ事前学習を実行
+        if idx == 0 and getattr(config, 'USE_PRETRAINING', False):
+            force_print(f"[INFO] Walk-forward Fold {fold_id}: 事前学習を開始 (split_type_wf 基準)...")
+            from .scripts.train.pretrain import run_pretraining
+            run_pretraining()
+
+        # 4. 直前フォールドの重みを設定（Fold 1 = None → USE_PRETRAINING が適用される）
+        config.WF_PREV_FOLD_CHECKPOINT = prev_best_model_path
+
+        # 5. 学習・評価
+        prev_best_model_path = main()
+
+        force_print(f"[INFO] Fold {fold_id} complete. Best model: {prev_best_model_path}")
 
     _wf_summarize(folds, wf_run_dir)
     force_print(f"\n[INFO] Walk-forward complete. Results root: {wf_run_dir}")
@@ -891,7 +954,7 @@ def _run_entry():
     if getattr(config, 'SPLIT_MODE', 'timestep') == 'walk_forward':
         from .scripts.eval.walk_forward import FOLDS
         wf_folds = getattr(config, 'WALK_FORWARD_FOLDS', None)
-        selected = [(fid, sd, se, desc) for fid, sd, se, desc in FOLDS
+        selected = [(fid, ts, sd, se, desc) for fid, ts, sd, se, desc in FOLDS
                     if wf_folds is None or fid in set(wf_folds)]
         if not selected:
             raise ValueError(f"WALK_FORWARD_FOLDS={wf_folds} に該当するフォールドが FOLDS に存在しません")

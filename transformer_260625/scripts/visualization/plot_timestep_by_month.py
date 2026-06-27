@@ -45,7 +45,23 @@ def main():
             'fliers': [],
         })
 
+    n_samples = [r[1] for r in rows]
+
     fig, ax = plt.subplots(figsize=(20, 6))
+
+    # サンプル数の棒グラフ（背面・薄色）
+    ax2 = ax.twinx()
+    ax2.bar(range(len(months)), n_samples, color='steelblue', alpha=0.15, zorder=0)
+    ax2.set_ylabel('Sample count', color='steelblue', fontsize=9)
+    ax2.tick_params(axis='y', labelcolor='steelblue', labelsize=8)
+    ax2.yaxis.set_major_formatter(
+        ticker.FuncFormatter(lambda x, _: f'{x/1000:.0f}K' if x >= 1000 else str(int(x)))
+    )
+    ax2.set_zorder(0)
+    ax.set_zorder(1)
+    ax.patch.set_visible(False)
+
+    # 箱ひげ図（前面）
     ax.bxp(
         stats,
         positions=range(len(months)),
@@ -58,7 +74,6 @@ def main():
     )
 
     # サンプル数を各箱の上に表示
-    y_top = ax.get_ylim()[1]
     for i, r in enumerate(rows):
         n = r[1]
         label = f'{n / 1000:.0f}K' if n >= 1000 else str(n)

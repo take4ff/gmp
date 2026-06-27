@@ -1597,6 +1597,329 @@ def plot_topk_precision(topk_results, output_dir, prefix="test"):
     print(f"[INFO] Top-K precision plot saved to {path}")
 
 
+def plot_strength_fine(details, output_dir, prefix="test"):
+    """流行規模9区分別の Hit Rate を grouped bar chart で保存する。"""
+    import math
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not details:
+        return
+
+    bins = [
+        ('~100',   math.log1p(100)),   ('~500',   math.log1p(500)),
+        ('~1K',    math.log1p(1_000)), ('~5K',    math.log1p(5_000)),
+        ('~10K',   math.log1p(10_000)),('~50K',   math.log1p(50_000)),
+        ('~100K',  math.log1p(100_000)),('~500K', math.log1p(500_000)),
+        ('>500K',  float('inf')),
+    ]
+    tasks    = ['region', 'position', 'aa_pos']
+    task_labels = ['Region', 'NucPos', 'AAPos']
+    colors   = ['#4c72b0', '#dd8452', '#55a868']
+
+    fine_stats = {}
+    for r in details:
+        score = r.get('strength_score', 0.0)
+        cat   = next((lbl for lbl, thr in bins if score < thr), bins[-1][0])
+        if cat not in fine_stats:
+            fine_stats[cat] = {'n': 0, 'hits': {t: 0 for t in tasks}}
+        fine_stats[cat]['n'] += 1
+        for t in tasks:
+            fine_stats[cat]['hits'][t] += int(r.get(f'hit_{t}', False))
+
+    categories = [lbl for lbl, _ in bins]
+    n_cats = len(categories)
+    n_tasks = len(tasks)
+    width = 0.8 / n_tasks
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+    ax2 = ax.twinx()
+
+    ns = [fine_stats.get(c, {'n': 0})['n'] for c in categories]
+    ax2.bar(range(n_cats), ns, color='gray', alpha=0.12, zorder=0)
+    ax2.set_ylabel('Sample count', color='gray', fontsize=9)
+    ax2.tick_params(axis='y', labelcolor='gray', labelsize=8)
+    ax2.set_zorder(0)
+    ax.set_zorder(1)
+    ax.patch.set_visible(False)
+
+    x = np.arange(n_cats)
+    for i, (t, lbl, col) in enumerate(zip(tasks, task_labels, colors)):
+        rates = [
+            fine_stats[c]['hits'][t] / fine_stats[c]['n'] * 100
+            if fine_stats.get(c, {'n': 0})['n'] > 0 else 0.0
+            for c in categories
+        ]
+        offset = (i - n_tasks / 2 + 0.5) * width
+        ax.bar(x + offset, rates, width=width, label=lbl, color=col, alpha=0.85, zorder=2)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, rotation=30, ha='right', fontsize=9)
+    ax.set_xlabel('Strength category (log1p scale)')
+    ax.set_ylabel('Hit Rate (%)')
+    ax.set_ylim(0, 105)
+    ax.set_title(f'Hit Rate by Strength Category ({prefix.upper()})')
+    ax.legend(fontsize=9)
+    ax.grid(axis='y', linestyle='--', alpha=0.4)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_strength_fine.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Strength fine plot saved to {path}")
+
+
+def plot_lineage_metrics(details, output_dir, prefix="test", top_n=30):
+    """系統別 Hit Rate（position）を横棒グラフで保存する。色でエントロピーを表現。"""
+    import math
+    from collections import Counter
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    import matplotlib.colors as mcolors
+    import numpy as np
+
+    if not details:
+        return
+
+    lineage_stats = {}
+    for r in details:
+        lin = r.get('strain', 'unknown') or 'unknown'
+        if lin not in lineage_stats:
+            lineage_stats[lin] = {'n': 0, 'hit_pos': 0, 'positions': []}
+        lineage_stats[lin]['n'] += 1
+        lineage_stats[lin]['hit_pos'] += int(r.get('hit_position', False))
+        lineage_stats[lin].extend if False else lineage_stats[lin]['positions'].extend(
+            list(r.get('targets_position', set()))
+        )
+
+    rows = []
+    for lin, s in lineage_stats.items():
+        n = s['n']
+        pos_list = s['positions']
+        entropy_norm = 0.0
+        if pos_list:
+            counts = Counter(pos_list)
+            total  = len(pos_list)
+            entr   = -sum((c / total) * math.log2(c / total) for c in counts.values())
+            max_e  = math.log2(len(counts)) if len(counts) > 1 else 1.0
+            entropy_norm = entr / max_e
+        rows.append({
+            'lineage': lin, 'n': n,
+            'hit_rate': s['hit_pos'] / n * 100 if n > 0 else 0.0,
+            'entropy_norm': entropy_norm,
+        })
+
+    rows.sort(key=lambda r: r['n'], reverse=True)
+    rows = rows[:top_n]
+    rows = rows[::-1]  # 上から大→小になるよう反転
+
+    labels     = [f"{r['lineage']} (n={r['n']:,})" for r in rows]
+    hit_rates  = [r['hit_rate'] for r in rows]
+    entropies  = [r['entropy_norm'] for r in rows]
+
+    cmap  = cm.RdYlGn_r
+    norm  = mcolors.Normalize(vmin=0.0, vmax=1.0)
+    colors = [cmap(norm(e)) for e in entropies]
+
+    fig_h = max(6, len(rows) * 0.28)
+    fig, ax = plt.subplots(figsize=(10, fig_h))
+    bars = ax.barh(range(len(rows)), hit_rates, color=colors, alpha=0.85)
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels(labels, fontsize=7)
+    ax.set_xlabel('Position Hit Rate (%)')
+    ax.set_title(f'Position Hit Rate by Lineage — top {top_n} ({prefix.upper()})\n'
+                 f'Color: target entropy (green=low/easy, red=high/hard)')
+    ax.set_xlim(0, 105)
+    ax.axvline(x=0, color='gray', linewidth=0.5)
+    ax.grid(axis='x', linestyle='--', alpha=0.4)
+
+    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label='Normalized entropy', pad=0.01, fraction=0.02)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_lineage_metrics.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Lineage metrics plot saved to {path}")
+
+
+def plot_calibration(calib_bins, output_dir, prefix="test"):
+    """Reliability Diagram（キャリブレーション図）を保存する。"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not calib_bins:
+        return
+
+    tasks = [t for t in ['region', 'position', 'aa_pos'] if t in calib_bins]
+    if not tasks:
+        return
+
+    n = len(tasks)
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
+    if n == 1:
+        axes = [axes]
+
+    for ax, task in zip(axes, tasks):
+        bins = [b for b in calib_bins[task]
+                if b['avg_confidence'] is not None and b['avg_accuracy'] is not None]
+        if not bins:
+            continue
+        confs = [b['avg_confidence'] for b in bins]
+        accs  = [b['avg_accuracy']   for b in bins]
+        cnts  = [b['count']          for b in bins]
+        max_cnt = max(cnts) if cnts else 1
+
+        # 完璧なキャリブレーション対角線
+        ax.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Perfect')
+
+        sc = ax.scatter(confs, accs, s=[50 + 200 * c / max_cnt for c in cnts],
+                        c=cnts, cmap='Blues', alpha=0.85, edgecolors='steelblue', linewidths=0.5)
+        ax.plot(confs, accs, color='steelblue', linewidth=1.2, alpha=0.7)
+
+        plt.colorbar(sc, ax=ax, label='Bin count', fraction=0.04, pad=0.02)
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(-0.02, 1.02)
+        ax.set_xlabel('Mean predicted confidence')
+        ax.set_ylabel('Fraction of positives (accuracy)')
+        ax.set_title(f'Reliability Diagram — {task} ({prefix.upper()})')
+        ax.legend(fontsize=8)
+        ax.grid(linestyle='--', alpha=0.4)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_calibration.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Calibration plot saved to {path}")
+
+
+def plot_region_metrics(details, output_dir, prefix="test"):
+    """遺伝子領域別の Precision / Recall / F1 を横棒グラフで保存する。"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from .. import config as _cfg
+
+    if not details:
+        return
+
+    region_names = {v: k for k, v in _cfg.PROTEIN_VOCABS.items()}
+    region_stats = {}
+    for r in details:
+        for reg_id in r.get('targets_region', set()):
+            if reg_id not in region_stats:
+                region_stats[reg_id] = {'tp': 0, 'fp': 0, 'fn': 0, 'n': 0}
+            region_stats[reg_id]['n'] += 1
+            if reg_id in r.get('preds_region', set()):
+                region_stats[reg_id]['tp'] += 1
+            else:
+                region_stats[reg_id]['fn'] += 1
+        for pred_id in r.get('preds_region', set()):
+            if pred_id not in r.get('targets_region', set()):
+                if pred_id not in region_stats:
+                    region_stats[pred_id] = {'tp': 0, 'fp': 0, 'fn': 0, 'n': 0}
+                region_stats[pred_id]['fp'] += 1
+
+    rows = []
+    for reg_id, s in region_stats.items():
+        prec = s['tp'] / (s['tp'] + s['fp']) * 100 if (s['tp'] + s['fp']) > 0 else 0.0
+        rec  = s['tp'] / (s['tp'] + s['fn']) * 100 if (s['tp'] + s['fn']) > 0 else 0.0
+        f1   = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+        rows.append({'name': region_names.get(reg_id, f'ID:{reg_id}'),
+                     'n': s['n'], 'prec': prec, 'rec': rec, 'f1': f1})
+
+    rows = [r for r in rows if r['n'] > 0]
+    rows.sort(key=lambda r: r['rec'], reverse=True)
+
+    labels = [f"{r['name']} (n={r['n']:,})" for r in rows]
+    precs  = [r['prec'] for r in rows]
+    recs   = [r['rec']  for r in rows]
+    f1s    = [r['f1']   for r in rows]
+
+    y     = np.arange(len(rows))
+    width = 0.26
+    fig_h = max(6, len(rows) * 0.30)
+    fig, ax = plt.subplots(figsize=(10, fig_h))
+    ax.barh(y - width, precs, height=width, label='Precision', color='#4c72b0', alpha=0.85)
+    ax.barh(y,         recs,  height=width, label='Recall',    color='#dd8452', alpha=0.85)
+    ax.barh(y + width, f1s,   height=width, label='F1',        color='#55a868', alpha=0.85)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=7)
+    ax.set_xlabel('Score (%)')
+    ax.set_title(f'Region Metrics — Precision / Recall / F1 ({prefix.upper()})\n(sorted by Recall)')
+    ax.set_xlim(0, 110)
+    ax.legend(fontsize=9)
+    ax.grid(axis='x', linestyle='--', alpha=0.4)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_region_metrics.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Region metrics plot saved to {path}")
+
+
+def plot_r_precision(topk_results, output_dir, prefix="test"):
+    """R-Precision を Top-K と並べて比較する棒グラフを保存する。"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not topk_results:
+        return
+
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+    tasks = [t for t in tasks if t in topk_results]
+
+    int_ks = sorted(k for k in next(iter(topk_results.values())) if isinstance(k, int))
+    has_rp = any('r_precision' in topk_results[t] for t in tasks)
+    if not has_rp:
+        return
+
+    labels = [f'K={k}' for k in int_ks] + ['R-Prec']
+    n_labels = len(labels)
+    n_tasks  = len(tasks)
+    width    = 0.8 / n_labels
+    colors   = ['#4c72b0', '#dd8452', '#55a868', '#c44e52', '#8172b2', '#937860'][:n_labels]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    x = np.arange(n_tasks)
+
+    for i, (lbl, col) in enumerate(zip(labels, colors)):
+        hit_rates  = []
+        precisions = []
+        for t in tasks:
+            if lbl.startswith('K='):
+                k = int(lbl[2:])
+                m = topk_results[t].get(k, {})
+            else:
+                m = topk_results[t].get('r_precision', {})
+            hit_rates.append(m.get('hit_rate', 0.0))
+            precisions.append(m.get('precision', 0.0))
+        offset = (i - n_labels / 2 + 0.5) * width
+        kw = dict(width=width, color=col, alpha=0.85,
+                  linewidth=1.5 if lbl == 'R-Prec' else 0,
+                  edgecolor='white' if lbl == 'R-Prec' else col)
+        ax1.bar(x + offset, hit_rates,  label=lbl, **kw)
+        ax2.bar(x + offset, precisions, label=lbl, **kw)
+
+    for ax, ylabel, title in [
+        (ax1, 'Hit Rate (%)',   f'Hit Rate: Top-K vs R-Precision ({prefix.upper()})'),
+        (ax2, 'Precision (%)',  f'Precision: Top-K vs R-Precision ({prefix.upper()})'),
+    ]:
+        ax.set_xticks(x)
+        ax.set_xticklabels(tasks, rotation=20, ha='right', fontsize=9)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_ylim(0, 110)
+        ax.legend(fontsize=8)
+        ax.grid(axis='y', linestyle='--', alpha=0.4)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_r_precision.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] R-Precision plot saved to {path}")
+
+
 def plot_attention_heatmap(model, sample_batch, output_dir, prefix="test"):
     """CoOccurrenceAttention と TransformerEncoder の Attention 重みをヒートマップで保存する。
 

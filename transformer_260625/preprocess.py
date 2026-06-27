@@ -416,7 +416,7 @@ def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
         # Pandas DataFrame 経由で一括インサート (DuckDBのネイティブ登録スキャン機能により極めて高速)
         df_samples = pd.DataFrame(samples_buffer, columns=[
             'sample_id', 'strain_id', 'raw_path', 'path_length', 
-            'max_cooccurrence', 'split_type', 'split_type_date', 'strength_score', 'collection_date'
+            'max_cooccurrence', 'split_type', 'split_type_date', 'split_type_wf', 'strength_score', 'collection_date'
         ])
         con.execute("INSERT INTO samples SELECT * FROM df_samples")
 
@@ -456,6 +456,7 @@ def append_strain_to_buffers(strain_id, strain_strength, samples_data,
             max_cooc,
             0,  # split_type
             0,  # split_type_date
+            0,  # split_type_wf
             0.0,  # strength_score (unused; strains テーブルの strength_score_ncbi/usher を使用)
             collection_date
         ))

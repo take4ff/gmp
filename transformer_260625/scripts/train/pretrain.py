@@ -179,6 +179,10 @@ def run_pretraining():
         raise RuntimeError(f"Database not found: {msg}")
     db_path = get_db_path()
 
+    # walk_forward モードでは run_walk_forward() が事前にフォールドの splits を
+    # assign_wf_splits() で設定してから run_pretraining() を呼ぶため、
+    # get_split_col() 経由で正しい split_type_wf が参照される。
+    # 他のモードでは split_type（timestep 基準）が使われる。
     train_loader = create_db_dataloader(
         db_path=db_path,
         split_type=0,

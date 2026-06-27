@@ -857,6 +857,8 @@ def save_topk_precision_csv(topk_results, output_dir, prefix="test"):
     rows = []
     for task, k_dict in topk_results.items():
         for k, metrics in k_dict.items():
+            if not isinstance(k, int):
+                continue  # 'r_precision' 等の非整数キーは別ファイルに出力
             rows.append({
                 'task': task,
                 'top_k': k,
@@ -877,7 +879,7 @@ def save_topk_precision_csv(topk_results, output_dir, prefix="test"):
     for task in task_labels:
         if task not in topk_results:
             continue
-        for k in sorted(topk_results[task].keys()):
+        for k in sorted(k for k in topk_results[task] if isinstance(k, int)):
             m = topk_results[task][k]
             _log.force_print(
                 f"  {task:<20} {k:>4}  {m['precision']:>9.2f}%  {m['recall']:>7.2f}%  {m['hit_rate']:>7.2f}%"

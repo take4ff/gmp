@@ -92,6 +92,7 @@ def init_db(db_path=None):
             max_cooccurrence INTEGER,
             split_type INTEGER DEFAULT 0,
             split_type_date INTEGER DEFAULT 0,
+            split_type_wf INTEGER DEFAULT 0,
             strength_score REAL DEFAULT 0.0,
             collection_date VARCHAR
         )
@@ -224,6 +225,7 @@ def create_db_indexes(con):
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_strain ON samples(strain_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split ON samples(split_type)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split_date ON samples(split_type_date)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split_wf ON samples(split_type_wf)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_cooccur ON samples(max_cooccurrence)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_length ON samples(path_length)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_features_sample ON features(sample_id)")
@@ -244,11 +246,14 @@ def run_db_migrations(db_path=None):
             print("[INFO] Migration: Adding 'split_type_date' column to samples table...")
             con.execute("ALTER TABLE samples ADD COLUMN split_type_date INTEGER DEFAULT 0")
             con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split_date ON samples(split_type_date)")
-            
-            # 初回の日付分割計算を実行して保存
             from .queries import assign_date_splits
             assign_date_splits(con)
             print("[INFO] Migration: 'split_type_date' column added and initialized successfully.")
+        if 'split_type_wf' not in cols:
+            print("[INFO] Migration: Adding 'split_type_wf' column to samples table...")
+            con.execute("ALTER TABLE samples ADD COLUMN split_type_wf INTEGER DEFAULT 0")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split_wf ON samples(split_type_wf)")
+            print("[INFO] Migration: 'split_type_wf' column added (will be populated at walk_forward runtime).")
     except Exception as e:
         print(f"[ERROR] Migration failed: {e}")
         raise e
