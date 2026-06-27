@@ -116,6 +116,7 @@ class InputEmbedding(nn.Module):
         self.synonymous_embed = nn.Embedding(
             config.VOCAB_SIZE_SYNONYMOUS,
             getattr(config, 'EMBED_DIM_SYNONYMOUS', 8),
+            padding_idx=0,
         )
 
         self.num_norm = nn.LayerNorm(config.NUM_CHEM_FEATURES)
@@ -203,10 +204,14 @@ class CoOccurrenceAttention(nn.Module):
             batch_first=True,
         )
 
-    def forward(self, x, need_weights=False):
+    def forward(self, x, co_occur_mask=None, need_weights=False):
         # x: [B, T, C, F]
+        # co_occur_mask: [B, T, C] bool, True=PAD（base_before==0 の位置）
         B, T, C, F = x.shape
         x_flat = x.reshape(B * T, C, F)  # [B*T, C, F]
+
+        # key_padding_mask: [B*T, C]（MHA の key/value 側 PAD を無視させる）
+        kpm = co_occur_mask.reshape(B * T, C) if co_occur_mask is not None else None
 
         # 次元変換 (FEATURE_DIM → attn_dim)
         if self.in_proj is not None:
@@ -214,13 +219,14 @@ class CoOccurrenceAttention(nn.Module):
 
         # Self-Attention 層（変異間相互作用）
         for sa, norm in zip(self.self_attn_layers, self.self_attn_norms):
-            sa_out, _ = sa(x_flat, x_flat, x_flat, need_weights=False)
+            sa_out, _ = sa(x_flat, x_flat, x_flat, key_padding_mask=kpm, need_weights=False)
             x_flat = norm(x_flat + sa_out)
 
         # Cross-Attention（クエリ → 変異集合 → スカラーへ集約）
         q_flat = self.query.repeat(B * T, 1, 1)  # [B*T, 1, attn_dim]
         attn_out, attn_weights = self.attention(
             q_flat, x_flat, x_flat,
+            key_padding_mask=kpm,
             need_weights=need_weights,
             average_attn_weights=True,
         )  # attn_out: [B*T, 1, attn_dim]
@@ -525,7 +531,9 @@ class HierarchicalTransformer(nn.Module):
 
         else:
             # 2. 共起集約 (ベース情報)
-            x_agg = self.co_attn(x)
+            # base_before==0 は PAD トークン（BASE_VOCABS['PAD']=0）
+            co_occur_mask = (x_cat[..., 0] == 0)  # [B, T, C] True=PAD
+            x_agg = self.co_attn(x, co_occur_mask=co_occur_mask)
 
             # 3. 局所特徴抽出 (文脈情報) - Ablation Study用に条件分岐
             if self.use_local_conv and self.local_feature_extractor is not None:

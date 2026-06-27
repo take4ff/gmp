@@ -19,7 +19,7 @@ from .utils.losses import build_loss_fn
 from .utils.logging import force_print, print_config, print_sample_structure, init_wandb, finish_wandb
 from .utils.io import (
     save_training_log, save_prediction_results, save_strain_info,
-    save_config_copy, save_synonymous_distribution_csv, save_confusion_matrix_csv,
+    save_config_copy, save_synonymous_distribution_csv,
     save_metrics_csv, save_category_metrics_csv, save_combined_metrics_csv,
     save_region_metrics_csv,
     save_per_position_recall_csv,
@@ -34,6 +34,9 @@ from .utils.io import (
     save_lineage_metrics_csv,
     save_run_summary_json,
     save_r_precision_csv,
+    save_random_baseline_csv,
+    save_prediction_distribution_csv,
+    save_calibration_csv,
 )
 from .utils.plotting import (
     plot_training_curve, plot_metrics_by_timestep, plot_category_metrics,
@@ -328,7 +331,7 @@ def run_training(model, train_loader, val_loader, loss_fn, loss_wrapper,
         if scheduler:
             scheduler.step()
 
-        val_loss, val_metrics, _, _, _ = evaluate(model, val_loader, loss_fn, strength_thresholds)
+        val_loss, val_metrics, _, _, _, _ = evaluate(model, val_loader, loss_fn, strength_thresholds)
 
         epoch_time = time.time() - epoch_start_time
         force_print(
@@ -412,14 +415,15 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     def _save_results(metrics, cat_metrics, details, prefix):
         if config.SAVE_PREDICTIONS:
             save_prediction_results(details, run_output_dir, prefix=prefix)
-        df_ts = save_metrics_csv(metrics, run_output_dir, prefix=prefix)
-        df_cat = save_category_metrics_csv(cat_metrics, run_output_dir, prefix=prefix)
+        df_ts = save_metrics_csv(metrics, run_output_dir, prefix=prefix, save=False)
+        df_cat = save_category_metrics_csv(cat_metrics, run_output_dir, prefix=prefix, save=False)
         save_strength_fine_csv(details, run_output_dir, prefix=prefix)
         save_lineage_metrics_csv(details, run_output_dir, prefix=prefix)
         save_region_metrics_csv(details, run_output_dir, prefix=prefix)
-        save_confusion_matrix_csv(details, run_output_dir, prefix=prefix)
         save_per_position_recall_csv(details, run_output_dir, prefix=prefix)
         save_error_analysis_csv(details, run_output_dir, prefix=prefix)
+        save_random_baseline_csv(details, run_output_dir, prefix=prefix)
+        save_prediction_distribution_csv(details, run_output_dir, prefix=prefix)
         if getattr(config, 'SAVE_STRAIN_METRICS', False):
             save_strain_metrics_csv(details, run_output_dir, prefix=prefix)
         plot_metrics_by_timestep(metrics, run_output_dir, prefix=prefix)
@@ -430,10 +434,12 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
 
     # Validation
     force_print("Final evaluation on Validation Set...")
-    val_loss, val_metrics, val_details, val_cat_metrics, val_metrics_ym = evaluate(
+    val_loss, val_metrics, val_details, val_cat_metrics, val_metrics_ym, val_calib_bins = evaluate(
         model, val_loader, loss_fn, strength_thresholds
     )
     val_df_ts, val_df_cat = _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
+    if val_calib_bins:
+        save_calibration_csv(val_calib_bins, run_output_dir, prefix="valid")
 
     # Test
     test_loss = None
@@ -442,10 +448,12 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     test_metrics_ym = {}
     if len(test_loader) > 0:
         force_print("Final evaluation on Test Set...")
-        test_loss, test_metrics, test_details, test_cat_metrics, test_metrics_ym = evaluate(
+        test_loss, test_metrics, test_details, test_cat_metrics, test_metrics_ym, test_calib_bins = evaluate(
             model, test_loader, loss_fn, strength_thresholds
         )
         test_df_ts, test_df_cat = _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
+        if test_calib_bins:
+            save_calibration_csv(test_calib_bins, run_output_dir, prefix="test")
 
     # 統合レポート
     print_combined_report(val_details, test_details, strength_thresholds)
@@ -626,7 +634,7 @@ def ensemble_evaluate(val_loader, test_loader, loss_fn, run_output_dir, strength
 
     # Validation アンサンブル評価
     force_print("[Ensemble] Validation set evaluation...")
-    _, ens_val_metrics, ens_val_details, ens_val_cat, ens_val_ym = evaluate(
+    _, ens_val_metrics, ens_val_details, ens_val_cat, ens_val_ym, _ = evaluate(
         ens_model, val_loader, loss_fn, strength_thresholds
     )
     ens_dir = os.path.join(run_output_dir, 'ensemble')
@@ -637,7 +645,7 @@ def ensemble_evaluate(val_loader, test_loader, loss_fn, run_output_dir, strength
     # Test アンサンブル評価
     if len(test_loader) > 0:
         force_print("[Ensemble] Test set evaluation...")
-        _, ens_test_metrics, ens_test_details, ens_test_cat, ens_test_ym = evaluate(
+        _, ens_test_metrics, ens_test_details, ens_test_cat, ens_test_ym, _ = evaluate(
             ens_model, test_loader, loss_fn, strength_thresholds
         )
         save_metrics_csv(ens_test_metrics, ens_dir, prefix='ensemble_test')
@@ -772,8 +780,15 @@ def _wf_clear_split_cache():
 
 
 def _wf_summarize(folds, wf_run_dir: str):
-    """全フォールドの run_summary.json を集約して CSV に出力する。"""
+    """全フォールドの run_summary.json を集約して CSV に出力する。
+
+    run_summary.json のネスト構造 {"val": {...}, "test": {...}} を
+    val_* / test_* のフラットな列に展開し、フォールドメタ情報も付加する。
+    """
     import csv, json as _json
+
+    fold_meta = {fold_id: (split_date, split_end, desc)
+                 for fold_id, split_date, split_end, desc in folds}
 
     rows = []
     for fold_id, *_ in folds:
@@ -790,8 +805,22 @@ def _wf_summarize(folds, wf_run_dir: str):
             continue
         with open(summary_path) as f:
             summary = _json.load(f)
-        summary['fold'] = fold_id
-        rows.append(summary)
+
+        # フォールドメタ情報
+        split_date, split_end, desc = fold_meta.get(fold_id, ('', '', ''))
+        row = {
+            'fold': fold_id,
+            'split_date': split_date,
+            'split_end': split_end or '',
+            'description': desc,
+            'val_loss': summary.get('val_loss'),
+            'test_loss': summary.get('test_loss'),
+        }
+        # val / test のネストをフラット展開
+        for prefix in ('val', 'test'):
+            for k, v in summary.get(prefix, {}).items():
+                row[f'{prefix}_{k}'] = v
+        rows.append(row)
 
     if not rows:
         return
@@ -799,19 +828,23 @@ def _wf_summarize(folds, wf_run_dir: str):
     force_print("\n" + "="*60)
     force_print("  Walk-forward Summary")
     force_print("="*60)
-    headers = ['fold', 'test_position_hit@1', 'test_r_precision', 'test_loss']
-    force_print("  " + "  ".join(f"{h:>22}" for h in headers))
+    force_print(f"  {'fold':>4}  {'split_date':>12}  {'test_top1_position_hit_rate_pct':>31}  {'test_r_precision_position':>25}  {'test_loss':>10}")
+    force_print(f"  {'-'*88}")
     for r in rows:
-        vals = [str(r.get('fold', '?')),
-                f"{r.get('test_position_hit@1', float('nan')):.4f}",
-                f"{r.get('test_r_precision',    float('nan')):.4f}",
-                f"{r.get('test_loss',           float('nan')):.4f}"]
-        force_print("  " + "  ".join(f"{v:>22}" for v in vals))
+        force_print(
+            f"  {r.get('fold', '?'):>4}  {r.get('split_date', ''):>12}"
+            f"  {r.get('test_top1_position_hit_rate_pct', float('nan')):>31.4f}"
+            f"  {r.get('test_r_precision_position',       float('nan')):>25.4f}"
+            f"  {r.get('test_loss', float('nan')):>10.6f}"
+        )
 
     csv_path = os.path.join(wf_run_dir, 'walk_forward_summary.csv')
     keys = sorted({k for r in rows for k in r})
+    # 見やすい順に並べ替え（メタ列を先頭に）
+    meta_keys = ['fold', 'split_date', 'split_end', 'description', 'val_loss', 'test_loss']
+    ordered_keys = meta_keys + [k for k in keys if k not in meta_keys]
     with open(csv_path, 'w', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=keys)
+        w = csv.DictWriter(f, fieldnames=ordered_keys, extrasaction='ignore')
         w.writeheader()
         w.writerows(rows)
     force_print(f"\n  Summary CSV → {csv_path}")

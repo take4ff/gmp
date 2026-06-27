@@ -344,7 +344,7 @@ OPTIMIZER_BETA2 = 0.999          # AdamW の Beta2
 #   val_r_precision: 評価指標と直結。高エントロピー変異ではノイジーになりうる。
 EARLY_STOPPING_METRIC = "val_loss"  # 'val_loss' | 'val_r_precision' | 'val_macro_recall' 等
 EARLY_STOPPING_MODE = "min"         # 'min' (loss等) | 'max' (val_r_precision 等、大きいほど良い)
-EARLY_STOPPING_PATIENCE = 7   # [260417] エポック増加に合わせて余裕を持たせる
+EARLY_STOPPING_PATIENCE = 5   # [260417] エポック増加に合わせて余裕を持たせる
 
 # --- 評価・可視化のハードコード解除 (新規追加) ---
 EVAL_TOP_KS = (1, 3, 5)             # Top-K 評価で計算する K のリスト

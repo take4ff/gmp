@@ -441,6 +441,34 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 ece_data['probs_aa_pos'],   ece_data['hits_aa_pos']
             )
 
+    # キャリブレーション bin データの集計（全タイムステップを結合）
+    calib_bins = {}
+    if getattr(config, 'SAVE_ECE', False):
+        n_bins = getattr(config, 'ECE_N_BINS', 10)
+        for task in ('region', 'position', 'aa_pos'):
+            all_probs, all_hits = [], []
+            for ece_d in results_for_ece.values():
+                all_probs.extend(ece_d[f'probs_{task}'])
+                all_hits.extend(ece_d[f'hits_{task}'])
+            if not all_probs:
+                continue
+            n = len(all_probs)
+            bins = []
+            for b in range(n_bins):
+                lo, hi = b / n_bins, (b + 1) / n_bins
+                in_bin = [(p, h) for p, h in zip(all_probs, all_hits)
+                          if lo <= p < hi or (b == n_bins - 1 and p == hi)]
+                count = len(in_bin)
+                bins.append({
+                    'bin': b + 1,
+                    'lower': round(lo, 4),
+                    'upper': round(hi, 4),
+                    'avg_confidence': round(sum(p for p, _ in in_bin) / count, 4) if count else None,
+                    'avg_accuracy':   round(sum(h for _, h in in_bin) / count, 4) if count else None,
+                    'count': count,
+                })
+            calib_bins[task] = bins
+
     # 流行度カテゴリ別のメトリクス計算
     metrics_by_category = {}
     for ts_len in results_by_ts_and_category.keys():
@@ -502,7 +530,7 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 )
             }
 
-    return avg_loss, final_metrics_by_ts, detailed_results, metrics_by_category, final_metrics_by_ym
+    return avg_loss, final_metrics_by_ts, detailed_results, metrics_by_category, final_metrics_by_ym, calib_bins
 
 
 def evaluate_topk(model, dataloader, ks=(1, 3, 5)):

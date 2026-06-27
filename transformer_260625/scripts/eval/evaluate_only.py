@@ -124,7 +124,7 @@ def main():
 
     # Validation
     force_print("Evaluating Validation Set...")
-    val_loss, val_metrics, val_details, val_cat_metrics, val_metrics_ym = evaluate(
+    val_loss, val_metrics, val_details, val_cat_metrics, val_metrics_ym, _ = evaluate(
         model, val_loader, loss_fn, strength_thresholds
     )
     _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
@@ -133,7 +133,7 @@ def main():
     test_loss, test_metrics, test_details, test_cat_metrics, test_metrics_ym = None, None, None, None, {}
     if len(test_loader) > 0:
         force_print("Evaluating Test Set...")
-        test_loss, test_metrics, test_details, test_cat_metrics, test_metrics_ym = evaluate(
+        test_loss, test_metrics, test_details, test_cat_metrics, test_metrics_ym, _ = evaluate(
             model, test_loader, loss_fn, strength_thresholds
         )
         _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")

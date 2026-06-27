@@ -225,8 +225,8 @@ def save_synonymous_distribution_csv(train_data, valid_data, test_data, output_d
     _log.force_print(f"[INFO] Synonymous distribution saved to {path}")
 
 
-def save_metrics_csv(metrics_by_ts, output_dir, prefix="val"):
-    """タイムステップ別メトリクスをCSVに保存する。"""
+def save_metrics_csv(metrics_by_ts, output_dir, prefix="val", save=True):
+    """タイムステップ別メトリクスをCSVに保存する。save=False のときはDataFrameのみ返す。"""
     rows = []
     for ts_len in sorted(metrics_by_ts.keys()):
         m = metrics_by_ts[ts_len]
@@ -235,14 +235,15 @@ def save_metrics_csv(metrics_by_ts, output_dir, prefix="val"):
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    path = _get_save_path(output_dir, f'{prefix}_metrics_by_timestep.csv')
-    df.to_csv(path, index=False)
-    _log.force_print(f"[INFO] Metrics saved to {path}")
+    if save:
+        path = _get_save_path(output_dir, f'{prefix}_metrics_by_timestep.csv')
+        df.to_csv(path, index=False)
+        _log.force_print(f"[INFO] Metrics saved to {path}")
     return df
 
 
-def save_category_metrics_csv(cat_metrics, output_dir, prefix="val"):
-    """流行度カテゴリ別メトリクスをCSVに保存する（全体1ファイル + カテゴリ別3ファイル）。"""
+def save_category_metrics_csv(cat_metrics, output_dir, prefix="val", save=True):
+    """流行度カテゴリ別メトリクスをCSVに保存する。save=False のときはDataFrameのみ返す。"""
     rows = []
     for ts_len in sorted(cat_metrics.keys()):
         for category in ['low', 'medium', 'high']:
@@ -252,15 +253,16 @@ def save_category_metrics_csv(cat_metrics, output_dir, prefix="val"):
             rows.append(row)
 
     df = pd.DataFrame(rows)
-    path = _get_save_path(output_dir, f'{prefix}_metrics_by_category.csv')
-    df.to_csv(path, index=False)
-    _log.force_print(f"[INFO] Category metrics saved to {path}")
+    if save:
+        path = _get_save_path(output_dir, f'{prefix}_metrics_by_category.csv')
+        df.to_csv(path, index=False)
+        _log.force_print(f"[INFO] Category metrics saved to {path}")
 
-    for category in ['low', 'medium', 'high']:
-        cat_rows = [r for r in rows if r['category'] == category]
-        if cat_rows:
-            cat_path = _get_save_path(output_dir, f'{prefix}_metrics_by_category_{category}.csv')
-            pd.DataFrame(cat_rows).to_csv(cat_path, index=False)
+        for category in ['low', 'medium', 'high']:
+            cat_rows = [r for r in rows if r['category'] == category]
+            if cat_rows:
+                cat_path = _get_save_path(output_dir, f'{prefix}_metrics_by_category_{category}.csv')
+                pd.DataFrame(cat_rows).to_csv(cat_path, index=False)
 
     return df
 
@@ -778,7 +780,13 @@ def save_run_summary_json(val_metrics, test_metrics, val_topk, test_topk,
         if topk is None:
             return None
         m = topk.get(task, {}).get(k)
-        return round(m['hit_rate'], 2) if m else None
+        return round(m['hit_rate'], 4) if m else None
+
+    def _r_prec_entry(topk, task):
+        if topk is None:
+            return None
+        rp = topk.get(task, {}).get('r_precision')
+        return round(rp['hit_rate'], 4) if rp else None
 
     eval_ks = getattr(config, 'EVAL_TOP_KS', (1, 3, 5))
     summary = {
@@ -792,6 +800,9 @@ def save_run_summary_json(val_metrics, test_metrics, val_topk, test_topk,
             **{f'top{k}_region_hit_rate_pct': _topk_entry(val_topk, 'region', k) for k in eval_ks},
             **{f'top{k}_position_hit_rate_pct': _topk_entry(val_topk, 'position', k) for k in eval_ks},
             **{f'top{k}_aa_pos_hit_rate_pct': _topk_entry(val_topk, 'aa_pos', k) for k in eval_ks},
+            'r_precision_region': _r_prec_entry(val_topk, 'region'),
+            'r_precision_position': _r_prec_entry(val_topk, 'position'),
+            'r_precision_aa_pos': _r_prec_entry(val_topk, 'aa_pos'),
         },
         'test': {
             'macro_recall_region': _weighted_avg(test_metrics, 'region_macro_recall'),
@@ -801,6 +812,9 @@ def save_run_summary_json(val_metrics, test_metrics, val_topk, test_topk,
             **{f'top{k}_region_hit_rate_pct': _topk_entry(test_topk, 'region', k) for k in eval_ks},
             **{f'top{k}_position_hit_rate_pct': _topk_entry(test_topk, 'position', k) for k in eval_ks},
             **{f'top{k}_aa_pos_hit_rate_pct': _topk_entry(test_topk, 'aa_pos', k) for k in eval_ks},
+            'r_precision_region': _r_prec_entry(test_topk, 'region'),
+            'r_precision_position': _r_prec_entry(test_topk, 'position'),
+            'r_precision_aa_pos': _r_prec_entry(test_topk, 'aa_pos'),
         },
     }
 
@@ -951,3 +965,21 @@ def save_date_metrics_csv(metrics_by_ym, output_dir, prefix="test"):
     df.to_csv(path, index=False)
     _log.force_print(f"[INFO] Date metrics saved to {path}")
     return df
+
+
+def save_calibration_csv(calib_bins, output_dir, prefix="test"):
+    """キャリブレーション bin データを CSV に保存する（Reliability Diagram 用）。
+
+    columns: task, bin, lower, upper, avg_confidence, avg_accuracy, count
+    SAVE_ECE=True のときのみ calib_bins にデータが入る。
+    """
+    rows = []
+    for task, bins in calib_bins.items():
+        for b in bins:
+            rows.append({'task': task, **b})
+    if not rows:
+        return
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_calibration_bins.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Calibration bin data saved to {path}")
