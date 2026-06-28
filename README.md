@@ -314,6 +314,35 @@ ABLATION_MASKS = {
 2. **モデル② 中間モデル（直列入力 ＋ 特徴量あり）**: モデル①の構成に32次元の生化学・ホスト適応特徴量を統合。「生物学的知識」の追加効果を純粋に実証。
 3. **モデル③ 提案モデル（集約層あり ＋ 特徴量あり）**: 物理化学特徴量に加え、**Co-occurrence Attention** で共起変異を順序非依存に集約。位置エンコーディングの矛盾解消によるアーキテクチャ効果を証明。
 
+### PETra 相当ベースライン（モデル①）の設定方法
+
+```python
+# config.py
+
+# 共起変異を独立トークンとして直列化（Co-occurrence Attention をバイパス）
+USE_FLAT_COATTN    = True
+# 1D 正弦波 PE を使用: 共起グループを識別しない = PETra 相当の純粋時系列扱い
+FLAT_COATTN_1D_PE  = True
+# トークン数が T×C = 780 に増加するためバッチサイズを削減
+BATCH_SIZE         = 64
+
+# 全物理化学・ホスト適応特徴量を無効化
+ABLATION_MASKS = {
+    'FREQ': True, 'HYDRO': True, 'CHARGE': True, 'SIZE': True,
+    'BLSM': True, 'PAM250': True,
+    'HOST_LOG_RATIO_DIFF': True, 'HOST_LOG_RATIO_BEFORE': True,
+    'HUMAN_RSCU_DIFF': True, 'SCV2_RSCU_DIFF': True,
+    # ... 全フラグを True に設定
+    'CUM_SYN': True, 'CUM_NONSYN': True,
+    'MUTATION_CONTEXT': True,
+}
+```
+
+**モデル②（直列入力 ＋ 特徴量あり）** は上記から `ABLATION_MASKS` を全て `False` に戻すだけで実現できる。
+**モデル③（提案）** はデフォルト設定（`USE_FLAT_COATTN=False`）がそのまま対応する。
+
+> **Note**: `FLAT_COATTN_1D_PE=False`（デフォルト）のままにすると、2D PE により共起グループが識別されるため PETra 相当にならない点に注意。
+
 ---
 
 ### 📅 Future Roadmap（今後の展望）

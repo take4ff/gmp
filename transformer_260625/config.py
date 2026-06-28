@@ -242,9 +242,14 @@ CO_ATTN_N_LAYERS = 1             # 共起 Attention の層数（2: Self-Attn + C
 CO_ATTN_DIM      = FEATURE_DIM   # 共起 Attention の内部次元（デフォルト = FEATURE_DIM）
 
 # ③ USE_FLAT_COATTN: 共起集約をスキップし、全変異を独立トークンとして Transformer に渡す
-#    [B, T, C, F] → [B, T*C, F] + 2D 位置エンコーディング（タイムステップ + 共起内インデックス）
+#    [B, T, C, F] → [B, T*C, F]
 #    T*C = 39*20 = 780 トークン/サンプルになるため BATCH_SIZE を大幅に下げる必要あり（例: 32〜64）
 USE_FLAT_COATTN = False
+
+# FLAT_COATTN_1D_PE: USE_FLAT_COATTN=True のときの位置エンコーディング方式
+#   False: 2D PE（タイムステップ次元 + 共起内インデックス次元）← モデルが共起グループを識別できる
+#   True : 1D PE（正弦波・通し番号）← 共起情報を持たない純粋な時系列扱い = PETra相当
+FLAT_COATTN_1D_PE = False
 
 # --- 訓練設定 ---
 BATCH_SIZE = 512

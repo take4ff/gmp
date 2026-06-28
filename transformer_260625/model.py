@@ -301,9 +301,10 @@ class HierarchicalTransformer(nn.Module):
         self.co_attn = CoOccurrenceAttention()
 
         # ③ USE_FLAT_COATTN: 共起集約をスキップし全変異を独立トークンとして Transformer に渡す
-        # 2D 位置エンコーディング: タイムステップ次元 + 共起内インデックス次元
         self.use_flat_coattn = getattr(config, 'USE_FLAT_COATTN', False)
-        if self.use_flat_coattn:
+        self.flat_1d_pe = getattr(config, 'FLAT_COATTN_1D_PE', False)
+        # 2D PE（タイムステップ + 共起内インデックス）は FLAT_COATTN_1D_PE=False のときのみ使用
+        if self.use_flat_coattn and not self.flat_1d_pe:
             self.flat_ts_embed = nn.Embedding(config.MAX_SEQ_LEN + 2, config.FEATURE_DIM)
             self.flat_co_embed = nn.Embedding(config.MAX_CO_OCCURRENCE + 1, config.FEATURE_DIM)
         else:
@@ -501,17 +502,21 @@ class HierarchicalTransformer(nn.Module):
 
         if self.use_flat_coattn:
             # ③ Flat Co-occurrence: 全変異を独立トークンとして Transformer に渡す
-            # [B, T, C, F] → [B, T*C, F] + 2D 位置エンコーディング
+            # [B, T, C, F] → [B, T*C, F]
             B, T, C, F_dim = x.shape
+            x_flat_seq = x.reshape(B, T * C, F_dim)
 
-            ts_idx = torch.arange(T, device=x.device)
-            co_idx = torch.arange(C, device=x.device)
-            # タイムステップ PE + 共起内インデックス PE を足し合わせて [T*C, F] を作成
-            pos_2d = (self.flat_ts_embed(ts_idx).unsqueeze(1) +
-                      self.flat_co_embed(co_idx).unsqueeze(0)).reshape(T * C, F_dim)
-
-            x_flat_seq = x.reshape(B, T * C, F_dim) + pos_2d.unsqueeze(0)  # [B, T*C, F]
-            x_flat_seq = self.pos_encoder.dropout(x_flat_seq)
+            if self.flat_1d_pe:
+                # 1D 正弦波 PE: 共起グループを識別しない = PETra相当の純粋時系列扱い
+                x_flat_seq = self.pos_encoder(x_flat_seq)
+            else:
+                # 2D PE: タイムステップ次元 + 共起内インデックス次元（共起グループを識別）
+                ts_idx = torch.arange(T, device=x.device)
+                co_idx = torch.arange(C, device=x.device)
+                pos_2d = (self.flat_ts_embed(ts_idx).unsqueeze(1) +
+                          self.flat_co_embed(co_idx).unsqueeze(0)).reshape(T * C, F_dim)
+                x_flat_seq = x_flat_seq + pos_2d.unsqueeze(0)
+                x_flat_seq = self.pos_encoder.dropout(x_flat_seq)
 
             # PAD マスク: x_cat[..., 0] == 0 は PAD 変異（base_before=PAD トークン）
             mutation_pad  = (x_cat[..., 0] == 0)            # [B, T, C]
