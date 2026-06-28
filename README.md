@@ -93,7 +93,15 @@ graph TD
 ## 🚀 Usage（実行方法）
 
 ### 1. 環境構築
+
 ```bash
+# conda 環境を新規作成（初回のみ）
+conda env create -f environment.yml
+
+# または pip で依存パッケージをインストール
+pip install -r requirements.txt
+
+# 環境を有効化
 conda activate gvp25-05
 ```
 
