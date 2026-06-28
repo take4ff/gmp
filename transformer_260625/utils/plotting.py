@@ -1556,7 +1556,7 @@ def plot_topk_precision(topk_results, output_dir, prefix="test"):
     import os
 
     tasks = list(topk_results.keys())
-    ks    = sorted(next(iter(topk_results.values())).keys())
+    ks    = sorted(k for k in next(iter(topk_results.values())).keys() if isinstance(k, int))
     n_tasks = len(tasks)
     n_ks    = len(ks)
 

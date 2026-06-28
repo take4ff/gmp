@@ -60,12 +60,11 @@ val / test:
 ```
 
 nohup
-0: ひとまず
 1: default
-
 2: CO_ATTN_N_LAYERS 2
 3: CO_ATTN_N_LAYERS 3
 4: FFN_RATIO 8
+
 5: TEMPORAL_POOLING mean
 6: TEMPORAL_POOLING cls
 
