@@ -51,7 +51,7 @@ def load_collection_dates():
     if not os.path.exists(csv_path):
         force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
         return {}
-    
+
     force_print("[INFO] Loading collection dates from CSV...")
     start = time.time()
     df = pd.read_csv(csv_path, usecols=['Accession', 'Collection_Date'])
@@ -59,6 +59,29 @@ def load_collection_dates():
     mapping = dict(zip(df['Accession'], df['Collection_Date']))
     elapsed = time.time() - start
     force_print(f"[INFO] Loaded {len(mapping):,} collection dates in {elapsed:.1f} seconds")
+    return mapping
+
+
+def load_countries():
+    """SEQUENCES_CSV から Accession と Country のマッピングを読み込む。"""
+    csv_path = config.SEQUENCES_CSV
+    if not os.path.exists(csv_path):
+        force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
+        return {}
+
+    # Country カラムが存在しない旧版 CSV はスキップ
+    df_head = pd.read_csv(csv_path, nrows=0)
+    if 'Country' not in df_head.columns:
+        force_print("[WARNING] 'Country' column not found in CSV; country will be empty")
+        return {}
+
+    force_print("[INFO] Loading countries from CSV...")
+    start = time.time()
+    df = pd.read_csv(csv_path, usecols=['Accession', 'Country'])
+    df['Country'] = df['Country'].fillna('')
+    mapping = dict(zip(df['Accession'], df['Country']))
+    elapsed = time.time() - start
+    force_print(f"[INFO] Loaded {len(mapping):,} countries in {elapsed:.1f} seconds")
     return mapping
 
 
@@ -415,8 +438,9 @@ def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
     try:
         # Pandas DataFrame 経由で一括インサート (DuckDBのネイティブ登録スキャン機能により極めて高速)
         df_samples = pd.DataFrame(samples_buffer, columns=[
-            'sample_id', 'strain_id', 'raw_path', 'path_length', 
-            'max_cooccurrence', 'split_type', 'split_type_date', 'split_type_wf', 'strength_score', 'collection_date'
+            'sample_id', 'strain_id', 'raw_path', 'path_length',
+            'max_cooccurrence', 'split_type', 'split_type_date', 'split_type_wf', 'strength_score',
+            'collection_date', 'country'
         ])
         con.execute("INSERT INTO samples SELECT * FROM df_samples")
 
@@ -438,7 +462,7 @@ def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
 
 
 def append_strain_to_buffers(strain_id, strain_strength, samples_data,
-                             collection_date_dict,
+                             collection_date_dict, country_dict,
                              samples_buffer, features_buffer, labels_buffer,
                              sample_id_counter, feature_id_counter, label_id_counter):
     """株の特徴量データをメモリ上のバッファへ追加する。
@@ -448,6 +472,7 @@ def append_strain_to_buffers(strain_id, strain_strength, samples_data,
     """
     for sample_name, raw_path_str, path_length, max_cooc, x_features, y_targets in samples_data:
         collection_date = collection_date_dict.get(sample_name, '')
+        country = country_dict.get(sample_name, '')
         samples_buffer.append((
             sample_id_counter,
             strain_id,
@@ -458,7 +483,8 @@ def append_strain_to_buffers(strain_id, strain_strength, samples_data,
             0,  # split_type_date
             0,  # split_type_wf
             0.0,  # strength_score (unused; strains テーブルの strength_score_ncbi/usher を使用)
-            collection_date
+            collection_date,
+            country
         ))
 
         for ts_idx, ts_events in enumerate(x_features):
@@ -507,8 +533,9 @@ def main():
     codon_data, freq_dict, dissim_dict, pam250_dict, host_adapt_dict = load_static_data()
     strain_to_strength = compute_strain_strength_from_csv()
     
-    # 採取日マッピングをロード
+    # 採取日・国マッピングをロード
     collection_date_dict = load_collection_dates()
+    country_dict = load_countries()
 
     # psutilを用いた動的メモリ監視の初期化
     try:
@@ -597,7 +624,7 @@ def main():
                                     # バッファに追加
                                     sample_id, feature_id, label_id = append_strain_to_buffers(
                                         strain_id, strain_strength, samples_data,
-                                        collection_date_dict,
+                                        collection_date_dict, country_dict,
                                         samples_buffer, features_buffer, labels_buffer,
                                         sample_id, feature_id, label_id
                                     )

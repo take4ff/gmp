@@ -94,7 +94,8 @@ def init_db(db_path=None):
             split_type_date INTEGER DEFAULT 0,
             split_type_wf INTEGER DEFAULT 0,
             strength_score REAL DEFAULT 0.0,
-            collection_date VARCHAR
+            collection_date VARCHAR,
+            country VARCHAR
         )
     """)
 
