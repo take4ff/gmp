@@ -74,3 +74,4 @@ nohup
 9: USE_AUTOREGRESSIVE_DECODER
 
 10: petra比較（DB再構築必要）
+11: 特徴量・共起集約の有無

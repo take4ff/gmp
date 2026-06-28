@@ -440,7 +440,7 @@ def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
         df_samples = pd.DataFrame(samples_buffer, columns=[
             'sample_id', 'strain_id', 'raw_path', 'path_length',
             'max_cooccurrence', 'split_type', 'split_type_date', 'split_type_wf', 'strength_score',
-            'collection_date', 'country'
+            'collection_date', 'country', 'accession'
         ])
         con.execute("INSERT INTO samples SELECT * FROM df_samples")
 
@@ -484,7 +484,8 @@ def append_strain_to_buffers(strain_id, strain_strength, samples_data,
             0,  # split_type_wf
             0.0,  # strength_score (unused; strains テーブルの strength_score_ncbi/usher を使用)
             collection_date,
-            country
+            country,
+            sample_name,  # NCBI Accession（外部CSVとのJOINキー）
         ))
 
         for ts_idx, ts_events in enumerate(x_features):

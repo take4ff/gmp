@@ -95,7 +95,8 @@ def init_db(db_path=None):
             split_type_wf INTEGER DEFAULT 0,
             strength_score REAL DEFAULT 0.0,
             collection_date VARCHAR,
-            country VARCHAR
+            country VARCHAR,
+            accession VARCHAR
         )
     """)
 
@@ -229,6 +230,7 @@ def create_db_indexes(con):
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_split_wf ON samples(split_type_wf)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_cooccur ON samples(max_cooccurrence)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_samples_length ON samples(path_length)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_samples_accession ON samples(accession)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_features_sample ON features(sample_id)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_labels_sample ON labels(sample_id)")
     print("[INFO] Indexes created successfully")
