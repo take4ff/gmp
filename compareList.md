@@ -72,3 +72,5 @@ nohup
 7: clm
 8: mlm
 9: USE_AUTOREGRESSIVE_DECODER
+
+10: petra比較
