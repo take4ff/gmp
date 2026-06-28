@@ -100,6 +100,7 @@ conda env create -f environment.yml
 
 # または pip で依存パッケージをインストール
 pip install -r requirements.txt
+pip3 install torch torchvision
 
 # 環境を有効化
 conda activate gvp25-05
