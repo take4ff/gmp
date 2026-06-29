@@ -319,7 +319,7 @@ USE_WARMUP = True   # True | False
 WARMUP_EPOCHS = 2   # ウォームアップのエポック数
 
 # Weights & Biases: 実験可視化 (Trueで適用)
-USE_WANDB = True
+USE_WANDB = False
 WANDB_OFFLINE = True  # Trueにするとオフラインモード (長時間処理時の接続切れ対策)
 WANDB_PROJECT_NAME = "viral-mutation-transformer"
 WANDB_RUN_NAME = None # Noneなら自動生成 (例: "run_20251121_...")
