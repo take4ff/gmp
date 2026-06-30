@@ -285,29 +285,39 @@ class DBIterableDataset(IterableDataset):
 
         # ラベルを辞書化
         # USE_SUBSTITUTION_HEAD=True の場合、ラベルタプルを 5 要素から 7 要素に拡張する
-        # 拡張分: (base_after_token=cat_feat[2], aa_after_token=cat_feat[6])
-        # cat_feat は features テーブルの最終タイムステップの最初の共起変異から取得する
+        # 拡張分: (base_after_token, aa_after_token)
+        # raw_path の最終セグメント（T+1 の各変異）を nucpos でマッチングして付与する
+        # aa_after は参照ゲノムのコドン計算が必要なため暫定 PAD(0)
         _use_sub_head = getattr(config, 'USE_SUBSTITUTION_HEAD', False)
 
-        # features_dict は既に構築済み。最終タイムステップの情報を取得するため参照する
-        # (label_dict の構築は features_dict の後に行う)
+        if _use_sub_head:
+            import re as _re
+            _MUT_NUC_RE = _re.compile(r'[A-Za-z](\d+)([A-Za-z])')
+
+            def _parse_target_base_map(raw_path):
+                """raw_path の最終セグメントから {nucpos: base_after_token} を返す。"""
+                last_step = raw_path.split('>')[-1]
+                pos_to_token = {}
+                for mut in last_step.split(','):
+                    m = _MUT_NUC_RE.search(mut.strip())
+                    if m:
+                        nucpos = int(m.group(1))
+                        pos_to_token[nucpos] = config.BASE_VOCABS.get(
+                            m.group(2), config.BASE_VOCABS.get('n', 0))
+                return pos_to_token
+
         def _maybe_extend_labels(sample_id, base_labels):
             """USE_SUBSTITUTION_HEAD=True の場合に 5-tuple → 7-tuple へ拡張する。"""
             if not _use_sub_head or not base_labels:
                 return base_labels
-            # features_dict から最終タイムステップの最初の共起変異の cat_feat を取得
-            sample_feats = features_dict.get(sample_id, {})
-            if not sample_feats:
-                # 特徴量がない場合は PAD (0) を付加
+            raw = sample_dict.get(sample_id)
+            if raw is None:
                 return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
-            last_ts = max(sample_feats.keys())
-            first_event = sample_feats[last_ts][0] if sample_feats[last_ts] else None
-            if first_event is None:
-                return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
-            cat_feat_last = first_event[0]  # (cat_feat, num_feat) の cat_feat
-            base_after_token = cat_feat_last[2]   # cat_feat[2] = base_after
-            aa_after_token   = cat_feat_last[6]   # cat_feat[6] = aa_after
-            return [(t[0], t[1], t[2], t[3], t[4], base_after_token, aa_after_token)
+            base_map = _parse_target_base_map(raw[1])  # raw[1] = raw_path
+            # 各ターゲット変異を nucpos（t[1]）でマッチングして個別に base_after を付与
+            return [(t[0], t[1], t[2], t[3], t[4],
+                     base_map.get(t[1], 0),  # nucpos でマッチング
+                     0)                       # aa_after: 暫定PAD
                     for t in base_labels]
 
         label_dict = {

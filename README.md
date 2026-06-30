@@ -430,6 +430,56 @@ ABLATION_MASKS = {
 
 ---
 
+## 🐛 既知の不具合・修正履歴
+
+### `USE_SUBSTITUTION_HEAD` の `base_after` ラベル付与バグ（修正済み）
+
+**症状**: `base_after_accuracy` が常時 98〜99% と異常に高い値を示す。
+
+**原因**: `db/dataset.py` の `_maybe_extend_labels` において、ラベルの `base_after_token` 付与に2つの誤りがあった。
+
+1. **タイムステップのズレ**: ターゲット（T+1）の変異ではなく、入力の最終タイムステップ（T）の第1変異から `base_after` を取得していた。
+2. **共起変異の無視**: T+1 に複数の共起変異があっても、全ターゲットタプルに同一の `base_after_token` を付与していた。
+
+このため `target_base_set` が常に1要素（入力 T の base_after）となり、モデルは入力から答えをコピーするだけで高精度になっていた。残り約 70% は SARS-CoV-2 の C→T 転換優位によるクラス不均衡が寄与。
+
+**修正内容**: `raw_path` の最終セグメント（T+1 の各変異）を `nucpos` でマッチングし、各ターゲット変異に個別の `base_after_token` を付与するよう修正。
+
+```python
+# db/dataset.py
+def _parse_target_base_map(raw_path):
+    last_step = raw_path.split('>')[-1]
+    pos_to_token = {}
+    for mut in last_step.split(','):
+        m = _MUT_NUC_RE.search(mut.strip())
+        if m:
+            nucpos = int(m.group(1))
+            pos_to_token[nucpos] = config.BASE_VOCABS.get(m.group(2), 0)
+    return pos_to_token
+```
+
+**残課題**: `aa_after` は参照ゲノムのコドン計算が必要なため現状 PAD(0) のまま。本格的に `aa_after` 予測を使用する場合は、`preprocess.py` 段階で labels テーブルに 7-tuple として保存する改修が必要。
+
+---
+
+### `CO_ATTN_N_LAYERS > 1` での NaN 伝播バグ（修正済み）
+
+**症状**: `CO_ATTN_N_LAYERS=2` に設定すると Epoch 1 から `Val Loss: nan` となり、Early Stopping が即時発動する。Train Loss は正常に低下するが、モデルは実質的に学習されない状態で終了する。
+
+**原因**: Self-Attention 層（`n_layers - 1` 層）において、あるタイムステップの全変異が PAD の場合に `key_padding_mask` が全て `True` となり `softmax([-inf, -inf, ...]) = nan` が発生。nan が LayerNorm → Cross-Attention へ伝播し、Loss 計算が崩壊する。`CO_ATTN_N_LAYERS=1` では Self-Attention 層が存在しないため問題が顕在化しない。
+
+**修正内容**: Self-Attention 出力に `torch.nan_to_num` を適用し、全 PAD タイムステップの寄与をゼロに置換。
+
+```python
+# model.py
+for sa, norm in zip(self.self_attn_layers, self.self_attn_norms):
+    sa_out, _ = sa(x_flat, x_flat, x_flat, key_padding_mask=kpm, need_weights=False)
+    sa_out = torch.nan_to_num(sa_out, nan=0.0)  # 全PADタイムステップでのnan対策
+    x_flat = norm(x_flat + sa_out)
+```
+
+---
+
 ## 📝 License
 
 [MIT License / Research Use Only]
