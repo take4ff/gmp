@@ -223,13 +223,17 @@ def main():
     max_dist = max(phylo_dist.values()) or 1
     for l in test_lineages:
         nd = phylo_dist[l] / max_dist
+        n_uniq = n_unique_map[l]
+        h_bits = entropy_map[l]
+        max_h  = math.log2(n_uniq) if n_uniq > 1 else 1.0
         records.append({
             'lineage':               l,
-            'n_test_samples':        lineage_count[l],
+            'n_db_sample':           lineage_count[l],
             'phylo_dist':            phylo_dist[l],
             'norm_phylo_dist':       round(nd, 4),
-            'target_entropy_bits':   round(entropy_map[l], 4),
-            'n_unique_positions':    n_unique_map[l],
+            'target_entropy_bits':   round(h_bits, 4),
+            'entropy_norm':          round(h_bits / max_h, 4),
+            'n_unique_positions':    n_uniq,
             'median_collection_date': median_date_map.get(l),
         })
     df = pd.DataFrame(records)
@@ -245,8 +249,8 @@ def main():
     df.to_csv(csv_path, index=False)
     print(f"[INFO] Saved: {csv_path}")
     print(f"\n[TOP 10 難易度の高い系統]")
-    print(df[['lineage', 'n_test_samples', 'phylo_dist',
-              'target_entropy_bits', 'n_unique_positions', 'difficulty_score']].head(10).to_string(index=False))
+    print(df[['lineage', 'n_db_sample', 'phylo_dist',
+              'target_entropy_bits', 'entropy_norm', 'n_unique_positions', 'difficulty_score']].head(10).to_string(index=False))
 
     # ----------------------------------------------------------------
     # 共通ヘルパー: jitter 付き散布図（周辺ヒストグラム）
