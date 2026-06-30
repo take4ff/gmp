@@ -1655,7 +1655,7 @@ def plot_strength_fine(details, output_dir, prefix="test"):
 
     ax.set_xticks(x)
     ax.set_xticklabels(categories, rotation=30, ha='right', fontsize=9)
-    ax.set_xlabel('Strength category (log1p scale)')
+    ax.set_xlabel('sequence count by linage')
     ax.set_ylabel('Hit Rate (%)')
     ax.set_ylim(0, 105)
     ax.set_title(f'Hit Rate by Strength Category ({prefix.upper()})')
