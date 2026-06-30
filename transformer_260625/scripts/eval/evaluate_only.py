@@ -145,11 +145,10 @@ def main():
         plot_combined_category_comparison(val_details, test_details, strength_thresholds, run_output_dir)
         save_val_test_gap_csv(val_metrics, test_metrics, run_output_dir)
 
-    # 月別 CSV
-    if getattr(config, 'EVAL_X_AXIS', 'timestep') == 'date':
-        save_date_metrics_csv(val_metrics_ym,  run_output_dir, prefix='valid')
-        save_date_metrics_csv(test_metrics_ym, run_output_dir, prefix='test')
-        plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
+    # 月別 CSV（常に保存）
+    save_date_metrics_csv(val_metrics_ym,  run_output_dir, prefix='valid')
+    save_date_metrics_csv(test_metrics_ym, run_output_dir, prefix='test')
+    plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
 
     # Top-K
     eval_ks = getattr(config, "EVAL_TOP_KS", (1, 3, 5))

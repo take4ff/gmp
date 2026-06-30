@@ -32,6 +32,7 @@ from .utils.io import (
     save_date_metrics_csv,
     save_strength_fine_csv,
     save_lineage_metrics_csv,
+    save_entropy_bin_csv,
     save_run_summary_json,
     save_r_precision_csv,
     save_random_baseline_csv,
@@ -56,6 +57,8 @@ from .utils.plotting import (
     plot_metrics_by_date,
     plot_strength_fine,
     plot_lineage_metrics,
+    plot_entropy_vs_accuracy,
+    plot_entropy_bin,
     plot_calibration,
     plot_region_metrics,
     plot_r_precision,
@@ -457,6 +460,9 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         plot_strength_fine(details, run_output_dir, prefix=prefix)
         plot_lineage_metrics(details, run_output_dir, prefix=prefix,
                              top_n=getattr(config, 'PLOT_TOP_N_LINEAGES', 30))
+        plot_entropy_vs_accuracy(details, run_output_dir, prefix=prefix)
+        df_ent = save_entropy_bin_csv(details, run_output_dir, prefix=prefix)
+        plot_entropy_bin(df_ent, run_output_dir, prefix=prefix)
         plot_region_metrics(details, run_output_dir, prefix=prefix)
         return df_ts, df_cat
 

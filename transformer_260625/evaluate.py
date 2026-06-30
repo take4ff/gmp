@@ -319,22 +319,21 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 results_by_ts_and_category[ts_len][category]["preds_synonymous"].append(pred_set_synonymous)
                 results_by_ts_and_category[ts_len][category]["targets_synonymous"].append(target_set_synonymous)
 
-                # 月別集計 (EVAL_X_AXIS == 'date' のときのみ)
-                if eval_x_axis == 'date':
-                    raw_date = collection_date if collection_date else ''
-                    yearmonth = raw_date[:7] if len(raw_date) >= 7 else 'unknown'
-                    results_by_yearmonth[yearmonth]["preds_region"].append(pred_set_region)
-                    results_by_yearmonth[yearmonth]["targets_region"].append(target_set_region)
-                    results_by_yearmonth[yearmonth]["preds_position"].append(pred_set_position)
-                    results_by_yearmonth[yearmonth]["targets_position"].append(target_set_position)
-                    results_by_yearmonth[yearmonth]["preds_aa_pos"].append(pred_set_aa_pos)
-                    results_by_yearmonth[yearmonth]["targets_aa_pos"].append(target_set_aa_pos)
-                    results_by_yearmonth[yearmonth]["preds_codon_pos"].append(pred_set_codon_pos)
-                    results_by_yearmonth[yearmonth]["targets_codon_pos"].append(target_set_codon_pos)
-                    results_by_yearmonth[yearmonth]["preds_synonymous"].append(pred_set_synonymous)
-                    results_by_yearmonth[yearmonth]["targets_synonymous"].append(target_set_synonymous)
-                    results_by_yearmonth[yearmonth]["preds_strength"].append(pred_strength)
-                    results_by_yearmonth[yearmonth]["targets_strength"].append(strength_score)
+                # 月別集計（常に実行）
+                raw_date = collection_date if collection_date else ''
+                yearmonth = raw_date[:7] if len(raw_date) >= 7 else 'unknown'
+                results_by_yearmonth[yearmonth]["preds_region"].append(pred_set_region)
+                results_by_yearmonth[yearmonth]["targets_region"].append(target_set_region)
+                results_by_yearmonth[yearmonth]["preds_position"].append(pred_set_position)
+                results_by_yearmonth[yearmonth]["targets_position"].append(target_set_position)
+                results_by_yearmonth[yearmonth]["preds_aa_pos"].append(pred_set_aa_pos)
+                results_by_yearmonth[yearmonth]["targets_aa_pos"].append(target_set_aa_pos)
+                results_by_yearmonth[yearmonth]["preds_codon_pos"].append(pred_set_codon_pos)
+                results_by_yearmonth[yearmonth]["targets_codon_pos"].append(target_set_codon_pos)
+                results_by_yearmonth[yearmonth]["preds_synonymous"].append(pred_set_synonymous)
+                results_by_yearmonth[yearmonth]["targets_synonymous"].append(target_set_synonymous)
+                results_by_yearmonth[yearmonth]["preds_strength"].append(pred_strength)
+                results_by_yearmonth[yearmonth]["targets_strength"].append(strength_score)
 
     # 流行度フィルタの結果表示
     if config.USE_EVAL_STRENGTH_FILTER and config.EVAL_STRENGTH_MIN > 0:
@@ -499,10 +498,9 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
 
     avg_loss = total_epoch_loss / batches_processed if batches_processed > 0 else 0
 
-    # 月別メトリクス計算 (EVAL_X_AXIS == 'date' のときのみ)
+    # 月別メトリクス計算（常に実行）
     final_metrics_by_ym = {}
-    if eval_x_axis == 'date':
-        for ym, data in results_by_yearmonth.items():
+    for ym, data in results_by_yearmonth.items():
             hit_reg, prec_reg, recall_reg, f1_reg = calculate_metrics(data["preds_region"], data["targets_region"])
             hit_pos, prec_pos, recall_pos, f1_pos = calculate_metrics(data["preds_position"], data["targets_position"])
             hit_aa, prec_aa, recall_aa, f1_aa = calculate_metrics(data["preds_aa_pos"], data["targets_aa_pos"])

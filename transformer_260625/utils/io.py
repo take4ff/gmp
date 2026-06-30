@@ -726,6 +726,75 @@ def save_lineage_metrics_csv(details, output_dir, prefix="test"):
     return df
 
 
+def save_entropy_bin_csv(details, output_dir, prefix="test"):
+    """エントロピー(0.1刻み)ビン別の精度集計CSVを保存する。"""
+    import math
+    from collections import Counter
+
+    if not details:
+        return None
+
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+
+    # 系統単位でentropy_normとhit数を集計
+    lineage_stats = {}
+    for r in details:
+        lin = r.get('strain', 'unknown') or 'unknown'
+        if lin not in lineage_stats:
+            lineage_stats[lin] = {'n': 0, 'hits': {t: 0 for t in tasks}, 'positions': []}
+        s = lineage_stats[lin]
+        s['n'] += 1
+        for t in tasks:
+            s['hits'][t] += int(r.get(f'hit_{t}', False))
+        s['positions'].extend(list(r.get('targets_position', set())))
+
+    # 系統ごとのentropy_norm計算
+    lineage_entropy = {}
+    for lin, s in lineage_stats.items():
+        pos_list = s['positions']
+        if pos_list:
+            counts = Counter(pos_list)
+            total = len(pos_list)
+            entr = -sum((c / total) * math.log2(c / total) for c in counts.values())
+            max_e = math.log2(len(counts)) if len(counts) > 1 else 1.0
+            lineage_entropy[lin] = entr / max_e
+        else:
+            lineage_entropy[lin] = 0.0
+
+    # サンプル単位でビンに振り分け
+    bin_edges = [i / 10 for i in range(11)]  # 0.0, 0.1, ..., 1.0
+    bin_labels = [f'{bin_edges[i]:.1f}~{bin_edges[i+1]:.1f}' for i in range(len(bin_edges) - 1)]
+    bin_data = {lbl: {'n': 0, 'strains': set(), 'hits': {t: 0 for t in tasks}} for lbl in bin_labels}
+
+    for lin, s in lineage_stats.items():
+        e = lineage_entropy[lin]
+        idx = min(int(e * 10), 9)  # 1.0 は最終ビンへ
+        lbl = bin_labels[idx]
+        bin_data[lbl]['n'] += s['n']
+        bin_data[lbl]['strains'].add(lin)
+        for t in tasks:
+            bin_data[lbl]['hits'][t] += s['hits'][t]
+
+    rows = []
+    for lbl in bin_labels:
+        b = bin_data[lbl]
+        n = b['n']
+        row = {
+            'entropy_bin': lbl,
+            'num_samples': n,
+            'num_strains': len(b['strains']),
+        }
+        for t in tasks:
+            row[f'{t}_hit_rate_pct'] = round(b['hits'][t] / n * 100, 2) if n > 0 else 0.0
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_entropy_bin.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Entropy bin CSV saved to {path}")
+    return df
+
+
 def save_early_stopping_json(training_log, best_model_path, output_dir, max_epochs):
     """Early Stopping 情報を JSON に保存する。"""
     import json

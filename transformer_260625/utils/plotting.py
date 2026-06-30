@@ -1744,6 +1744,173 @@ def plot_lineage_metrics(details, output_dir, prefix="test", top_n=30):
     print(f"[INFO] Lineage metrics plot saved to {path}")
 
 
+def plot_entropy_vs_accuracy(details, output_dir, prefix="test", min_samples=10):
+    """エントロピー vs 正解率の散布図を系統単位で保存する。
+    X軸: entropy_norm、Y軸: position hit rate、
+    点サイズ: num_samples（対数スケール）、色: 系統ファミリー。
+    """
+    import math
+    from collections import Counter
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not details:
+        return
+
+    lineage_stats = {}
+    for r in details:
+        lin = r.get('strain', 'unknown') or 'unknown'
+        if lin not in lineage_stats:
+            lineage_stats[lin] = {'n': 0, 'hit_pos': 0, 'positions': []}
+        s = lineage_stats[lin]
+        s['n'] += 1
+        s['hit_pos'] += int(r.get('hit_position', False))
+        s['positions'].extend(list(r.get('targets_position', set())))
+
+    rows = []
+    for lin, s in lineage_stats.items():
+        n = s['n']
+        if n < min_samples:
+            continue
+        pos_list = s['positions']
+        entropy_norm = 0.0
+        if pos_list:
+            counts = Counter(pos_list)
+            total = len(pos_list)
+            entr = -sum((c / total) * math.log2(c / total) for c in counts.values())
+            max_e = math.log2(len(counts)) if len(counts) > 1 else 1.0
+            entropy_norm = entr / max_e
+        rows.append({
+            'lineage': lin,
+            'n': n,
+            'hit_rate': s['hit_pos'] / n * 100,
+            'entropy_norm': entropy_norm,
+        })
+
+    if not rows:
+        return
+
+    # 系統ファミリーを判定（色分け用）
+    def _family(lin):
+        if lin.startswith('AY.'):  return 'AY.* (Delta sub)'
+        if lin.startswith('BA.'):  return 'BA.* (Omicron)'
+        if lin.startswith('B.1.'): return 'B.1.* (pre-Delta)'
+        if lin.startswith('XBB'): return 'XBB (recombinant)'
+        if lin.startswith('JN') or lin.startswith('EG') or lin.startswith('HK'):
+            return 'JN/EG/HK (late Omicron)'
+        return 'Other'
+
+    family_palette = {
+        'AY.* (Delta sub)':     '#e05c5c',
+        'BA.* (Omicron)':       '#5c8de0',
+        'B.1.* (pre-Delta)':    '#5cb85c',
+        'XBB (recombinant)':    '#e0a85c',
+        'JN/EG/HK (late Omicron)': '#a05ce0',
+        'Other':                '#aaaaaa',
+    }
+
+    xs = np.array([r['entropy_norm'] for r in rows])
+    ys = np.array([r['hit_rate'] for r in rows])
+    ns = np.array([r['n'] for r in rows])
+    log_ns = np.log1p(ns)
+    sizes = 50 + (log_ns - log_ns.min()) / (log_ns.max() - log_ns.min() + 1e-9) * 750
+    families = [_family(r['lineage']) for r in rows]
+    colors = [family_palette[f] for f in families]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    # ファミリーごとにプロット（凡例のため）
+    plotted = set()
+    for x, y, s, c, fam in zip(xs, ys, sizes, colors, families):
+        lbl = fam if fam not in plotted else None
+        ax.scatter(x, y, s=s, c=c, alpha=0.75, edgecolors='gray', linewidths=0.4, label=lbl)
+        plotted.add(fam)
+
+    ax.legend(title='Lineage family', fontsize=7, title_fontsize=8,
+              loc='upper right', markerscale=0.6)
+
+    # サンプル数上位系統にラベル
+    rows_sorted = sorted(rows, key=lambda r: r['n'], reverse=True)
+    label_targets = {r['lineage'] for r in rows_sorted[:8]}
+    for r in rows:
+        if r['lineage'] in label_targets:
+            ax.annotate(r['lineage'], (r['entropy_norm'], r['hit_rate']),
+                        fontsize=6.5, alpha=0.85,
+                        xytext=(4, 2), textcoords='offset points')
+
+    ax.set_xlabel('Normalized Target Position Entropy')
+    ax.set_ylabel('Position Hit Rate (%)')
+    ax.set_title(f'Entropy vs Position Hit Rate by Lineage ({prefix.upper()})\n'
+                 f'Point size ∝ log(num_samples), n≥{min_samples} lineages only')
+    ax.set_xlim(-0.02, 1.05)
+    ax.set_ylim(-2, 105)
+    ax.axhline(y=0, color='gray', linewidth=0.5)
+    ax.grid(linestyle='--', alpha=0.35)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_entropy_vs_accuracy.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Entropy vs accuracy scatter saved to {path}")
+
+
+def plot_entropy_bin(entropy_bin_df, output_dir, prefix="test"):
+    """エントロピービン別精度の棒グラフを保存する。"""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if entropy_bin_df is None or entropy_bin_df.empty:
+        return
+
+    df = entropy_bin_df[entropy_bin_df['num_samples'] > 0].copy()
+    if df.empty:
+        return
+
+    tasks = {
+        'position': 'Position',
+        'region': 'Region',
+        'aa_pos': 'AA Position',
+        'codon_pos': 'Codon Pos',
+        'synonymous': 'Synonymous',
+    }
+    task_cols = [f'{t}_hit_rate_pct' for t in tasks]
+    task_labels = list(tasks.values())
+
+    bins = df['entropy_bin'].tolist()
+    x = np.arange(len(bins))
+    n_tasks = len(task_cols)
+    width = 0.75 / n_tasks
+
+    cmap = plt.get_cmap('tab10')
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for i, (col, label) in enumerate(zip(task_cols, task_labels)):
+        offset = (i - n_tasks / 2 + 0.5) * width
+        vals = df[col].tolist()
+        ax.bar(x + offset, vals, width=width, label=label, color=cmap(i), alpha=0.85)
+
+    # サンプル数を各ビンの上に表示
+    for j, (xi, row) in enumerate(zip(x, df.itertuples())):
+        n = row.num_samples
+        lbl = f'n={n:,}\n({row.num_strains}s)'
+        ax.text(xi, 2, lbl, ha='center', va='bottom', fontsize=6, color='#333333')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(bins, rotation=30, ha='right', fontsize=8)
+    ax.set_xlabel('Normalized Target Position Entropy (bin)')
+    ax.set_ylabel('Hit Rate (%)')
+    ax.set_title(f'Hit Rate by Entropy Bin ({prefix.upper()})\n'
+                 f'n=samples, s=strains per bin')
+    ax.set_ylim(0, 110)
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(axis='y', linestyle='--', alpha=0.4)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_entropy_bin.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Entropy bin bar chart saved to {path}")
+
+
 def plot_calibration(calib_bins, output_dir, prefix="test"):
     """Reliability Diagram（キャリブレーション図）を保存する。"""
     import matplotlib.pyplot as plt
