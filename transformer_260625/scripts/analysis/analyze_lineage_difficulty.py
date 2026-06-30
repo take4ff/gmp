@@ -150,6 +150,13 @@ def load_from_db(alias_key):
         WHERE s.{split_col} = 2 AND st.{sn_col} IS NOT NULL
           AND st.{sn_col} != 'unclassifiable'
     """).fetchall()
+
+    print("[INFO] Loading total DB sample counts per lineage...")
+    db_total_rows = con.execute(f"""
+        SELECT st.{sn_col}, st.sample_count
+        FROM strains st
+        WHERE st.{sn_col} IS NOT NULL AND st.{sn_col} != 'unclassifiable'
+    """).fetchall()
     con.close()
 
     # 系統ごとにグループ化
@@ -163,7 +170,9 @@ def load_from_db(alias_key):
         if collection_date:
             lineage_dates[lineage].append(str(collection_date)[:10])
 
-    return train_lineages, lineage_paths, lineage_count, lineage_dates
+    db_total_count = {row[0]: row[1] for row in db_total_rows}
+
+    return train_lineages, lineage_paths, lineage_count, lineage_dates, db_total_count
 
 
 # ------------------------------------------------------------------ #
@@ -181,7 +190,7 @@ def main():
     print("[INFO] Loading alias key...")
     alias_key, rev = load_alias(ALIAS_KEY_PATH)
 
-    train_lineages, lineage_paths, lineage_count, lineage_dates = load_from_db(alias_key)
+    train_lineages, lineage_paths, lineage_count, lineage_dates, db_total_count = load_from_db(alias_key)
     print(f"[INFO] Train lineages: {len(train_lineages)}, Test lineages: {len(lineage_paths)}")
 
     # 最小サンプル数フィルタ
@@ -228,7 +237,8 @@ def main():
         max_h  = math.log2(n_uniq) if n_uniq > 1 else 1.0
         records.append({
             'lineage':               l,
-            'n_db_sample':           lineage_count[l],
+            'n_test_sample':         lineage_count[l],
+            'n_db_sample':           db_total_count.get(l, 0),
             'phylo_dist':            phylo_dist[l],
             'norm_phylo_dist':       round(nd, 4),
             'target_entropy_bits':   round(h_bits, 4),
@@ -249,7 +259,7 @@ def main():
     df.to_csv(csv_path, index=False)
     print(f"[INFO] Saved: {csv_path}")
     print(f"\n[TOP 10 難易度の高い系統]")
-    print(df[['lineage', 'n_db_sample', 'phylo_dist',
+    print(df[['lineage', 'n_test_sample', 'n_db_sample', 'phylo_dist',
               'target_entropy_bits', 'entropy_norm', 'n_unique_positions', 'difficulty_score']].head(10).to_string(index=False))
 
     # ----------------------------------------------------------------
