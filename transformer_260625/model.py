@@ -220,6 +220,7 @@ class CoOccurrenceAttention(nn.Module):
         # Self-Attention 層（変異間相互作用）
         for sa, norm in zip(self.self_attn_layers, self.self_attn_norms):
             sa_out, _ = sa(x_flat, x_flat, x_flat, key_padding_mask=kpm, need_weights=False)
+            sa_out = torch.nan_to_num(sa_out, nan=0.0)  # 全PADタイムステップでのnan対策
             x_flat = norm(x_flat + sa_out)
 
         # Cross-Attention（クエリ → 変異集合 → スカラーへ集約）
