@@ -61,17 +61,19 @@ val / test:
 
 nohup
 
-91 server
+91 server(金曜午前終了予定)
 1: default
 2: CO_ATTN_N_LAYERS 2
-3: CO_ATTN_N_LAYERS 3
 7: clm
 8: mlm
-9: USE_AUTOREGRESSIVE_DECODER
 
-82server
+82server(水曜中に終了予定)
 4: FFN_RATIO 8
 5: TEMPORAL_POOLING mean
 6: TEMPORAL_POOLING cls
+9: USE_AUTOREGRESSIVE_DECODER
+
+3: CO_ATTN_N_LAYERS 3
 10: petra比較（DB再構築必要）
 11: 特徴量・共起集約の有無
+12: walk foward

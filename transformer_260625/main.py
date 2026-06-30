@@ -209,8 +209,9 @@ def build_components(class_counts_dict=None):
     # 事前学習済み backbone 重みのロード（Fold 1 or 非 walk_forward）
     elif getattr(config, 'USE_PRETRAINING', False):
         mode = getattr(config, 'PRETRAINING_MODE', 'mlm').lower()
+        split_mode = getattr(config, 'SPLIT_MODE', 'timestep')
         pretrain_path = os.path.join(
-            config.OUTPUT_DIR, 'pretrain', f'pretrain_{mode}_final.pth'
+            config.OUTPUT_DIR, 'pretrain', split_mode, f'pretrain_{mode}_final.pth'
         )
         if os.path.exists(pretrain_path):
             ckpt = torch.load(pretrain_path, map_location=config.DEVICE, weights_only=True)

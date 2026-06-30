@@ -226,8 +226,9 @@ def run_pretraining():
 
     ce_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
 
-    # 出力ディレクトリ
-    pretrain_dir = os.path.join(config.OUTPUT_DIR, 'pretrain')
+    # 出力ディレクトリ（SPLIT_MODE を含めて区別）
+    split_mode = getattr(config, 'SPLIT_MODE', 'timestep')
+    pretrain_dir = os.path.join(config.OUTPUT_DIR, 'pretrain', split_mode)
     os.makedirs(pretrain_dir, exist_ok=True)
 
     for epoch in range(epochs):
