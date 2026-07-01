@@ -2,7 +2,7 @@
 """MLM / CLM 事前学習スクリプト (Item 3)
 
 使い方:
-    python -m transformer_260625.scripts.pretrain
+    python -m transformer_260625.scripts.train.pretrain
 
 config.USE_PRETRAINING=True かつ本スクリプトを実行することで
 HierarchicalTransformer の事前学習を行い、チェックポイントを保存する。

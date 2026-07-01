@@ -177,25 +177,36 @@ def plot_metrics_by_date(val_metrics_ym, test_metrics_ym, output_dir):
         fig, axes = plt.subplots(3, 2, figsize=(16, 15))
         fig.suptitle('Metrics by Collection Date (Year-Month)', fontsize=14)
 
+        # val と test の全月を統合してソート（unknown は末尾）
+        all_yms_set = set(val_metrics_ym.keys() if val_metrics_ym else []) | \
+                      set(test_metrics_ym.keys() if test_metrics_ym else [])
+        all_yms = sorted(
+            [ym for ym in all_yms_set if ym != 'unknown'],
+        ) + (['unknown'] if 'unknown' in all_yms_set else [])
+        x_indices = np.arange(len(all_yms))
+        ym_to_idx = {ym: i for i, ym in enumerate(all_yms)}
+
         for metric_key, title, (row, col) in metric_configs:
             ax = axes[row, col]
 
             if val_metrics_ym:
-                val_yms = sorted(val_metrics_ym.keys())
-                val_vals = [val_metrics_ym[ym].get(metric_key, 0) for ym in val_yms]
-                ax.plot(val_yms, val_vals, label='Valid', **val_style)
+                val_x = [ym_to_idx[ym] for ym in all_yms if ym in val_metrics_ym]
+                val_y = [val_metrics_ym[ym].get(metric_key, np.nan) for ym in all_yms if ym in val_metrics_ym]
+                ax.plot(val_x, val_y, label='Valid', **val_style)
 
             if test_metrics_ym:
-                test_yms = sorted(test_metrics_ym.keys())
-                test_vals = [test_metrics_ym[ym].get(metric_key, 0) for ym in test_yms]
-                ax.plot(test_yms, test_vals, label='Test', **test_style)
+                test_x = [ym_to_idx[ym] for ym in all_yms if ym in test_metrics_ym]
+                test_y = [test_metrics_ym[ym].get(metric_key, np.nan) for ym in all_yms if ym in test_metrics_ym]
+                ax.plot(test_x, test_y, label='Test', **test_style)
 
+            ax.set_xticks(x_indices)
+            ax.set_xticklabels(all_yms, rotation=45, ha='right', fontsize=7)
             ax.set_xlabel('Year-Month')
             ax.set_ylabel(title)
             ax.set_title(title)
             ax.legend()
             ax.grid(True, alpha=0.3)
-            ax.tick_params(axis='x', rotation=45)
+            ax.tick_params(axis='x', labelsize=7)
 
         # サンプル数サブプロット（右下: valid と test のサンプル数バー）
         ax = axes[2, 1]
