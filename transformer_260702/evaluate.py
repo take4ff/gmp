@@ -219,6 +219,31 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                 probs_position = torch.nn.functional.softmax(position_pred_scores, dim=-1)
                 probs_aa_pos   = torch.nn.functional.softmax(predictions_aa_pos,   dim=-1)
 
+            # --- ホールドアウト NLL 用: タスク別の対数予測分布 ---
+            # NLL は「真の変異集合上の一様分布（config 不変の参照ターゲット）」と
+            # 「モデルの全クラス予測分布」の交差エントロピーとして per-sample で算出する。
+            # 学習損失関数（focal/CB 等）に依存しない素の log-softmax を使うことで、
+            # 構成間で公平に比較できる予測分布の質の指標になる。
+            # Position は #3 の階層マスク前の生ロジット（predictions_position）を使い、
+            # デコード戦略ではなくモデル分布そのものを評価する。TTA 時は既に確率のため log を取る。
+            _tta_on = getattr(config, 'USE_TTA', False)
+            def _logp(pred):
+                if _tta_on:
+                    return torch.log(pred.clamp(min=1e-12))
+                return torch.nn.functional.log_softmax(pred, dim=-1)
+            logp_region     = _logp(predictions_region)
+            logp_position   = _logp(predictions_position)
+            logp_aa_pos     = _logp(predictions_aa_pos)
+            logp_codon_pos  = _logp(predictions_codon_pos)
+            logp_synonymous = _logp(predictions_synonymous)
+
+            def _sample_nll(logp_row, target_idx_set, vocab):
+                """NLL = -(1/|T|) Σ_{t∈T} log p(t)。ターゲットが無ければ None。"""
+                idxs = [j for j in target_idx_set if 0 <= j < vocab]
+                if not idxs:
+                    return None
+                return float(-logp_row[idxs].mean().item())
+
             # 損失計算 (utils/losses.py 共通ロジック)
             losses = compute_task_losses(
                 predictions_tuple, y_batch, loss_fn, batch_strength_scores,
@@ -299,6 +324,12 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
                     'targets_synonymous': target_set_synonymous,'preds_synonymous': pred_set_synonymous,'hit_synonymous': hit_synonymous,
                     'hit_base_after': hit_base_after,
                     'hit_aa_after': hit_aa_after,
+                    # ホールドアウト NLL（nats, タスク別）。ターゲット不在タスクは None。
+                    'nll_region':     _sample_nll(logp_region[i],     target_set_region,     config.NUM_REGIONS),
+                    'nll_position':   _sample_nll(logp_position[i],   target_set_position,   config.VOCAB_SIZE_POSITION),
+                    'nll_aa_pos':     _sample_nll(logp_aa_pos[i],     target_set_aa_pos,     config.VOCAB_SIZE_AA_POS),
+                    'nll_codon_pos':  _sample_nll(logp_codon_pos[i],  target_set_codon_pos,  config.VOCAB_SIZE_CODON_POS),
+                    'nll_synonymous': _sample_nll(logp_synonymous[i], target_set_synonymous, config.VOCAB_SIZE_SYNONYMOUS),
                 })
 
                 if not example_printed and targets_tuples:

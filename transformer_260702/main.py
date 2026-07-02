@@ -33,6 +33,7 @@ from .utils.io import (
     save_strength_fine_csv,
     save_lineage_metrics_csv,
     save_entropy_bin_csv,
+    save_nll_csv,
     save_run_summary_json,
     save_r_precision_csv,
     save_random_baseline_csv,
@@ -463,6 +464,7 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         plot_entropy_vs_accuracy(details, run_output_dir, prefix=prefix)
         df_ent = save_entropy_bin_csv(details, run_output_dir, prefix=prefix)
         plot_entropy_bin(df_ent, run_output_dir, prefix=prefix)
+        save_nll_csv(details, run_output_dir, prefix=prefix)
         plot_region_metrics(details, run_output_dir, prefix=prefix)
         return df_ts, df_cat
 

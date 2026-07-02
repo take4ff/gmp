@@ -795,6 +795,94 @@ def save_entropy_bin_csv(details, output_dir, prefix="test"):
     return df
 
 
+def save_nll_csv(details, output_dir, prefix="test"):
+    """ホールドアウト NLL（負の対数尤度）をタスク別に集計して保存する。
+
+    NLL = -(1/|T|) Σ_{t∈T} log p(t)。参照ターゲット T は真の変異集合上の一様分布
+    （config 不変）、p はモデルの全クラス予測分布（evaluate.py で per-sample 算出済み）。
+    値が小さいほど予測分布が良い。perplexity = exp(NLL)。AIC の代替として、モデル構成間の
+    「複雑さを検証データで暗黙に罰した」公平な予測性能比較に使える（＋ early stopping と併用）。
+
+    出力:
+      - {prefix}_nll.csv          : タスク別の overall NLL / bits / perplexity / n
+      - {prefix}_nll_by_entropy.csv: 系統エントロピー 0.1 刻みビン別の Position/AAPos NLL
+    Returns:
+      pd.DataFrame (overall)
+    """
+    import math
+    from collections import Counter
+
+    if not details:
+        return None
+
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+
+    # --- overall（タスク別）---
+    rows = []
+    for t in tasks:
+        vals = [r[f'nll_{t}'] for r in details if r.get(f'nll_{t}') is not None]
+        if not vals:
+            continue
+        mean_nll = sum(vals) / len(vals)
+        rows.append({
+            'task': t,
+            'n_samples': len(vals),
+            'nll_nats': round(mean_nll, 4),
+            'nll_bits': round(mean_nll / math.log(2), 4),
+            'perplexity': round(math.exp(mean_nll), 2),
+        })
+    df = pd.DataFrame(rows)
+    path = _get_save_path(output_dir, f'{prefix}_nll.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Held-out NLL saved to {path}")
+    for r in rows:
+        _log.force_print(f"        NLL[{r['task']:>10}] = {r['nll_nats']:.4f} nats "
+                         f"(ppl {r['perplexity']:.1f}, n={r['n_samples']:,})")
+
+    # --- entropy-stratified（save_entropy_bin_csv と同じビニング）---
+    lineage_pos = {}
+    for r in details:
+        lin = r.get('strain', 'unknown') or 'unknown'
+        lineage_pos.setdefault(lin, []).extend(list(r.get('targets_position', set())))
+    lineage_entropy = {}
+    for lin, pos_list in lineage_pos.items():
+        if pos_list:
+            counts = Counter(pos_list)
+            total = len(pos_list)
+            entr = -sum((c / total) * math.log2(c / total) for c in counts.values())
+            max_e = math.log2(len(counts)) if len(counts) > 1 else 1.0
+            lineage_entropy[lin] = entr / max_e if max_e > 0 else 0.0
+        else:
+            lineage_entropy[lin] = 0.0
+
+    bin_edges = [i / 10 for i in range(11)]
+    bin_labels = [f'{bin_edges[i]:.1f}~{bin_edges[i+1]:.1f}' for i in range(len(bin_edges) - 1)]
+    bin_acc = {lbl: {t: [] for t in tasks} | {'n': 0} for lbl in bin_labels}
+    for r in details:
+        lin = r.get('strain', 'unknown') or 'unknown'
+        idx = min(int(lineage_entropy.get(lin, 0.0) * 10), 9)
+        lbl = bin_labels[idx]
+        bin_acc[lbl]['n'] += 1
+        for t in tasks:
+            v = r.get(f'nll_{t}')
+            if v is not None:
+                bin_acc[lbl][t].append(v)
+
+    ent_rows = []
+    for lbl in bin_labels:
+        b = bin_acc[lbl]
+        row = {'entropy_bin': lbl, 'num_samples': b['n']}
+        for t in tasks:
+            row[f'{t}_nll_nats'] = round(sum(b[t]) / len(b[t]), 4) if b[t] else None
+        ent_rows.append(row)
+    ent_df = pd.DataFrame(ent_rows)
+    ent_path = _get_save_path(output_dir, f'{prefix}_nll_by_entropy.csv')
+    ent_df.to_csv(ent_path, index=False)
+    _log.force_print(f"[INFO] Held-out NLL by entropy bin saved to {ent_path}")
+
+    return df
+
+
 def save_early_stopping_json(training_log, best_model_path, output_dir, max_epochs):
     """Early Stopping 情報を JSON に保存する。"""
     import json
