@@ -1,6 +1,6 @@
 # --- main.py ---
 # DuckDB対応版メイン処理
-# Usage: nohup python -m transformer_260625.main > nohup0.out 2>&1 & 
+# Usage: setsid nohup python -m transformer_260625.main > nohup0.out 2>&1 & 
 
 import torch
 import torch.optim as optim
