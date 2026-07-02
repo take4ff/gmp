@@ -525,7 +525,7 @@ AR_DECODER_HEADS           = 4   # Decoder ヘッド数
 
 # --- Item 3: MLM / CLM Pretraining ---
 # 事前学習モードを有効にする (scripts/pretrain.py で使用)
-USE_PRETRAINING        = True
+USE_PRETRAINING        = False
 PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
 PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
 PRETRAINING_EPOCHS        = 5       # 事前学習エポック数
