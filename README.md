@@ -1,11 +1,11 @@
-# 🧬 Viral Genome Mutation Prediction Model (v260625)
+# 🧬 Viral Genome Mutation Prediction Model (v260702)
 
 本プロジェクトは、新型コロナウイルス（SARS-CoV-2）をはじめとするウイルスゲノムの変異発生予測を行う、高度な時系列マルチタスク・ディープラーニングモデル（Hierarchical Transformer）のコードベースです。
 変異の時系列的な蓄積ステップ（Mutation Step）と、同時に発生した共起変異の集合を高度にモデル化し、将来のパンデミックを引き起こす変異の早期予測と進化シミュレーションを実現します。
 
 ---
 
-## ✨ 主要機能（v260625 搭載機能）
+## ✨ 主要機能（v260702 搭載機能）
 
 - **NCBI/UShERダブル系統名・流行度システムの統合（動的切り替え）**
   - 配列メタデータ上の系統名（NCBI）と、系統樹トポロジー上の placements から得られる系統名（UShER）の双方をDBに抽出し、保持・表示。
@@ -108,29 +108,29 @@ conda activate gvp25-05
 
 ### 2. UShER 出力の変換（初回のみ）
 ```bash
-python -m transformer_260625.scripts.data_format
+python -m transformer_260702.scripts.preprocess.data_format
 ```
 
 ### 3. DuckDB データベースの前処理（初回 or DB 再構築時）
 ```bash
-nice -n 19 python -m transformer_260625.preprocess
+nice -n 19 python -m transformer_260702.preprocess
 ```
 `config.py` の `NUM_CHEM_FEATURES`・`CONTEXT_WINDOW`・`ABLATION_MASKS` が変更されると、設定ハッシュが自動的に変わり次回実行時に DB が再構築される。
 
 ### 4. モデルの学習および評価の実行
 ```bash
-nohup python -m transformer_260625.main > nohup0.out 2>&1 &
+nohup python -m transformer_260702.main > nohup0.out 2>&1 &
 tail -f nohup0.out
 ```
-実行完了後、`outputs/transformer_260625/results/<EXPERIMENT_NAME>/<timestamp>/` にすべてのログ、学習曲線、集計CSV、および評価プロット画像が自動保存される。
+実行完了後、`outputs/transformer_260702/results/<EXPERIMENT_NAME>/<timestamp>/` にすべてのログ、学習曲線、集計CSV、および評価プロット画像が自動保存される。
 
 ### ユーティリティ
 ```bash
-python -m transformer_260625.scripts.inspect_duckdb        # DB スキーマ確認
-python -m transformer_260625.scripts.view_one_sample       # サンプル内容確認（全32次元数値特徴量表示）
-python -m transformer_260625.scripts.aggregate_strains     # 株別集計
-python -m transformer_260625.scripts.aggregate_lineages    # 系統別集計
-python -m transformer_260625.scripts.aggregate_variants    # 月別変異株集計
+python -m transformer_260702.scripts.inspect.inspect_duckdb    # DB スキーマ確認
+python -m transformer_260702.scripts.inspect.view_one_sample   # サンプル内容確認（全32次元数値特徴量表示）
+python -m transformer_260702.scripts.analysis.aggregate_strains    # 株別集計
+python -m transformer_260702.scripts.analysis.aggregate_lineages   # 系統別集計
+python -m transformer_260702.scripts.analysis.aggregate_variants   # 月別変異株集計
 ```
 
 ---
@@ -202,10 +202,12 @@ Co-occurrence Attention は**入力側の集約表現**（同時発生変異を�
 
 #### 2. エントロピーによる学習サンプルフィルタリング
 
-学習時にターゲットエントロピーが閾値を超えるサンプルを除外し、「学習可能なサンプル」（低エントロピー）に集中する。これにより勾配ノイズが減り、低エントロピー系統での精度が向上する。要 preprocess 再実行。
+学習時にターゲットエントロピーが閾値を超えるサンプルを除外し、「学習可能なサンプル」（低エントロピー）に集中する。これにより勾配ノイズが減り、低エントロピー系統での精度が向上する。
+
+**ステータス**: 実装済み。系統別の正規化ターゲット位置エントロピーを `labels` テーブルから動的算出（`db/queries.py:compute_lineage_entropy_map`, `cache/` にキャッシュ）し、`db/dataset.py` が **Train split のみ** 閾値超過系統のサンプルを除外する。preprocess 再実行は不要。valid/test は除外しない（層別評価のため）。
 
 ```python
-# config.py に追加予定
+# config.py（節「12. 改善の方向性 2〜5」）
 USE_TRAIN_ENTROPY_FILTER = True
 TRAIN_ENTROPY_MAX = 0.7   # 正規化エントロピーの上限（要チューニング）
 ```
@@ -224,13 +226,72 @@ Region Head（34% 有効）を第一段階のゲートとして使い、**当該
 
 **推奨順序**: まず Option A で効果を検証 → 有効なら Option B へ移行。walk-forward 評価との組み合わせで Region ゲーティングの有効性を定量化する。
 
+**ステータス**: Option A（推論時マスキング）実装済み。`USE_HIERARCHICAL_PREDICTION=True` で有効化。`evaluate.py` が予測 Region 上位 `HIERARCHICAL_TOPK_REGIONS` 個に属さない位置の Position ロジットを `-inf` マスクしてから topk/softmax を行う。位置→領域の写像は `db/queries.py:get_position_region_map`（`labels` から多数決で構築・`cache/` に保存）。学習は不変・学習時間増加ゼロ。Option B/C は未実装。
+
 #### 4. 系統埋め込みの追加（分布シフト対策）
 
 Omicron の 18 創始変異による入力分布シフトに対応するため、主要系統クレード（Wuhan / Alpha / Delta / BA.1 / BA.2 / BA.4-5 / XBB / JN 等）の Embedding を入力に追加する。これはエントロピー問題の主因ではないが、Omicron 固有の入力分布を明示的に扱える点で補完的に有効。
 
+**ステータス**: 実装済み。`USE_CLADE_EMBEDDING=True` で有効化。`utils/clade.py` が strain 名（Pango 系統）を主要クレード ID へプレフィックス規則で写像し、`model.py` が pooled 表現（`latest_context`）へ clade Embedding を加算する（`padding_idx=0`＝未知系統はゼロベクトル＝現行挙動）。preprocess 再実行は不要。`train.py`/`evaluate.py` が `batch_strains` から clade_id を導出して forward へ渡す。
+
 #### 5. エントロピー別層別評価の常時出力
 
 全実験で `target_position_entropy_norm` を軸にした精度分布を確認し、モデル改良の効果を「低エントロピー群（予測可能）」と「高エントロピー群（本質的困難）」に分けて評価することを標準化する。
+
+**ステータス**: 実装済み・**常時出力**（フラグ不要）。`main.py` の評価保存が常に `plot_entropy_vs_accuracy` / `save_entropy_bin_csv` / `plot_entropy_bin`（`utils/io.py`・`utils/plotting.py`）を実行し、系統別 `target_position_entropy_norm` と各タスク Hit Rate を出力する。
+
+---
+
+### 発展的アプローチ（ラベル多義性への新規提案）
+
+上記 1〜5 は「難サンプルを避ける／出力空間を絞る」方向だが、以下はラベル構築・出力分布・生物学的事前知識に踏み込んで**多義性そのものを扱う**新規提案。いずれも現行の config フラグ・実装には存在しない。根本原因（内部ノードでの子孫経路の単純 union によるターゲット・エントロピー爆発）に、より直接的に作用する。
+
+#### 6. 子孫頻度で重み付けした確率的ターゲット（最有力）
+
+現状、内部ノードでは全子孫の「次の変異」を**等価に union**するため、正解が数千位置に一様分散し Top-1 が原理的に不可能になる。代わりに**各ターゲット変異を、それを保有する子孫リーフ数（＝実際の流行頻度）で重み付け**し、ソフトターゲット分布を構成する。多くの内部ノードは支配的サブ系統の変異を中心とする単峰分布に近づき、「起こりやすい次の変異」を予測対象にできる。
+
+- `HYBRID_ALPHA`（集合内一様ソフト化）とは別物。頻度に基づく非一様な重みを与える点が新しい。
+- 要 preprocess 改修: 系統樹走査時に各ターゲットの子孫リーフ数を集計して labels テーブルへ保存。
+
+#### 7. 内部ノードの脱・合算（子枝ごとにサンプル分割）
+
+6 の代替アプローチ。内部ノード1件に union ターゲットを持たせる代わりに、**（内部ノード → 各子枝）を個別の学習サンプルへ分解**し、任意で「どの子系統へ向かう遷移か」を示すセレクタ埋め込みを条件として与える。多義性を集約段階で発生させず、データ生成時点で解消する。要 preprocess の系統樹走査改修。
+
+#### 8. 多峰対応の出力ヘッド（Mixture / Gated Experts）
+
+ターゲット分布は本質的に多峰（例: Delta 長パス ＋ Omicron 短パスの二峰性）だが、現行の単一 softmax は平均化してぼやける。**混合密度出力またはゲート付き複数 Position ヘッド**で各モードを個別に表現し、多峰ターゲットを潰さずに予測する。モデル側のみの改修で検証可能（Autoregressive Decoder とは目的が異なる）。
+
+#### 9. 選択的予測・棄却（Abstention）ヘッド
+
+**そのノードの分岐度（ターゲット・エントロピー）自体を予測する不確実性ヘッド**を追加し、高エントロピー時は予測を棄却して `accuracy on answered` を報告する。Top-1 が原理的に不可能な高エントロピー群をモデル自身が切り分け、予測可能な部分に予測を集中できる。層別「評価」（項目5）と異なり、モデルが棄却判断を能動的に学習する機構。
+
+#### 10. ホモプラシー（収斂進化）事前分布
+
+SARS-CoV-2 は同一部位で独立に変異が繰り返し発生する（S:E484K・N501Y 等の再発サイト）性質が強い。**系統樹全体から各サイトの再発回数を集計し、位置ロジットへの事前バイアス、または「再発ホットスポットが変異するか」の補助タスク**として与える。高エントロピー系統でも「動きやすい部位」は収斂性から予測可能で、生物学的動機も強い。ESM-2 等の外部モデルより軽量でこの問題に直結する。
+
+#### 11. 分子時計（枝長）補助タスク
+
+現状 `.pb` の枝長は未使用。**「次の変異までの待ち時間／枝長」を回帰する補助ヘッド**を追加し、時系列表現を正則化する。walk-forward の時間外挿の安定化が期待される。
+
+#### 12. kNN 検索拡張出力（kNN-LM 型）
+
+エンコーダ表現をキーに、観測済み遷移のデータストアを近傍検索し softmax を補間する。低データ系統での予測を実例で補強できる。Ensemble（重み平均）とは異なり、事例ベースで出力を補間する点が新しい。
+
+**優先順位の目安**: 6（子孫頻度重みターゲット）→ 9（棄却ヘッド）→ 10（ホモプラシー事前分布）。6 は根本原因に最も直接効き、9・10 は原理的に不可能な予測を切り分けつつ生物学的に予測可能な部分を拾う組み合わせ。
+
+##### config フラグと実装状況
+
+各案は `config.py` 「11. ラベル多義性への発展的アプローチ」節のフラグで個別に有効化できる（すべてデフォルト `False`＝現行挙動）。6 と 7 は同じラベル構築層を扱うため排他。
+
+| 案 | 主フラグ | 状態 | 有効化の前提 |
+|---|---|---|---|
+| 6 | `USE_FREQ_WEIGHTED_TARGETS` | 消費側実装済（`_build_soft_target` が route 重みを受理） | **要 preprocess 再実行**（labels に子孫頻度を保存）。無ければ一様重みにフォールバック |
+| 7 | `USE_BRANCH_DISAGGREGATION` | フラグのみ | **要 preprocess 再実行**（系統樹走査をエッジ単位に変更） |
+| 8 | `USE_MIXTURE_POSITION_HEAD` | **実装済・即利用可** | なし（モデル側のみ） |
+| 9 | `USE_ABSTENTION_HEAD` | **実装済・即利用可** | なし（棄却損失は学習ループで加算） |
+| 10 | `USE_HOMOPLASY_PRIOR` | **実装済・即利用可** | `HOMOPLASY_CSV`（position_id,recurrence_count）を用意。無ければ無効化 |
+| 11 | `USE_BRANCH_LENGTH_AUX` | ヘッド実装済 | **要 preprocess 再実行**（labels に枝長を保存）。無ければ損失加算スキップ |
+| 12 | `USE_KNN_OUTPUT` | ユーティリティ実装済（`utils/knn_output.py`） | 学習後にデータストア構築（`build_datastore`） |
 
 ---
 
@@ -414,7 +475,7 @@ ABLATION_MASKS = {
   Fold7: W6 →  Train([2023/07, 2024/01)) Test: 2024/01 ─  (Most recent)
   ```
 * **集計**: 各 fold の Hit Rate / Recall を fold ごとにプロットし、精度の時系列推移を可視化する。最終評価は全 fold 平均・標準偏差で報告する。
-* **ステータス**: 実装済み。`SPLIT_MODE='walk_forward'` を設定して `python -m transformer_260625.main`（または `scripts/eval/walk_forward.py`）を実行すると、全7フォールドを順番に学習・評価し、結果を `results/walk_forward/<timestamp>/` に保存する。`WALK_FORWARD_FOLDS = [2, 6]` で移行フォールドのみ先行実行も可能。
+* **ステータス**: 実装済み。`SPLIT_MODE='walk_forward'` を設定して `python -m transformer_260702.main`（または `scripts/eval/walk_forward.py`）を実行すると、全7フォールドを順番に学習・評価し、結果を `results/walk_forward/<timestamp>/` に保存する。`WALK_FORWARD_FOLDS = [2, 6]` で移行フォールドのみ先行実行も可能。
 
 #### 5. 採取地域別の層別評価（Geographic Stratification）
 
@@ -478,14 +539,15 @@ def _parse_target_base_map(raw_path):
 
 **原因**: Self-Attention 層（`n_layers - 1` 層）において、あるタイムステップの全変異が PAD の場合に `key_padding_mask` が全て `True` となり `softmax([-inf, -inf, ...]) = nan` が発生。nan が LayerNorm → Cross-Attention へ伝播し、Loss 計算が崩壊する。`CO_ATTN_N_LAYERS=1` では Self-Attention 層が存在しないため問題が顕在化しない。
 
-**修正内容**: Self-Attention 出力に `torch.nan_to_num` を適用し、全 PAD タイムステップの寄与をゼロに置換。
+**修正内容**: `CoOccurrenceAttention` の集約出力（Cross-Attention 後）に `torch.nan_to_num` を適用し、全 PAD タイムステップの寄与をゼロに置換。集約の最終出力を直接ガードすることで、Self-Attention 層を持たない `CO_ATTN_N_LAYERS=1` を含む全構成を1箇所で保護する。
 
 ```python
-# model.py
-for sa, norm in zip(self.self_attn_layers, self.self_attn_norms):
-    sa_out, _ = sa(x_flat, x_flat, x_flat, key_padding_mask=kpm, need_weights=False)
-    sa_out = torch.nan_to_num(sa_out, nan=0.0)  # 全PADタイムステップでのnan対策
-    x_flat = norm(x_flat + sa_out)
+# model.py  CoOccurrenceAttention.forward()
+if self.out_proj is not None:
+    output = self.out_proj(output)
+
+# 全PADタイムステップ（kpm 行が全 True）の集約は不定値になりうるため 0 で埋める。
+output = torch.nan_to_num(output, nan=0.0)
 ```
 
 ---

@@ -97,7 +97,7 @@ PAM250_CSV        = "reference/aa_properties/PAM250.csv"
 SEQUENCES_CSV     = "reference/sequences-241017.csv"  # 株別サンプル数CSV
 HOST_ADAPTATION_CSV  = "reference/codon/SCV2_host_adaptation_features.csv"
 
-OUTPUT_DIR = 'outputs/transformer_260625/'
+OUTPUT_DIR = 'outputs/transformer_260702/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
 RESULT_SAVE_DIR = OUTPUT_DIR + 'results'
 # 実験タイプのサブディレクトリ名（例: 'feature', 'date', 'sampling'）
@@ -498,10 +498,21 @@ WF_PREV_FOLD_CHECKPOINT = None
 # 10. 新規拡張実験設定
 # ============================================================
 
-# --- Item 6: R-Precision ---
-# evaluate_topk() で K=len(target_set) の動的 K を使った R-Precision を計算する
-# True の場合: 固定 K 結果と並列に 'r_precision' キーで結果が追加される
-USE_R_PRECISION = True
+# --- Item 3: MLM / CLM Pretraining ---
+# 事前学習モードを有効にする (scripts/pretrain.py で使用)
+USE_PRETRAINING        = False
+PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
+PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
+PRETRAINING_EPOCHS        = 5       # 事前学習エポック数
+PRETRAINING_LR            = 1e-4    # 事前学習の学習率（ピーク値）
+PRETRAINING_WARMUP_EPOCHS = 1       # LinearWarmup エポック数（0 で無効）
+PRETRAINING_ETA_MIN       = 1e-6    # CosineAnnealing の最小学習率
+
+# --- Item 4: Autoregressive Decoder ---
+# 各タスク用クエリ埋め込みを TransformerDecoder に通し、タスク別の特徴を生成する
+USE_AUTOREGRESSIVE_DECODER = False
+AR_DECODER_LAYERS          = 1   # Decoder 層数
+AR_DECODER_HEADS           = 4   # Decoder ヘッド数
 
 # --- Item 5: Substitution Prediction Head ---
 # base_after (塩基変化先) と aa_after (アミノ酸変化先) を予測する追加ヘッド
@@ -510,28 +521,10 @@ USE_SUBSTITUTION_HEAD  = True
 LOSS_WEIGHT_BASE_AFTER = 0.05   # base_after 損失の重み
 LOSS_WEIGHT_AA_AFTER   = 0.05   # aa_after 損失の重み
 
-# --- Item 12: Supervised Contrastive Learning (SupCon) ---
-# strain ラベルをポジティブペアとして同一株変異を引き付け、異株を弾く対照学習
-USE_SUPCON            = False
-SUPCON_TEMPERATURE    = 0.07   # SupCon の温度パラメータ
-SUPCON_WEIGHT         = 0.1    # SupCon 損失の重み
-SUPCON_PROJECTION_DIM = 128    # 射影ヘッドの出力次元
-
-# --- Item 4: Autoregressive Decoder ---
-# 各タスク用クエリ埋め込みを TransformerDecoder に通し、タスク別の特徴を生成する
-USE_AUTOREGRESSIVE_DECODER = False
-AR_DECODER_LAYERS          = 1   # Decoder 層数
-AR_DECODER_HEADS           = 4   # Decoder ヘッド数
-
-# --- Item 3: MLM / CLM Pretraining ---
-# 事前学習モードを有効にする (scripts/pretrain.py で使用)
-USE_PRETRAINING        = True
-PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
-PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
-PRETRAINING_EPOCHS        = 5       # 事前学習エポック数
-PRETRAINING_LR            = 1e-4    # 事前学習の学習率（ピーク値）
-PRETRAINING_WARMUP_EPOCHS = 1       # LinearWarmup エポック数（0 で無効）
-PRETRAINING_ETA_MIN       = 1e-6    # CosineAnnealing の最小学習率
+# --- Item 6: R-Precision ---
+# evaluate_topk() で K=len(target_set) の動的 K を使った R-Precision を計算する
+# True の場合: 固定 K 結果と並列に 'r_precision' キーで結果が追加される
+USE_R_PRECISION = True
 
 # --- Item 8: ESM-2 外部タンパク質言語モデル特徴量 ---
 # ESM-2 埋め込みを追加特徴量として使用 (実際の抽出は preprocess.py で行う)
@@ -552,11 +545,105 @@ STRUCTURE_CSV          = 'reference/structure/sars_cov2_structure.csv'
 USE_EVESCAPE = False
 EVESCAPE_CSV = 'reference/evescape/sars_cov2_evescape.csv'
 
+# --- Item 12: Supervised Contrastive Learning (SupCon) ---
+# strain ラベルをポジティブペアとして同一株変異を引き付け、異株を弾く対照学習
+USE_SUPCON            = False
+SUPCON_TEMPERATURE    = 0.07   # SupCon の温度パラメータ
+SUPCON_WEIGHT         = 0.1    # SupCon 損失の重み
+SUPCON_PROJECTION_DIM = 128    # 射影ヘッドの出力次元
+
 # --- Item 13: Ensemble ---
 # 複数のチェックポイントをロードして予測を平均するアンサンブル評価
 # ENSEMBLE_CHECKPOINT_PATHS が空リストの場合はアンサンブルを実行しない
 USE_ENSEMBLE              = False
 ENSEMBLE_N_MODELS         = 3
 ENSEMBLE_CHECKPOINT_PATHS = []   # ロードするチェックポイントパスのリスト (絶対パス)
+
+
+# ============================================================
+# 11. ラベル多義性への発展的アプローチ（README 改善の方向性 6〜12）
+#     すべてデフォルト False。OFF 時は現行挙動と完全一致（無回帰）。
+#     各案は独立に有効化できるが、6 と 7 は同じラベル構築層を扱うため排他
+#     （どちらか一方のみを有効にする）。
+# ============================================================
+
+# --- 提案6: 子孫頻度で重み付けした確率的ターゲット ---
+# 内部ノードの union ターゲットを、それを保有する子孫リーフ数で重み付けして
+# ソフトターゲット化する。w_t ∝ n_t^FREQ_WEIGHT_GAMMA。
+# 【要 preprocess 再実行】labels テーブルに weights 列を保存する必要がある。
+#   weights 列が無い DB では自動的に一様重み（現行と同一）にフォールバックする。
+USE_FREQ_WEIGHTED_TARGETS = False
+FREQ_WEIGHT_GAMMA         = 1.0    # 重みの温度。<1 で平滑化（稀な逃避変異の過小評価を緩和）
+
+# --- 提案7: 内部ノードの脱・合算（子枝ごとにサンプル分割）---
+# 内部ノードの union を作らず (親→各子枝) を個別サンプルとして emit する。
+# 6 とは排他。【要 preprocess 再実行】系統樹走査をエッジ単位に変更する必要がある。
+USE_BRANCH_DISAGGREGATION = False
+BRANCH_SELECTOR_EMBED     = False  # 子系統セレクタ埋め込みを入力条件に加えるか
+
+# --- 提案8: 多峰対応の Position 出力ヘッド（Mixture / Gated Experts）---
+# 単一 softmax の代わりに K 個のエキスパートsoftmaxをゲートで混合し多峰分布を表現。
+# Position ヘッドのみ差し替え。preprocess 不要・モデル側のみで有効化可能。
+USE_MIXTURE_POSITION_HEAD   = False
+POSITION_MIXTURE_K          = 4     # エキスパート数
+MIXTURE_LOAD_BALANCE_WEIGHT = 0.01  # ゲート崩壊防止の負荷分散正則化の重み
+
+# --- 提案9: 選択的予測・棄却（Abstention）ヘッド ---
+# サンプルのターゲット多義性（log(1+ターゲット数)）を回帰する不確実性ヘッドを追加し、
+# 推論時に閾値超過サンプルを棄却する。preprocess 不要。
+USE_ABSTENTION_HEAD    = False
+LOSS_WEIGHT_ABSTENTION = 0.05
+ABSTENTION_THRESHOLD   = 2.0    # 推論時に棄却する log(1+ターゲット数) 予測値の閾値
+
+# --- 提案10: ホモプラシー（収斂進化）事前分布 ---
+# 各ゲノム位置の系統樹上の再発回数を Position ロジットへ log(1+r) バイアスとして注入。
+# CSV (position_id,recurrence_count) を事前生成しておく。preprocess 不要（学習は CSV を読むだけ）。
+#   CSV が存在しない場合はバイアス無効（現行と同一）にフォールバックする。
+USE_HOMOPLASY_PRIOR   = False
+HOMOPLASY_CSV         = 'reference/homoplasy/site_recurrence.csv'
+HOMOPLASY_PRIOR_SCALE = 1.0     # 学習可能スケール係数の初期値
+
+# --- 提案11: 分子時計（枝長）補助タスク ---
+# 「次の変異までの枝長」を回帰する補助ヘッドを追加し時系列表現を正則化。
+# 【要 preprocess 再実行】labels テーブルに branch_length 列を保存する必要がある。
+USE_BRANCH_LENGTH_AUX     = False
+LOSS_WEIGHT_BRANCH_LENGTH = 0.02
+
+# --- 提案12: kNN 検索拡張出力（kNN-LM 型）---
+# 学習後にエンコーダ表現→実ターゲットのデータストアを構築し、推論時に近傍検索で
+# softmax を補間する。p_final = λ·p_kNN + (1-λ)·p_model。preprocess・学習不要（後付け）。
+USE_KNN_OUTPUT     = False
+KNN_K              = 16
+KNN_LAMBDA         = 0.25
+KNN_DATASTORE_PATH = 'cache/knn_datastore'
+
+
+# ============================================================
+# 12. 改善の方向性 2〜5（難サンプル回避・出力空間圧縮・分布シフト対策）
+#     README「### 改善の方向性」の 2〜5 に対応。すべてデフォルト False
+#     （＝現行挙動と完全一致・無回帰）。5（エントロピー別層別評価）は
+#     常時出力のためフラグを持たない（main.py の _save_results が常に実行）。
+# ============================================================
+
+# --- 提案2: ターゲットエントロピーによる学習サンプルフィルタリング ---
+# 学習時（Train split のみ）に、系統別の target_position_entropy_norm が
+# TRAIN_ENTROPY_MAX を超える系統のサンプルを除外し、低エントロピー（学習可能）
+# サンプルに集中する。valid/test は除外しない（層別評価のため）。
+# preprocess 再実行は不要: 系統別エントロピーは labels テーブルから動的に算出する。
+USE_TRAIN_ENTROPY_FILTER = False
+TRAIN_ENTROPY_MAX        = 0.7    # 正規化エントロピー上限（0〜1、要チューニング）
+
+# --- 提案3: 階層的予測（Region → Position 分解, Option A: 推論時マスキング）---
+# 評価時に、予測 Region（上位 HIERARCHICAL_TOPK_REGIONS 個）に属さない位置の
+# Position ロジットを -inf でマスクしてから softmax/topk を行う。学習は不変。
+# Option A のみ実装（学習時間増加ゼロ）。Option B/C（条件付きヘッド・2段階）は未実装。
+USE_HIERARCHICAL_PREDICTION = False
+HIERARCHICAL_TOPK_REGIONS   = 3    # マスクに使う予測 Region の上位個数（>=1）
+
+# --- 提案4: 主要系統クレード埋め込み（分布シフト対策）---
+# strain 名（Pango 系統）を主要クレード（Wuhan/Alpha/Delta/BA.1/BA.2/BA.4-5/
+# XBB/JN 等）へ写像し、その Embedding を pooled 表現(latest_context)へ加算する。
+# 未知系統は clade_id=0（padding, ゼロベクトル）にフォールバック。
+USE_CLADE_EMBEDDING = False
 
 
