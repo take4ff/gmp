@@ -74,6 +74,6 @@ nohup
 9: USE_AUTOREGRESSIVE_DECODER
 
 3: CO_ATTN_N_LAYERS 3
-10: petra比較（DB再構築必要）
-11: 特徴量・共起集約の有無
+10: petra比較
+11: 共起集約なし
 12: walk foward
