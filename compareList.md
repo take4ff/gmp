@@ -66,7 +66,7 @@ nohup
 2: CO_ATTN_N_LAYERS 2
 7: clm
 8: mlm <-3
-10: petra比較
+10: 特徴量/共起集約なし
 12: walk foward
 
 82server(水曜中に終了予定)
