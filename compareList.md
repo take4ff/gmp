@@ -66,14 +66,12 @@ nohup
 2: CO_ATTN_N_LAYERS 2
 7: clm
 8: mlm <-3
+10: petra比較
+12: walk foward
 
 82server(水曜中に終了予定)
 4: FFN_RATIO 8
 5: TEMPORAL_POOLING mean
 6: TEMPORAL_POOLING cls
 9: USE_AUTOREGRESSIVE_DECODER
-
-3: CO_ATTN_N_LAYERS 3
-10: petra比較
 11: 共起集約なし
-12: walk foward
