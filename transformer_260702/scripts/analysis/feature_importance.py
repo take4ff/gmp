@@ -30,8 +30,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from transformer_260702 import config
-from transformer_260702.model import HierarchicalTransformer
 from transformer_260702.utils.logging import force_print
+from transformer_260702.scripts.analysis import _xai_common as X
 
 
 # ─────────────────────────────────────────────────────────────
@@ -334,53 +334,14 @@ def main():
                         choices=['position', 'region'],
                         help='勾配を計算するヘッド（position=index1, region=index0）')
     parser.add_argument('--output_dir', type=str, default=None)
+    parser.add_argument('--force_cpu', action='store_true', help='GPU が埋まっている場合に CPU で実行')
     args = parser.parse_args()
 
-    if not os.path.exists(args.checkpoint):
-        raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
-
-    # config_snapshot.py で config を上書き（evaluate_only.py と同じ手順）
-    checkpoint_dir = os.path.dirname(args.checkpoint)
-    snapshot_path  = os.path.join(checkpoint_dir, 'config_snapshot.py')
-    if os.path.exists(snapshot_path):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location('config_snapshot', snapshot_path)
-        snap = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(snap)
-        overridden = [a for a in dir(snap) if not a.startswith('_') and hasattr(config, a)]
-        for a in overridden:
-            setattr(config, a, getattr(snap, a))
-        force_print(f"[INFO] Loaded config_snapshot.py ({len(overridden)} attrs overridden)")
-
-    # 出力ディレクトリ
-    if args.output_dir:
-        out_dir = args.output_dir
-    else:
-        scripts_out = os.path.join('outputs', 'transformer_260702', 'scripts', 'feature_importance')
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        out_dir = os.path.join(scripts_out, ts)
-    os.makedirs(out_dir, exist_ok=True)
+    # 共通ローダで config_snapshot 反映・モデル・DataLoader を用意（_xai_common に集約）
+    out_dir = X.make_output_dir('feature_importance', args.output_dir)
     force_print(f"Output dir: {out_dir}")
-
-    # モデルロード
-    device = config.DEVICE
-    model  = HierarchicalTransformer().to(device)
-    ckpt   = torch.load(args.checkpoint, map_location=device, weights_only=True)
-    model.load_state_dict(ckpt['model_state_dict'])
-    model.eval()
-    force_print(f"Loaded checkpoint: epoch={ckpt.get('epoch', -1) + 1}")
-
-    # データローダー
-    from transformer_260702.db.connection import get_db_path
-    from transformer_260702.db.dataset import create_db_dataloader
-    split_map = {'train': 0, 'val': 1, 'test': 2}
-    loader = create_db_dataloader(
-        db_path=get_db_path(),
-        split_type=split_map[args.split],
-        batch_size=config.BATCH_SIZE,
-        shuffle=False,
-        max_cooccurrence=config.MAX_CO_OCCURRENCE,
-    )
+    model, loader, device = X.load_model_and_loader(
+        args.checkpoint, split=args.split, force_cpu=args.force_cpu)
 
     target_idx = 1 if args.target == 'position' else 0
     n_feats    = config.NUM_CHEM_FEATURES

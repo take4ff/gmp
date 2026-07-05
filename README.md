@@ -56,8 +56,8 @@
 - **実験ハーネス・高速化・分析ツール（v260702 拡張）**
   - **マルチシード検証**（mean±std 集計）・**Walk-forward 検証**（半年次7フォールド）・**Optuna ハイパラ探索**（オフライン SQLite・pruning）の3ハーネス。
   - **DataLoader 並列化**によるデータ律速の解消（実測 ~2.0x）、**プロット出力の個別トグル**、**早期終了の hit-rate 対応**。
-  - **Permutation importance**（精度寄与）と Gradient×Input（感度）の相補的な特徴量重要度分析。
-  - 詳細は「⚙️ 学習設定・実験ハーネス・高速化」節を参照。
+  - **特徴量重要度**（Permutation＝精度寄与 / Gradient×Input＝感度）に加え、**生物学的 XAI スイート**（ゲノムトラック／ホモプラシー整合／コンステレーション復元／Integrated Gradients 局所説明／表現プロービング）を単独スクリプトで提供。`run_all_xai` で一括実行可。
+  - 詳細は「⚙️ 学習設定・実験ハーネス・高速化」節および「🚀 Usage → 6. 特徴量重要度・生物学的 XAI 分析」を参照。
 
 ---
 
@@ -153,15 +153,34 @@ python -m transformer_260702.scripts.eval.optuna_search --n-trials 15 --params l
 ```
 > **探索コストの目安**: 1 trial = 1 学習（実測 1 epoch ≈ 40〜70 分）。フル 15 epoch × 多 trial は数日規模になるため、探索は短 epoch・少 trial（＋pruning）で回し、上位構成のみ multi-seed / walk-forward でフル検証する二段構えを推奨。
 
-### 6. 特徴量重要度分析
-```bash
-# Gradient×Input（感度）＋埋め込みノルム＋Co-Attention 重み
-python -m transformer_260702.scripts.analysis.feature_importance --checkpoint <best_model.pth>
+### 6. 特徴量重要度・生物学的 XAI 分析
+学習済みチェックポイントに対する後付け分析。すべて単独 CLI（`--checkpoint` 指定、`--force_cpu` 対応）で、共通基盤 `scripts/analysis/_xai_common.py`（config_snapshot 反映・モデル/ローダ・出力保存を集約）の上に載る。
 
-# Permutation importance（精度寄与）: 特徴を1つずつシャッフルし hit-rate 低下量を測る（再学習不要）
-python -m transformer_260702.scripts.analysis.permutation_importance \
-    --checkpoint <best_model.pth> --split test --metric position_hit_rate --n_batches 50 --n_repeats 2
+```bash
+# 特徴量重要度（数値特徴32/36次元）
+python -m transformer_260702.scripts.analysis.feature_importance --checkpoint <best.pth>        # Gradient×Input（感度）＋埋め込みノルム＋Co-Attn重み
+python -m transformer_260702.scripts.analysis.permutation_importance --checkpoint <best.pth> \
+    --metric position_hit_rate --n_batches 50 --n_repeats 2                                      # 精度寄与（再学習不要）
+
+# 生物学的 XAI（位置→遺伝子 annotation・外部データと突き合わせ）
+python -m transformer_260702.scripts.analysis.genome_track --checkpoint <best.pth>               # ①位置/遺伝子別の予測質量 → ゲノム地図
+python -m transformer_260702.scripts.analysis.homoplasy_alignment --checkpoint <best.pth>        # ②重要度 vs homoplasy 相関＋problematic 負コントロール
+python -m transformer_260702.scripts.analysis.cooccurrence_constellation --checkpoint <best.pth> # ③共予測ペア vs 実共起（変異株コンステレーション復元）
+python -m transformer_260702.scripts.analysis.local_explain --checkpoint <best.pth>              # ④Integrated Gradients による1予測の局所説明
+python -m transformer_260702.scripts.analysis.probe_representation --checkpoint <best.pth>       # ⑤内部表現の線形プロービング（gene/Spike/同義 を復元できるか）
+
+# ↑の新規5本を一括実行（出力を xai_all/<ts>/<analysis>/ に集約、失敗継続）
+python -m transformer_260702.scripts.analysis.run_all_xai --checkpoint <best.pth> --split test
+#   --only / --skip で対象選択、--n_batches で共通上書き、--force_cpu、--dry_run（コマンド確認のみ）
 ```
+
+| 分析 | 何を見るか | 主な外部データ |
+|---|---|---|
+| `genome_track` | モデルが Spike/RdRp 等の意味ある領域に注目しているか | `codon_mutation4.csv`（遺伝子annotation） |
+| `homoplasy_alignment` | 重要部位が**正の選択下の収斂部位**と一致するか／アーチファクト部位を回避しているか | `homoplasy/site_recurrence.csv`, `problematic_sites…vcf` |
+| `cooccurrence_constellation` | 既知ハプロタイプ（連鎖・エピスタシス）を再発見しているか | — |
+| `local_explain` | 個々の予測を「どの過去変異・特徴が押し上げたか」に帰属 | — |
+| `probe_representation` | 内部表現に生物概念（遺伝子/Spike/同義）が符号化されているか | — |
 
 ### ユーティリティ
 ```bash
