@@ -224,6 +224,8 @@ ORIGIN_ATTENTION_HEADS = 4  # Origin Attentionのヘッド数
 #           [CLS]の出力表現 x[:, 0, :] を予測ヘッドに使う。
 #           padding_mask は CLS トークン分(+1)自動的にずらされる。
 TEMPORAL_POOLING = "last"  # 'last' | 'mean' | 'cls'
+# [比較2026-07] 'mean'/'cls' を検証 → いずれも不採用。'mean' は position を僅かに上げるが
+#   region/aa を落とす「位置↑/領域↓」ノイズ、'cls' は全面マイナス。'last' を維持。
 
 # --- Shared Trunk（予測ヘッドの共通中間層）設定（Ablation Study用） ---
 # Trueの場合: latest_context → Shared Trunk → 各ヘッド (特徴の再利用で汎化係数減少)
@@ -234,9 +236,10 @@ USE_SHARED_TRUNK = False
 # ① CO_ATTN_DIM: 集約の内部次元。FEATURE_DIM と同値なら in_proj/out_proj は不要（デフォルト推奨）
 #    CO_ATTN_DIM は CO_ATTN_N_HEADS で割り切れる必要あり
 # ② CO_ATTN_N_LAYERS:
-#    1 = Cross-Attention のみ（学習クエリによる重み付き平均）
-#    2 = Self-Attention（変異間相互作用）→ Cross-Attention（集約）← 現在値・推奨
+#    1 = Cross-Attention のみ（学習クエリによる重み付き平均）← 現在値・推奨
+#    2 = Self-Attention（変異間相互作用）→ Cross-Attention（集約）
 #    3 以上 = Self-Attention を N-1 層重ねてから Cross-Attention 集約
+# [比較2026-07] 1 が最良。2 は一貫して僅かに悪化（Self-Attn 追加は共起相互作用の学習に寄与せず）。1 を維持。
 CO_ATTN_N_HEADS  = N_HEADS        # 共起 Attention のヘッド数（デフォルト = N_HEADS）
 CO_ATTN_N_LAYERS = 1             # 共起 Attention の層数（2: Self-Attn + Cross-Attn）
 CO_ATTN_DIM      = FEATURE_DIM   # 共起 Attention の内部次元（デフォルト = FEATURE_DIM）
@@ -244,6 +247,8 @@ CO_ATTN_DIM      = FEATURE_DIM   # 共起 Attention の内部次元（デフォ�
 # ③ USE_FLAT_COATTN: 共起集約をスキップし、全変異を独立トークンとして Transformer に渡す
 #    [B, T, C, F] → [B, T*C, F]
 #    T*C = 39*20 = 780 トークン/サンプルになるため BATCH_SIZE を大幅に下げる必要あり（例: 32〜64）
+# [比較2026-07] True + FLAT_COATTN_1D_PE=True + 全特徴量マスクで「①PETra相当ベースライン」を構成する
+#   ための実験用フラグ。通常運用（③提案）では False を維持。
 USE_FLAT_COATTN = False
 
 # FLAT_COATTN_1D_PE: USE_FLAT_COATTN=True のときの位置エンコーディング方式
@@ -420,6 +425,7 @@ OPTIMIZER_SGD_MOMENTUM = 0.9      # SGD選択時のみ有効
 
 # --- モデル・アーキテクチャ ---
 # FFN層の次元倍率 (デフォルト: 4)
+# [比較2026-07] 8 を検証 → test_loss は僅かに最小だが差は −0.005 で誤差、hit-rate に一貫改善なし。4 を維持。
 FFN_RATIO = 4
 
 # 活性化関数の種類
@@ -462,7 +468,7 @@ STRENGTH_SOURCE = 'usher'
 # 'timestep'     : 現状通り（path_length ベースの分割）← デフォルト
 # 'date'         : TEMPORAL_SPLIT_DATE を基準に train/valid/test を分割（単一カットオフ）
 # 'walk_forward' : 半年次フォールドを順番に学習＋評価（scripts/eval/walk_forward.py の FOLDS を参照）
-SPLIT_MODE = 'timestep'          # 'timestep' | 'date' | 'walk_forward'
+SPLIT_MODE = 'walk_forward'          # 'timestep' | 'date' | 'walk_forward'
 
 # 基準日（ISO 形式: YYYY-MM-DD）
 # SPLIT_MODE='date'のときのみ有効。この日より前 → train/valid、この日以降 → test
@@ -519,13 +525,19 @@ SUPCON_PROJECTION_DIM = 128    # 射影ヘッドの出力次元
 
 # --- Item 4: Autoregressive Decoder ---
 # 各タスク用クエリ埋め込みを TransformerDecoder に通し、タスク別の特徴を生成する
+# （名称に反し実体は「単一プールベクトル memory への6固定クエリ並列読み出し(DETR型)」で生成デコーダではない）
+# [比較2026-07] True を検証 → 全 hit-rate 一様 約−0.4pt・test_loss 最悪。ノイズを明確に超えた有害。False を維持し不採用。
 USE_AUTOREGRESSIVE_DECODER = False
 AR_DECODER_LAYERS          = 1   # Decoder 層数
 AR_DECODER_HEADS           = 4   # Decoder ヘッド数
 
 # --- Item 3: MLM / CLM Pretraining ---
 # 事前学習モードを有効にする (scripts/pretrain.py で使用)
-USE_PRETRAINING        = False
+# [比較2026-07] 今回の比較で採用価値のある唯一の要素。MLM が筆頭（region/position/aa が同時に +0.045〜0.19pt、
+#   符号が全タスクで揃う唯一の run）、CLM が二番手（符号は正だが幅は半分程度）。グループC（アーキ）は全て不採用。
+#   ただし MLM は clean run 1本のみで幅はノイズ帯と同程度 = 「採用確定」ではなく walk-forward で符号安定を確認する候補。
+#   副作用 base_after≈0.77/aa_after=1.0 は事前学習固有ではなく原因未特定（置換ヘッド指標での採否判断は避ける）。
+USE_PRETRAINING        = True
 PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
 PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
 PRETRAINING_EPOCHS        = 5       # 事前学習エポック数

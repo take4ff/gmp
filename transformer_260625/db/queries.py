@@ -315,6 +315,12 @@ def assign_wf_splits(con):
           f"(train_start={train_start}, split_date={split_date}, "
           f"split_end={split_end}, valid_ratio={valid_ratio})...")
 
+    # split_type_wf 列を追加する前に構築された古いスキーマの DB には
+    # この列が存在しないため、無ければ作成する（再構築不要）
+    existing_cols = [r[1] for r in con.execute("PRAGMA table_info('samples')").fetchall()]
+    if 'split_type_wf' not in existing_cols:
+        con.execute("ALTER TABLE samples ADD COLUMN split_type_wf INTEGER DEFAULT -1")
+
     # まず全件を除外扱いにリセット
     con.execute("UPDATE samples SET split_type_wf = -1")
 
