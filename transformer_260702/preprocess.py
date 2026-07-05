@@ -124,6 +124,32 @@ def compute_strain_strength_from_csv():
     return strain_to_strength
 
 
+def build_growth_lut():
+    """系列メタCSV(Pangolin × Collection_Date)から亜系統の成長特徴LUTを構築する。
+
+    USE_LINEAGE_GROWTH_FEATURES=False のときは空dictを返す。
+    Returns: dict[(lineage_group, week)] -> (log_count_recent, growth_rate, rel_growth_adv, growth_accel)
+    """
+    if not getattr(config, 'USE_LINEAGE_GROWTH_FEATURES', False):
+        return {}
+    from .db.growth_features import build_growth_lut as _build
+    csv_path = config.SEQUENCES_CSV
+    lin_col = getattr(config, 'GROWTH_LINEAGE_CSV_COLUMN', 'Pangolin')
+    date_col = getattr(config, 'GROWTH_DATE_CSV_COLUMN', 'Collection_Date')
+    window = getattr(config, 'GROWTH_WINDOW_WEEKS', 4)
+    if not os.path.exists(csv_path):
+        force_print(f"[WARNING] SEQUENCES_CSV not found ({csv_path}); growth features will be 0.")
+        return {}
+    df = pd.read_csv(csv_path, usecols=lambda c: c in (lin_col, date_col))
+    if lin_col not in df.columns or date_col not in df.columns:
+        force_print(f"[WARNING] growth: 列 '{lin_col}'/'{date_col}' が CSV に無い。成長特徴は0になります。")
+        return {}
+    records = zip(df[lin_col].astype(str), df[date_col].astype(str))
+    lut = _build(records, window_weeks=window)
+    force_print(f"[INFO] Built lineage growth LUT: {len(lut)} (lineage×week) entries, window={window}w")
+    return lut
+
+
 def import_strains_to_db(con, strain_to_strength):
     """株マスタをDBに登録する。"""
     force_print("[INFO] Importing strains to DB...")
@@ -464,15 +490,25 @@ def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
 def append_strain_to_buffers(strain_id, strain_strength, samples_data,
                              collection_date_dict, country_dict,
                              samples_buffer, features_buffer, labels_buffer,
-                             sample_id_counter, feature_id_counter, label_id_counter):
+                             sample_id_counter, feature_id_counter, label_id_counter,
+                             lineage_name=None, growth_lut=None):
     """株の特徴量データをメモリ上のバッファへ追加する。
+
+    lineage_name / growth_lut を渡すと、亜系統の成長4値を各タイムステップの num 末尾に付与する
+    （USE_LINEAGE_GROWTH_FEATURES=True 時。サンプル単位＝全タイムステップ共通・収集日以前のみ使用）。
 
     Returns:
         Tuple[int, int, int]: 更新後の (sample_id, feature_id, label_id) カウンタ
     """
+    _use_growth = getattr(config, 'USE_LINEAGE_GROWTH_FEATURES', False)
+    if _use_growth:
+        from .db.growth_features import growth_for
+
     for sample_name, raw_path_str, path_length, max_cooc, x_features, y_targets in samples_data:
         collection_date = collection_date_dict.get(sample_name, '')
         country = country_dict.get(sample_name, '')
+        # 亜系統の成長4値（このサンプルの系統×収集日、全タイムステップ共通）
+        growth = list(growth_for(growth_lut or {}, lineage_name, collection_date)) if _use_growth else None
         samples_buffer.append((
             sample_id_counter,
             strain_id,
@@ -492,6 +528,8 @@ def append_strain_to_buffers(strain_id, strain_strength, samples_data,
             cooccurrence = len(ts_events)
             for event in ts_events:
                 cat_feat, num_feat = event
+                if growth is not None:
+                    num_feat = list(num_feat) + growth   # 32 → 36 次元
                 features_buffer.append((
                     feature_id_counter,
                     sample_id_counter,
@@ -537,6 +575,7 @@ def main():
     # 採取日・国マッピングをロード
     collection_date_dict = load_collection_dates()
     country_dict = load_countries()
+    growth_lut = build_growth_lut()   # 亜系統の成長特徴LUT（USE_LINEAGE_GROWTH_FEATURES=False なら空）
 
     # psutilを用いた動的メモリ監視の初期化
     try:
@@ -627,7 +666,8 @@ def main():
                                         strain_id, strain_strength, samples_data,
                                         collection_date_dict, country_dict,
                                         samples_buffer, features_buffer, labels_buffer,
-                                        sample_id, feature_id, label_id
+                                        sample_id, feature_id, label_id,
+                                        lineage_name=result_name, growth_lut=growth_lut
                                     )
 
                                     del samples_data

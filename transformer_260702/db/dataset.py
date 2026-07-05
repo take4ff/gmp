@@ -493,8 +493,14 @@ class DBIterableDataset(IterableDataset):
                     'HOST_RSCU_RATIO_BEFORE', 'HOST_RSCU_RATIO_DIFF',
                     'CUM_SYN', 'CUM_NONSYN',
                 ]
+                # 亜系統の流行ダイナミクス特徴（有効時のみ num[32..35] に存在）
+                if getattr(config, 'USE_LINEAGE_GROWTH_FEATURES', False):
+                    num_mask_keys = num_mask_keys + [
+                        'LINEAGE_LOG_COUNT_RECENT', 'LINEAGE_GROWTH_RATE',
+                        'LINEAGE_REL_GROWTH_ADV', 'LINEAGE_GROWTH_ACCEL',
+                    ]
                 for i, key in enumerate(num_mask_keys):
-                    if config.ABLATION_MASKS[key]:
+                    if i < len(num) and config.ABLATION_MASKS.get(key, False):
                         num[i] = 0.0
 
                 # カテゴリ特徴量: コンテキスト塩基の個別マスク (PAD index=0 に置換)

@@ -74,6 +74,11 @@ _NUM_FEATURE_NAMES = [
     # ──────────────────────────────────────────────────────────
     'cum_syn',                     # 30  累積同義変異カウント
     'cum_nonsyn',                  # 31  累積非同義変異カウント
+    # ── 亜系統の流行ダイナミクス（USE_LINEAGE_GROWTH_FEATURES=True 時のみ存在）──
+    'lineage_log_count_recent',    # 32  直近K週の件数（規模の因果版）
+    'lineage_growth_rate',         # 33  直近K週の log件数 の傾き（勢い）
+    'lineage_rel_growth_adv',      # 34  直近K週の logitシェア の傾き（相対成長優位）
+    'lineage_growth_accel',        # 35  growth_rate の加速度
 ]
 
 # x_cat の各スロットと対応する埋め込み層名

@@ -21,6 +21,12 @@
   - 入力パスにおけるシノニマス変異・ノンシノニマス変異それぞれの累積カウントを数値特徴量（`cum_syn`/`cum_nonsyn`）として追加。
   - 各タイムステップ開始前の累積値を渡すため、同一タイムステップ内の共起変異は全て同じ値を参照する。
 
+- **亜系統の流行ダイナミクス特徴（4次元・因果的な適応度代理）**
+  - 各サンプル（亜系統 × 収集日）に、**収集日以前のデータだけ**で計算した4つの成長特徴を数値入力に追加（`USE_LINEAGE_GROWTH_FEATURES`）。適応度は「どの変異が出現・拡大するか」を駆動するため、位置予測の文脈情報になる。
+  - `lineage_log_count_recent`（規模の因果版）/ `lineage_growth_rate`（直近K週の log件数の傾き＝勢い、正=拡大・負=縮小）/ `lineage_rel_growth_adv`（logit シェアの傾き＝共流行系統に対する**相対成長優位＝logistic fitness**）/ `lineage_growth_accel`（加速度＝ピークアウト検知）。
+  - epidemic 件数は系列メタCSV（`Pangolin` × `Collection_Date`）から週次で構築（`db/growth_features.py`）。系統粒度は Pango 上位2階層。「縮小期の件数」等の**未来量は使わずリークを防止**し、位相は `growth_rate` の符号で表現する。
+  - 有効化すると `NUM_CHEM_FEATURES` が 32→36 に増え **DB 再構築が必要**。効果は permutation importance／ablation／walk-forward で検証する（既存 `strength` との冗長性・リークの有無を確認）。
+
 - **前後コンテキスト塩基の窓幅拡張（`CONTEXT_WINDOW` で制御）**
   - 変異位置の前後塩基を `config.CONTEXT_WINDOW`（デフォルト ±5）で動的に制御。±3/±5/±7 を config の変更だけで切り替え可能。
   - カテゴリ特徴量 = 9（固定）+ 2×CONTEXT_WINDOW（コンテキスト）。
@@ -92,7 +98,7 @@ graph TD
 | 種別 | 次元数 | 内容 |
 |---|---|---|
 | カテゴリ特徴量 | `9 + 2×CONTEXT_WINDOW` | base_before, position, base_after, codon_pos, aa_before, aa_pos, aa_after, region, synonymous, 前後コンテキスト塩基 |
-| 数値特徴量 | 32 | 物理化学6 + ホスト適応24 + 累積変異カウント2 |
+| 数値特徴量 | 32（+4） | 物理化学6 + ホスト適応24 + 累積変異カウント2（+ 亜系統成長4：`USE_LINEAGE_GROWTH_FEATURES=True` で計36） |
 
 ---
 
@@ -160,7 +166,7 @@ python -m transformer_260702.scripts.analysis.permutation_importance \
 ### ユーティリティ
 ```bash
 python -m transformer_260702.scripts.inspect.inspect_duckdb    # DB スキーマ確認
-python -m transformer_260702.scripts.inspect.view_one_sample   # サンプル内容確認（全32次元数値特徴量表示）
+python -m transformer_260702.scripts.inspect.view_one_sample   # サンプル内容確認（数値特徴量を表示。成長特徴有効時は36次元）
 python -m transformer_260702.scripts.analysis.aggregate_strains    # 株別集計
 python -m transformer_260702.scripts.analysis.aggregate_lineages   # 系統別集計
 python -m transformer_260702.scripts.analysis.aggregate_variants   # 月別変異株集計
@@ -384,6 +390,12 @@ ABLATION_MASKS = {
     # --- 累積変異カウント (num[30..31]) ---
     'CUM_SYN': False,    # パス内シノニマス変異累積数
     'CUM_NONSYN': False, # パス内ノンシノニマス変異累積数
+
+    # --- 亜系統の流行ダイナミクス (num[32..35]、USE_LINEAGE_GROWTH_FEATURES=True 時) ---
+    'LINEAGE_LOG_COUNT_RECENT': False,  # 直近K週件数（規模）
+    'LINEAGE_GROWTH_RATE': False,       # log件数の傾き（勢い）
+    'LINEAGE_REL_GROWTH_ADV': False,    # logitシェアの傾き（相対成長優位）
+    'LINEAGE_GROWTH_ACCEL': False,      # growth_rate の加速度
 
     # --- 前後塩基コンテキスト（CONTEXT_WINDOW 分まで個別制御可）---
     'MUTATION_CONTEXT': False,     # 全コンテキスト塩基を一括無効化

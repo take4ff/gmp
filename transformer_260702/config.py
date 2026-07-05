@@ -84,6 +84,11 @@ ABLATION_MASKS = {
     # --- パス内累積変異カウント ---
     'CUM_SYN': False,                    # 現タイムステップまでのシノニマス変異累積数
     'CUM_NONSYN': False,                 # 現タイムステップまでのノンシノニマス変異累積数
+    # --- 亜系統の流行ダイナミクス特徴（USE_LINEAGE_GROWTH_FEATURES=True 時のみ有効）---
+    'LINEAGE_LOG_COUNT_RECENT': False,   # 直近K週の件数(規模の因果版)
+    'LINEAGE_GROWTH_RATE': False,        # 直近K週の log件数 の傾き（勢い）
+    'LINEAGE_REL_GROWTH_ADV': False,     # 直近K週の logitシェア の傾き（相対成長優位）
+    'LINEAGE_GROWTH_ACCEL': False,       # growth_rate の加速度
     # --- 前後塩基コンテキスト（CONTEXT_WINDOW 分の各位置を個別制御）---
     'MUTATION_CONTEXT': False,     # 全コンテキスト塩基を一括無効化
         'MUTATION_CONTEXT_L1': False,  # 1文字前の塩基を無効化
@@ -212,7 +217,18 @@ PROTEIN_VOCABS = {
 # --- モデルアーキテクチャ設定 ---
 CONTEXT_WINDOW = 5                         # 前後コンテキスト窓幅（各方向）。3/5 で切り替え可(7はDBの再構築必要)
 NUM_FEATURE_STRING = 9 + 2 * CONTEXT_WINDOW  # 固定9 + 両側コンテキスト
-NUM_CHEM_FEATURES = 32
+
+# --- 亜系統の流行ダイナミクス特徴（因果的な成長率＝適応度代理）---
+# 各サンプル(系統×収集日)に、収集日以前のデータだけで計算した4値を数値特徴に追加する。
+#   lineage_log_count_recent / lineage_growth_rate / lineage_rel_growth_adv / lineage_growth_accel
+# epidemic 件数は系列メタCSV(Pangolin × Collection_Date)から週次で構築。詳細は db/growth_features.py。
+# True にすると NUM_CHEM_FEATURES が +4 され設定ハッシュが変わる → DB 再構築が必要。
+USE_LINEAGE_GROWTH_FEATURES = True
+GROWTH_WINDOW_WEEKS         = 4        # 成長率の傾きを取る直近ウィンドウ幅（週）
+GROWTH_LINEAGE_CSV_COLUMN   = 'Pangolin'         # SEQUENCES_CSV の系統列
+GROWTH_DATE_CSV_COLUMN      = 'Collection_Date'  # SEQUENCES_CSV の収集日列
+
+NUM_CHEM_FEATURES = 32 + (4 if USE_LINEAGE_GROWTH_FEATURES else 0)
 
 VOCAB_SIZE_POSITION = 30006
 VOCAB_SIZE_BASE = 7
