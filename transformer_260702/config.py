@@ -1,9 +1,50 @@
 # --- config.py ---
+#
+# ============================================================
+#  目次（セクション見出しで検索できる。例: "# --- 損失関数設定 ---"）
+# ============================================================
+#  基本         : DEVICE / SEED / マルチシード実験ハーネス
+#  Ablation     : ABLATION_MASKS（特徴量0マスク）
+#  データ        : データロード / 流行度 / 感染規模フィルタ / パス / DuckDB /
+#                 キャッシュ / 保存・ログ / データセット / サンプリング / ボキャブラリー
+#  モデル        : モデルアーキテクチャ / Conv1D / Origin Attention /
+#                 Temporal Pooling / Shared Trunk / Co-occurrence Attention
+#  訓練         : 訓練設定 / 高度な学習 / Soft-Hard-Hybrid Target / 損失関数 /
+#                 Warmup / 学習安定化 / Early Stopping
+#  評価・可視化   : Top-K / プロット出力の個別トグル(PLOT_OUTPUTS) / strength損失 / ECE
+#  精度向上実験   : Curriculum / ALiBi(RPE) / Bio-Informed Loss / TTA
+#  ロジック選択   : Optimizer / モデルアーキ / 流行度前処理
+#  時系列分割     : データ分割モード(SPLIT_MODE) / walk_forward
+#  新規拡張(10)  : Pretraining(MLM/CLM) / AR Decoder / Substitution Head /
+#                 R-Precision / ESM-2【未実装】/ 構造特徴【未実装】/ EVEscape【未実装】/
+#                 SupCon / Ensemble
+#  ラベル多義性(11): 提案6〜12（頻度重み / 枝分解 / Mixture Head 等、既定は全 False）
+# ============================================================
 import torch
 
 # デバイス設定
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SEED = 42
+
+# --- マルチシード実験ハーネス ---
+# True にすると MULTI_SEED_LIST の各シードで学習＋評価を回し、
+# 主要指標を mean±std に集計する（single run のノイズと真の改善を区別するため）。
+# walk_forward モードとは排他（walk_forward が優先）。デフォルトは無効。
+MULTI_SEED = False
+MULTI_SEED_LIST = [42, 1, 7]
+
+# --- Optuna ハイパラ探索（scripts/eval/optuna_search.py が使用）---
+# ローカル SQLite に保存するためオフライン・再開可能（長時間学習で接続が切れる問題と無縁）。
+# 1 trial = 1 学習。目的関数は run_summary.json の val 指標。pruning で悪い trial を早期打ち切り。
+OPTUNA_N_TRIALS        = 30
+OPTUNA_STUDY_NAME      = 'gmp_hpo'
+OPTUNA_STORAGE         = None            # None → outputs/.../scripts/optuna/<study>.db (SQLite)
+OPTUNA_DIRECTION       = 'maximize'      # 'maximize'(hit-rate) | 'minimize'(loss)
+OPTUNA_OBJECTIVE_SPLIT = 'val'           # 目的指標を読む split。'test' はリークになるので 'val' 推奨
+OPTUNA_OBJECTIVE_KEY   = 'top1_position_hit_rate_pct'  # run_summary.json[split] のキー
+OPTUNA_SEED            = 42              # 探索中の学習シード（固定して構成の効果を分離）
+# pruning を効かせるには EARLY_STOPPING_METRIC を hit-rate、EARLY_STOPPING_MODE='max'、
+# OPTUNA_DIRECTION='maximize' に揃えること（方向が一致するときのみ中間報告する）。
 
 # --- Ablation実験用マスク設定 ---
 # Trueにすると、その数値特徴量を強制的に0にして学習・推論を行う
@@ -257,6 +298,19 @@ LEARNING_RATE = 1e-4
 EPOCHS = 15              # Soft Target収束のため余裕を持たせる
 TOP_K_EVAL = 1 # Top-5でのRecallなども見たい場合はここを変更
 
+# --- DataLoader 並列化（学習高速化）---
+# 学習は GPU 計算ではなく DuckDB ストリーミング＋per-sample の Python 処理が律速なため、
+# ワーカーを増やしてデータ前処理を GPU 計算とオーバーラップさせると時短できる。
+# メモリ増は「ワーカー数 × (sample_ids のスライス + prefetch バッファ + DuckDB 接続)」程度で、
+# データ総量には比例しない。0 にすると従来のメインプロセス同期読み込みに戻る。
+NUM_DATALOADER_WORKERS        = 8      # 0=同期（従来）。実測で 8 が ~2.0x（4 は ~1.3x, 28コア環境）。CPU/メモリと要相談
+DATALOADER_PREFETCH_FACTOR    = 2      # 各ワーカーが先読みするバッチ数（num_workers>0 時のみ有効）
+DATALOADER_PERSISTENT_WORKERS = True   # エポック間でワーカーを再利用（num_workers>0 時のみ有効）
+DATALOADER_PIN_MEMORY         = True   # host→GPU 転送を高速化（CUDA 時のみ効果）
+# 各ワーカーの DuckDB 接続のスレッド数上限。None=ワーカー時は自動で 2、メイン(0)時は DuckDB 既定。
+# ワーカー×全コアのスレッド張りすぎ（オーバーサブスクライブ）を防ぐため小さめ推奨。
+DATALOADER_DUCKDB_THREADS     = None
+
 LOSS_WEIGHT_REGION = 0.14         # 基因領域の損失重み
 LOSS_WEIGHT_POSITION = 0.7        # 塩基位置の損失重み
 LOSS_WEIGHT_AA_POS = 0.10         # アミノ酸配列位置の損失重み
@@ -345,17 +399,62 @@ OPTIMIZER_BETA2 = 0.999          # AdamW の Beta2
 # ただし R-Precision はエポック間でノイジーになりやすいため、
 # PATIENCE を val_loss 時より大きめに設定することを推奨する（例: 10）。
 #
-#   val_loss       : 滑らか・安定。収束の検出に優れる。
-#   val_r_precision: 評価指標と直結。高エントロピー変異ではノイジーになりうる。
-# 基本固定、他の選択肢は未対応
-EARLY_STOPPING_METRIC = "val_loss"  # 'val_loss' | 'val_r_precision' | 'val_macro_recall' 等
-EARLY_STOPPING_MODE = "min"         # 'min' (loss等) | 'max' (val_r_precision 等、大きいほど良い)
+#   val_loss : 滑らか・安定。収束の検出に優れるが、hit-rate と乖離することがある
+#              （例: MLM は hit-rate を上げるが loss は悪化）。評価指標で選びたいなら hit-rate を使う。
+#
+# hit-rate 等を対象にする場合（エポックごとに evaluate() が val_metrics に計算する値。MODE='max' 必須）:
+#   タスク {region, position, aa_pos, codon_pos, synonymous} × 指標
+#     {hit_rate, macro_recall, weighted_recall, f1, precision, recall} を 'val_<task>_<指標>' で指定可。
+#   例: 'val_position_hit_rate'（塩基位置 Top-1、最弱タスク・伸びしろ大）
+#       'val_position_macro_recall'（クラス平均リコール。稀な位置も平等に評価）
+#       'val_region_hit_rate' / 'val_aa_pos_hit_rate' 等
+#   ※ 'val_' 接頭辞は自動で外して val_metrics のキーに突き合わせる（num_samples 重み付き平均）。
+#   ※ top-k / r_precision はエポックごとには未計算のため早期終了には使えない（最終評価のみ）。
+#   ※ 複合指標（region+position の重み付き和）は今後追加予定。
+#   ※ 存在しないキーを指定すると WARNING を出して val_loss にフォールバックする（事故防止）。
+EARLY_STOPPING_METRIC = "val_loss"  # 上記の 'val_<task>_<指標>' も指定可
+EARLY_STOPPING_MODE = "min"         # 'min' (loss等) | 'max' (hit-rate 等、大きいほど良い)
 EARLY_STOPPING_PATIENCE = 5   # [260417] エポック増加に合わせて余裕を持たせる
 
 # --- 評価・可視化のハードコード解除 (新規追加) ---
 EVAL_TOP_KS = (1, 3, 5)             # Top-K 評価で計算する K のリスト
 PLOT_TOP_N_POSITIONS = 40           # 塩基位置の Recall でプロットする上位 N 件
+DIVERSITY_PLOT_MIN_SAMPLES = 10     # 多様度 vs hit-rate 散布図/CSV で系統を採用する最小サンプル数
 SAVE_ATTENTION_HEATMAP = False      # Attentionヒートマップを保存するかどうか（可視化のみ・学習時間に影響）
+
+# --- プロット出力の個別トグル ---
+# 各プロットを出力するかを個別に制御する。キーが無い/True なら出力（デフォルト＝全出力で従来動作）。
+# 特定のプロットだけ止めたいとき False にする。重い可視化（tsne / network 系）を切ると高速化できる。
+# 注: 'attention_heatmap' は SAVE_ATTENTION_HEATMAP と AND 条件（どちらも True のときのみ出力）。
+PLOT_OUTPUTS = {
+    # 学習曲線・評価メトリクス系
+    'training_curve': True,
+    'metrics_by_timestep': True,
+    'category_metrics': True,
+    'strength_calibration': True,
+    'per_position_recall': True,
+    'strength_fine': True,
+    'lineage_metrics': True,
+    'entropy_vs_accuracy': True,
+    'labeldiversity_vs_accuracy': True,   # エントロピー代替: ユニーク率(ユニーク位置/全位置)で hit-rate を見る図
+    'simpson_vs_accuracy': True,          # エントロピー代替: Simpson 多様度(生態学標準)で hit-rate を見る図
+    'entropy_bin': True,
+    'region_metrics': True,
+    'calibration': True,
+    'combined_val_test_metrics': True,
+    'combined_category_comparison': True,
+    'metrics_by_date': True,
+    'topk_precision': True,
+    'r_precision': True,
+    # 可視化系（重い）
+    'mutation_dist': True,
+    'attention_heatmap': True,
+    'base_embedding_network': True,
+    'position_threshold_network': True,
+    'position_tsne': True,
+    'position_cluster_network': True,
+    'major_mutation_network': True,
+}
 
 # --- strength ヘッドの損失関数 ---
 # 'mse'  : 均乗誤差（現状・外れ値に弱い）
@@ -462,7 +561,7 @@ STRENGTH_SOURCE = 'usher'
 # 'timestep'     : 現状通り（path_length ベースの分割）← デフォルト
 # 'date'         : TEMPORAL_SPLIT_DATE を基準に train/valid/test を分割（単一カットオフ）
 # 'walk_forward' : 半年次フォールドを順番に学習＋評価（scripts/eval/walk_forward.py の FOLDS を参照）
-SPLIT_MODE = 'timestep'          # 'timestep' | 'date' | 'walk_forward'
+SPLIT_MODE = 'walk_forward'          # 'timestep' | 'date' | 'walk_forward'
 
 # 基準日（ISO 形式: YYYY-MM-DD）
 # SPLIT_MODE='date'のときのみ有効。この日より前 → train/valid、この日以降 → test
@@ -500,7 +599,7 @@ WF_PREV_FOLD_CHECKPOINT = None
 
 # --- Item 3: MLM / CLM Pretraining ---
 # 事前学習モードを有効にする (scripts/pretrain.py で使用)
-USE_PRETRAINING        = False
+USE_PRETRAINING        = True
 PRETRAINING_MODE       = 'mlm'   # 'mlm' | 'clm'
 PRETRAINING_MASK_RATIO = 0.15    # MLM マスク率
 PRETRAINING_EPOCHS        = 5       # 事前学習エポック数
@@ -526,22 +625,20 @@ LOSS_WEIGHT_AA_AFTER   = 0.05   # aa_after 損失の重み
 # True の場合: 固定 K 結果と並列に 'r_precision' キーで結果が追加される
 USE_R_PRECISION = True
 
-# --- Item 8: ESM-2 外部タンパク質言語モデル特徴量 ---
-# ESM-2 埋め込みを追加特徴量として使用 (実際の抽出は preprocess.py で行う)
-# 統合ポイント: InputEmbedding に esm2_projection を追加予定
+# --- Item 8: ESM-2 外部タンパク質言語モデル特徴量 ---【未実装スタブ】
+# 【未実装】config フラグと model.py の esm2_projection スタブのみ存在。
+# preprocess.py での埋め込み抽出・InputEmbedding への結線が未実装のため True にしても効果なし。
 USE_ESM2        = False
 ESM2_MODEL_NAME = 'esm2_t6_8M_UR50D'
 ESM2_EMBED_DIM  = 320            # ESM-2 埋め込み次元 (モデルによって異なる)
 
-# --- Item 9: 構造特徴量 (SASA / B-factor) ---
-# SASA (溶媒接触可能面積) と B-factor を数値特徴量に追加
-# 統合ポイント: num_norm 入力次元を拡張 (実際の特徴量付与は preprocess.py)
+# --- Item 9: 構造特徴量 (SASA / B-factor) ---【未実装スタブ】
+# 【未実装】config フラグのみ。preprocess.py での特徴量付与・num_norm 拡張が未実装。
 USE_STRUCTURE_FEATURES = False
 STRUCTURE_CSV          = 'reference/structure/sars_cov2_structure.csv'
 
-# --- Item 10: EVEscape スコア ---
-# EVEscape 進化逸脱スコアを数値特徴量に追加
-# 統合ポイント: num_norm 入力次元を拡張 (実際の特徴量付与は preprocess.py)
+# --- Item 10: EVEscape スコア ---【未実装スタブ】
+# 【未実装】config フラグのみ。preprocess.py での特徴量付与・num_norm 拡張が未実装。
 USE_EVESCAPE = False
 EVESCAPE_CSV = 'reference/evescape/sars_cov2_evescape.csv'
 

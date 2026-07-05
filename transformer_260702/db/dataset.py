@@ -11,6 +11,39 @@ from .connection import connect_db
 from .. import config
 
 
+# --- aa_after ラベル用ルックアップ表 ---
+# codon_mutation4.csv は各塩基位置について置換後コドン（>A/>T/>G/>C 列）を持つ。
+# これを DNA2Protein で AA に翻訳し AA_VOCABS の token へ変換した表を
+# {(base_pos, new_base): aa_token} として1プロセスにつき1回だけ構築・キャッシュする。
+_AA_AFTER_LUT = None
+
+
+def _get_aa_after_lut():
+    """(base_pos:int, new_base:'A'|'T'|'G'|'C') -> aa_after token(int) の辞書を返す（キャッシュ）。"""
+    global _AA_AFTER_LUT
+    if _AA_AFTER_LUT is not None:
+        return _AA_AFTER_LUT
+    import csv as _csv
+    from .feature import DNA2Protein
+    n_token = config.AA_VOCABS.get('n', 0)
+    lut = {}
+    try:
+        with open(config.CODON_CSV, newline='', encoding='utf-8-sig') as f:
+            for row in _csv.DictReader(f):
+                try:
+                    pos = int(row['base_pos'])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                for base in ('A', 'T', 'G', 'C'):
+                    new_codon = (row.get('>' + base) or '').strip()
+                    aa = DNA2Protein.get(new_codon.upper(), 'n') if new_codon and new_codon != 'none' else 'n'
+                    lut[(pos, base)] = config.AA_VOCABS.get(aa, n_token)
+    except FileNotFoundError:
+        lut = {}
+    _AA_AFTER_LUT = lut
+    return lut
+
+
 class DBIterableDataset(IterableDataset):
     """DuckDBからバッチ単位でデータを読み込むIterableDataset。
 
@@ -237,8 +270,17 @@ class DBIterableDataset(IterableDataset):
 
     def __iter__(self):
         import random
+        from torch.utils.data import get_worker_info
 
-        sample_ids = self.sample_ids.copy()
+        # num_workers>0 のとき、各ワーカーが disjoint な部分集合のみを処理する。
+        # sharding しないと全ワーカーが同じ sample_ids を流し、データが num_workers 倍
+        # 重複してしまう（学習が壊れる）。ストライド分割で重複なく全体を被覆する。
+        worker = get_worker_info()
+        if worker is not None and worker.num_workers > 1:
+            sample_ids = self.sample_ids[worker.id::worker.num_workers]
+        else:
+            sample_ids = list(self.sample_ids)
+
         if self.shuffle:
             random.shuffle(sample_ids)
 
@@ -256,6 +298,18 @@ class DBIterableDataset(IterableDataset):
             return []
 
         con = connect_db(self.db_path, read_only=True)
+
+        # ワーカー並列時、各接続が全コアのスレッドを張るとオーバーサブスクライブして
+        # かえって遅くなるため、ワーカー内では DuckDB のスレッド数を抑える。
+        from torch.utils.data import get_worker_info
+        _db_threads = getattr(config, 'DATALOADER_DUCKDB_THREADS', None)
+        if _db_threads is None and get_worker_info() is not None:
+            _db_threads = 2
+        if _db_threads is not None:
+            try:
+                con.execute(f"PRAGMA threads={int(_db_threads)}")
+            except Exception:
+                pass
 
         placeholders = ','.join(['?' for _ in sample_ids])
 
@@ -302,23 +356,27 @@ class DBIterableDataset(IterableDataset):
         # USE_SUBSTITUTION_HEAD=True の場合、ラベルタプルを 5 要素から 7 要素に拡張する
         # 拡張分: (base_after_token, aa_after_token)
         # raw_path の最終セグメント（T+1 の各変異）を nucpos でマッチングして付与する
-        # aa_after は参照ゲノムのコドン計算が必要なため暫定 PAD(0)
+        # aa_after は codon_mutation4.csv の置換後コドン → DNA2Protein → AA_VOCABS で算出する
         _use_sub_head = getattr(config, 'USE_SUBSTITUTION_HEAD', False)
 
         if _use_sub_head:
             import re as _re
             _MUT_NUC_RE = _re.compile(r'[A-Za-z](\d+)([A-Za-z])')
+            _aa_after_lut = _get_aa_after_lut()
+            _aa_n_token = config.AA_VOCABS.get('n', 0)
 
             def _parse_target_base_map(raw_path):
-                """raw_path の最終セグメントから {nucpos: base_after_token} を返す。"""
+                """raw_path の最終セグメントから {nucpos: (base_after_token, aa_after_token)} を返す。"""
                 last_step = raw_path.split('>')[-1]
                 pos_to_token = {}
                 for mut in last_step.split(','):
                     m = _MUT_NUC_RE.search(mut.strip())
                     if m:
                         nucpos = int(m.group(1))
-                        pos_to_token[nucpos] = config.BASE_VOCABS.get(
-                            m.group(2), config.BASE_VOCABS.get('n', 0))
+                        new_base = m.group(2)
+                        base_token = config.BASE_VOCABS.get(new_base, config.BASE_VOCABS.get('n', 0))
+                        aa_token = _aa_after_lut.get((nucpos, new_base.upper()), _aa_n_token)
+                        pos_to_token[nucpos] = (base_token, aa_token)
                 return pos_to_token
 
         def _maybe_extend_labels(sample_id, base_labels):
@@ -329,10 +387,10 @@ class DBIterableDataset(IterableDataset):
             if raw is None:
                 return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
             base_map = _parse_target_base_map(raw[1])  # raw[1] = raw_path
-            # 各ターゲット変異を nucpos（t[1]）でマッチングして個別に base_after を付与
+            # 各ターゲット変異を nucpos（t[1]）でマッチングして base_after / aa_after を個別付与
             return [(t[0], t[1], t[2], t[3], t[4],
-                     base_map.get(t[1], 0),  # nucpos でマッチング
-                     0)                       # aa_after: 暫定PAD
+                     base_map.get(t[1], (0, 0))[0],   # base_after
+                     base_map.get(t[1], (0, 0))[1])   # aa_after
                     for t in base_labels]
 
         label_dict = {
@@ -714,5 +772,16 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
                 batch_collection_dates,
             )
 
-    return DataLoader(dataset, batch_size=batch_size, collate_fn=collate_fn)
+    # DataLoader 並列化（データ律速の学習を GPU 計算とオーバーラップさせて時短する）
+    loader_kwargs = dict(batch_size=batch_size, collate_fn=collate_fn)
+    num_workers = int(getattr(config, 'NUM_DATALOADER_WORKERS', 0) or 0)
+    if num_workers > 0:
+        loader_kwargs['num_workers'] = num_workers
+        # prefetch_factor / persistent_workers は num_workers>0 のときのみ指定可
+        loader_kwargs['prefetch_factor'] = getattr(config, 'DATALOADER_PREFETCH_FACTOR', 2)
+        loader_kwargs['persistent_workers'] = getattr(config, 'DATALOADER_PERSISTENT_WORKERS', True)
+    if getattr(config, 'DATALOADER_PIN_MEMORY', False) and str(getattr(config, 'DEVICE', 'cpu')).startswith('cuda'):
+        loader_kwargs['pin_memory'] = True
+
+    return DataLoader(dataset, **loader_kwargs)
 

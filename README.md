@@ -47,6 +47,12 @@
 - **メンテナンスフリーな動的ロギング**
   - バージョンアップに伴う日付コードの置換漏れを防ぐため、エラーログメッセージ内のパッケージ名を `{__package__}` を用いて自動取得するよう動的化。
 
+- **実験ハーネス・高速化・分析ツール（v260702 拡張）**
+  - **マルチシード検証**（mean±std 集計）・**Walk-forward 検証**（半年次7フォールド）・**Optuna ハイパラ探索**（オフライン SQLite・pruning）の3ハーネス。
+  - **DataLoader 並列化**によるデータ律速の解消（実測 ~2.0x）、**プロット出力の個別トグル**、**早期終了の hit-rate 対応**。
+  - **Permutation importance**（精度寄与）と Gradient×Input（感度）の相補的な特徴量重要度分析。
+  - 詳細は「⚙️ 学習設定・実験ハーネス・高速化」節を参照。
+
 ---
 
 ## 🛠️ Architecture（アーキテクチャ）
@@ -123,6 +129,33 @@ nohup python -m transformer_260702.main > nohup0.out 2>&1 &
 tail -f nohup0.out
 ```
 実行完了後、`outputs/transformer_260702/results/<EXPERIMENT_NAME>/<timestamp>/` にすべてのログ、学習曲線、集計CSV、および評価プロット画像が自動保存される。
+
+### 5. 実験ハーネス（複数シード検証・ハイパラ探索）
+```bash
+# 複数シードで学習→評価し、主要指標を mean±std に集計（single run のノイズ判定用）
+python -m transformer_260702.scripts.eval.multi_seed --seeds 42 1 7
+#   → results/multi_seed/<ts>/multi_seed_summary.json（aggregate に mean/std/values）
+
+# 半年次 Walk-forward 検証（全7フォールド。config.SPLIT_MODE を触らず起動可）
+nohup python -m transformer_260702.scripts.eval.walk_forward > nohup_wf.out 2>&1 &
+python -m transformer_260702.scripts.eval.walk_forward --folds 2 6   # 特定フォールドのみ
+
+# Optuna ハイパラ探索（ローカル SQLite 保存＝オフライン・中断再開可、pruning つき）
+pip install optuna   # 未導入の場合
+python -m transformer_260702.scripts.eval.optuna_search --n-trials 15 --params lr loss_weights
+#   → outputs/.../scripts/optuna/<study>.db（全 trial 履歴）, <study>_best.json（ベスト構成）
+```
+> **探索コストの目安**: 1 trial = 1 学習（実測 1 epoch ≈ 40〜70 分）。フル 15 epoch × 多 trial は数日規模になるため、探索は短 epoch・少 trial（＋pruning）で回し、上位構成のみ multi-seed / walk-forward でフル検証する二段構えを推奨。
+
+### 6. 特徴量重要度分析
+```bash
+# Gradient×Input（感度）＋埋め込みノルム＋Co-Attention 重み
+python -m transformer_260702.scripts.analysis.feature_importance --checkpoint <best_model.pth>
+
+# Permutation importance（精度寄与）: 特徴を1つずつシャッフルし hit-rate 低下量を測る（再学習不要）
+python -m transformer_260702.scripts.analysis.permutation_importance \
+    --checkpoint <best_model.pth> --split test --metric position_hit_rate --n_batches 50 --n_repeats 2
+```
 
 ### ユーティリティ
 ```bash
@@ -369,6 +402,59 @@ ABLATION_MASKS = {
 
 ---
 
+## ⚙️ 学習設定・実験ハーネス・高速化（v260702 で拡張）
+
+### 早期終了の対象メトリクス（hit-rate 対応）
+`val_loss` は hit-rate と乖離することがある（例: MLM 事前学習は hit-rate を上げるが loss は悪化）ため、**実際の評価指標で checkpoint を選べる**よう早期終了の対象を切り替え可能。
+
+```python
+# config.py
+EARLY_STOPPING_METRIC = 'val_position_hit_rate'  # 'val_<task>_<指標>' 形式
+EARLY_STOPPING_MODE   = 'max'                     # hit-rate 系は 'max'
+# task  = region / position / aa_pos / codon_pos / synonymous
+# 指標  = hit_rate / macro_recall / weighted_recall / f1 / precision / recall
+#   （これらは per-epoch の evaluate() が算出。top-k / r_precision は最終評価のみで対象外）
+#   存在しないキーは WARNING を出して val_loss にフォールバック（checkpoint 未保存事故を防止）
+```
+
+### DataLoader 並列化（学習高速化）
+学習は GPU 計算ではなく **DuckDB ストリーミング＋per-sample の Python 処理が律速**（バッチサイズを変えても学習時間が変わらないのはこのため）。ワーカーを増やしてデータ前処理を GPU 計算とオーバーラップさせると時短できる。**ストリーミング設計は維持されメモリはデータ量に比例しない**（増分はワーカー数ぶんの固定分のみ）。
+
+```python
+# config.py
+NUM_DATALOADER_WORKERS        = 8      # 0=同期（従来）。実測で 8 が ~2.0x（4 は ~1.3x, 28コア環境）
+DATALOADER_PREFETCH_FACTOR    = 2
+DATALOADER_PERSISTENT_WORKERS = True
+DATALOADER_PIN_MEMORY         = True
+DATALOADER_DUCKDB_THREADS     = None  # ワーカー内は自動で 2（スレッド張りすぎ＝オーバーサブスクライブ防止）
+```
+`DBIterableDataset` はワーカーごとに `sample_ids` をストライド分割（sharding）し、データ重複なく並列化する。
+
+### プロット出力の個別トグル
+各評価プロットを個別に出力/抑制できる（重い可視化を切って高速化）。`config.PLOT_OUTPUTS`（25キーの dict、キー無し/True=出力＝従来動作）。
+
+### 系統別の予測難易度プロット（3種：エントロピー代替を含む）
+「系統ごとのターゲット位置の分散度」と position hit-rate の関係を、横軸を変えた3図で可視化する。分散が大きい系統ほど次変異の候補が広く、予測が難しい。
+
+| プロット | 横軸（分散度指標） | 解釈 | 出力ファイル |
+|---|---|---|---|
+| `entropy_vs_accuracy` | 正規化エントロピー | 情報理論指標 | `{prefix}_entropy_vs_accuracy.png` |
+| `labeldiversity_vs_accuracy` | **ユニーク率**（ユニーク位置数 / 全位置出現数） | 「ターゲットの何割が異なる位置か」。素朴だがサンプル数が多い系統ほど低く出る傾向 | `{prefix}_labeldiversity_vs_accuracy.png` |
+| `simpson_vs_accuracy` | **Gini–Simpson 多様度** D=1−Σpᵢ² | 「無作為に2つ選んで別位置になる確率」。生態学標準の生物多様度指数で**生物系に説明不要**・サンプル数バイアスに強い | `{prefix}_diversity_simpson_vs_accuracy.png` |
+
+いずれも 0→集中（予測が易しい）〜 1→分散（難しい）で、エントロピーが伝わりにくい相手には **Simpson を主図**に推奨。各図は `PLOT_OUTPUTS` の同名キーで個別トグル可。
+
+**再現性・run 間比較のための裏づけCSV**: 3図は共通の集計（`_lineage_diversity_rows`）を使い、その元テーブルを `{prefix}_lineage_diversity.csv`（列: `lineage, n, hit_rate, entropy_norm, unique_ratio, simpson`）として**常時出力**する。PNG はコード版に依存し比較しづらいため、run 間の比較・別指標での再描画はこの CSV を基準にする。系統粒度は **Pango 上位2階層**（`lineage_metrics.csv` と統一）、採用する最小サンプル数は `config.DIVERSITY_PLOT_MIN_SAMPLES`（既定10）で制御。
+
+### マルチシード検証・Walk-forward・Optuna 探索
+- **マルチシード**（`MULTI_SEED` / `scripts/eval/multi_seed.py`）: 複数シードで学習し主要指標を mean±std に集計。single run の差がノイズか本物かを判定。採用基準は「複数シード/ walk-forward で符号が安定」。
+- **Walk-forward**（`SPLIT_MODE='walk_forward'`）: 半年次7フォールド。Fold 1 のみ事前学習（リークなし）、以降は直前フォールドの重みを warm-start（Method B）。DB 再構築不要。
+- **Optuna**（`OPTUNA_*` / `scripts/eval/optuna_search.py`）: ローカル SQLite 保存でオフライン・中断再開可。TPE + MedianPruner。探索対象は `LEARNING_RATE` / `DROPOUT` / `LOSS_WEIGHT_{REGION,POSITION,AA_POS}`（position↑/領域↓トレードオフを直接制御）。目的関数は val hit-rate（test はリーク回避のため使わない）。
+
+> いずれもコマンドは「🚀 Usage → 5. 実験ハーネス」を参照。
+
+---
+
 ## 🧬 Baseline Comparison（先行研究 PETra との比較実験）
 
 [PETra](https://github.com/xz-keg/PETra) を含む先行研究に対する本提案アーキテクチャの有効性を科学的に検証するため、リファクタリング済みの同一コードベースを用い、**通常の損失関数（CrossEntropy等）のまま**、以下の3つのモデル構成を同一データセットで対比検証します。
@@ -529,7 +615,25 @@ def _parse_target_base_map(raw_path):
     return pos_to_token
 ```
 
-**残課題**: `aa_after` は参照ゲノムのコドン計算が必要なため現状 PAD(0) のまま。本格的に `aa_after` 予測を使用する場合は、`preprocess.py` 段階で labels テーブルに 7-tuple として保存する改修が必要。
+---
+
+### `aa_after` ラベルが PAD(0) 固定だった問題（修正済み・2026-07）
+
+**症状**: `aa_after_accuracy` が 1.000 と表示される（学習・比較で退化に見えた）。
+
+**原因**: `db/dataset.py` の `_maybe_extend_labels` で **`aa_after` ラベルが全サンプル PAD(0) 固定**の暫定実装だった。モデルは定数 0 を当てるだけで accuracy=1.0 になり、加えて損失に無意味な項が加算されていた。
+
+**修正内容**: `reference/codon/codon_mutation4.csv` の置換後コドン列（`>A/>T/>G/>C`）を `db/feature.py:DNA2Protein` で AA に翻訳し `config.AA_VOCABS` の token へ変換した参照表を `db/dataset.py:_get_aa_after_lut()` として1プロセス1回キャッシュ構築。`base_after` と同じく `raw_path` の最終セグメントを `nucpos` でマッチングし、各ターゲット変異に本物の `aa_after` を dataload 時に付与する。**DB 再構築は不要**（例: 266A>T→L, 269A>T→\*（停止コドン）, 非コーディング→n）。
+
+---
+
+### `walk_forward` 実行時の `split_type_wf` 列欠落（修正済み・2026-07）
+
+**症状**: `SPLIT_MODE='walk_forward'` で Fold 1 の最初に `BinderException: Referenced update column split_type_wf not found in table!` で停止。
+
+**原因**: `split_type_wf` 列が追加される前に構築された古いスキーマの DuckDB には同列が無く、`db/queries.py:assign_wf_splits` が `ALTER TABLE` を持たず存在前提で `UPDATE` していた。
+
+**修正内容**: `assign_wf_splits` の冒頭で `PRAGMA table_info('samples')` により列の有無を確認し、無ければ `ALTER TABLE samples ADD COLUMN split_type_wf INTEGER DEFAULT -1` で自動追加する（DuckDB バージョン非依存・**再構築不要**、ALTER はメタデータ操作で一瞬）。
 
 ---
 

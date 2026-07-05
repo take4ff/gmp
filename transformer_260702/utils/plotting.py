@@ -1755,49 +1755,104 @@ def plot_lineage_metrics(details, output_dir, prefix="test", top_n=30):
     print(f"[INFO] Lineage metrics plot saved to {path}")
 
 
-def plot_entropy_vs_accuracy(details, output_dir, prefix="test", min_samples=10):
-    """エントロピー vs 正解率の散布図を系統単位で保存する。
-    X軸: entropy_norm、Y軸: position hit rate、
-    点サイズ: num_samples（対数スケール）、色: 系統ファミリー。
+def _lineage_group(strain):
+    """フル系統名を Pango 上位2階層に丸める（例: BA.2.86.1→BA.2, XBB.1.5→XBB.1）。
+
+    ドットを含まない clade 名（例: '22B (Omicron)'）はそのまま返す。
+    lineage_metrics.csv と粒度を揃え、微小系統の乱立とカバレッジ変動を防ぐ。
+    """
+    if not strain or strain == 'unknown':
+        return 'unknown'
+    parts = str(strain).split('.')
+    return '.'.join(parts[:2]) if len(parts) >= 2 else str(strain)
+
+
+def _diversity_min_samples(min_samples=None):
+    """min_samples 未指定時は config.DIVERSITY_PLOT_MIN_SAMPLES（既定10）を使う。"""
+    if min_samples is not None:
+        return min_samples
+    from .. import config
+    return getattr(config, 'DIVERSITY_PLOT_MIN_SAMPLES', 10)
+
+
+def _lineage_diversity_rows(details, min_samples):
+    """系統（Pango 上位2階層）ごとに n / position hit rate / 各種多様度を集計する。
+
+    3種の散布図と CSV が共有する唯一の集計源。
+      entropy_norm : 正規化 Shannon エントロピー
+      unique_ratio : ユニーク位置数 / 全位置出現数
+      simpson      : Gini–Simpson 多様度 (1 − Σpᵢ²、生態学標準)
     """
     import math
     from collections import Counter
-    import matplotlib.pyplot as plt
-    import numpy as np
 
-    if not details:
-        return
-
-    lineage_stats = {}
+    stats = {}
     for r in details:
-        lin = r.get('strain', 'unknown') or 'unknown'
-        if lin not in lineage_stats:
-            lineage_stats[lin] = {'n': 0, 'hit_pos': 0, 'positions': []}
-        s = lineage_stats[lin]
+        lin = _lineage_group(r.get('strain', 'unknown'))
+        s = stats.setdefault(lin, {'n': 0, 'hit_pos': 0, 'positions': []})
         s['n'] += 1
         s['hit_pos'] += int(r.get('hit_position', False))
         s['positions'].extend(list(r.get('targets_position', set())))
 
     rows = []
-    for lin, s in lineage_stats.items():
+    for lin, s in stats.items():
         n = s['n']
         if n < min_samples:
             continue
         pos_list = s['positions']
-        entropy_norm = 0.0
+        entropy_norm = unique_ratio = simpson = 0.0
         if pos_list:
             counts = Counter(pos_list)
             total = len(pos_list)
-            entr = -sum((c / total) * math.log2(c / total) for c in counts.values())
+            probs = [c / total for c in counts.values()]
+            entr = -sum(p * math.log2(p) for p in probs)
             max_e = math.log2(len(counts)) if len(counts) > 1 else 1.0
             entropy_norm = entr / max_e
+            unique_ratio = len(counts) / total
+            simpson = 1.0 - sum(p * p for p in probs)
         rows.append({
-            'lineage': lin,
-            'n': n,
+            'lineage': lin, 'n': n,
             'hit_rate': s['hit_pos'] / n * 100,
             'entropy_norm': entropy_norm,
+            'unique_ratio': unique_ratio,
+            'simpson': simpson,
         })
+    return rows
 
+
+def save_lineage_diversity_csv(details, output_dir, prefix="test", min_samples=None):
+    """散布図3種（entropy / unique / simpson）の裏づけとなる系統別テーブルを CSV 保存する。
+
+    列: lineage, n, hit_rate, entropy_norm, unique_ratio, simpson。
+    PNG はコード版に依存し比較しづらいため、この CSV を run 間比較・再描画の基準にする。
+    """
+    if not details:
+        return None
+    rows = _lineage_diversity_rows(details, _diversity_min_samples(min_samples))
+    if not rows:
+        return None
+    import pandas as pd
+    df = pd.DataFrame(rows).sort_values('n', ascending=False).reset_index(drop=True)
+    target_dir = os.path.join(output_dir, 'csv')
+    os.makedirs(target_dir, exist_ok=True)
+    path = os.path.join(target_dir, f'{prefix}_lineage_diversity.csv')
+    df.to_csv(path, index=False)
+    _log.force_print(f"[INFO] Lineage diversity table saved to {path}")
+    return df
+
+
+def plot_entropy_vs_accuracy(details, output_dir, prefix="test", min_samples=None):
+    """エントロピー vs 正解率の散布図を系統単位で保存する。
+    X軸: entropy_norm、Y軸: position hit rate、点サイズ: num_samples（対数）、色: 系統ファミリー。
+    系統粒度は Pango 上位2階層、min_samples は config.DIVERSITY_PLOT_MIN_SAMPLES に従う。
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not details:
+        return
+    min_samples = _diversity_min_samples(min_samples)
+    rows = _lineage_diversity_rows(details, min_samples)
     if not rows:
         return
 
@@ -1862,6 +1917,170 @@ def plot_entropy_vs_accuracy(details, output_dir, prefix="test", min_samples=10)
     plt.savefig(path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"[INFO] Entropy vs accuracy scatter saved to {path}")
+
+
+def plot_labeldiversity_vs_accuracy(details, output_dir, prefix="test", min_samples=None):
+    """ターゲット位置のユニーク率 vs 正解率の散布図を系統単位で保存する（エントロピーの代替・簡易版）。
+
+    X軸: unique_ratio = ユニークな target 位置数 / target 位置の総出現数（系統内）
+         0=少数の位置に集中（易）〜 1=全て異なる位置（多様・難）。
+    「何割が異なる位置か」で直感的。ただしサンプル数が多い系統ほど機械的に下がる傾向があるため、
+    サンプル数バイアスに強い指標が必要なら plot_simpson_vs_accuracy を併用のこと。
+    系統粒度は Pango 上位2階層、min_samples は config.DIVERSITY_PLOT_MIN_SAMPLES に従う。
+    Y軸: position hit rate、点サイズ: num_samples（対数）、色: 系統ファミリー。
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not details:
+        return
+    min_samples = _diversity_min_samples(min_samples)
+    rows = _lineage_diversity_rows(details, min_samples)
+    if not rows:
+        return
+
+    def _family(lin):
+        if lin.startswith('AY.'):  return 'AY.* (Delta sub)'
+        if lin.startswith('BA.'):  return 'BA.* (Omicron)'
+        if lin.startswith('B.1.'): return 'B.1.* (pre-Delta)'
+        if lin.startswith('XBB'): return 'XBB (recombinant)'
+        if lin.startswith('JN') or lin.startswith('EG') or lin.startswith('HK'):
+            return 'JN/EG/HK (late Omicron)'
+        return 'Other'
+
+    family_palette = {
+        'AY.* (Delta sub)':     '#e05c5c',
+        'BA.* (Omicron)':       '#5c8de0',
+        'B.1.* (pre-Delta)':    '#5cb85c',
+        'XBB (recombinant)':    '#e0a85c',
+        'JN/EG/HK (late Omicron)': '#a05ce0',
+        'Other':                '#aaaaaa',
+    }
+
+    xs = np.array([r['unique_ratio'] for r in rows])
+    ys = np.array([r['hit_rate'] for r in rows])
+    ns = np.array([r['n'] for r in rows])
+    log_ns = np.log1p(ns)
+    sizes = 50 + (log_ns - log_ns.min()) / (log_ns.max() - log_ns.min() + 1e-9) * 750
+    families = [_family(r['lineage']) for r in rows]
+    colors = [family_palette[f] for f in families]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    plotted = set()
+    for x, y, s, c, fam in zip(xs, ys, sizes, colors, families):
+        lbl = fam if fam not in plotted else None
+        ax.scatter(x, y, s=s, c=c, alpha=0.75, edgecolors='gray', linewidths=0.4, label=lbl)
+        plotted.add(fam)
+
+    ax.legend(title='Lineage family', fontsize=7, title_fontsize=8,
+              loc='upper right', markerscale=0.6)
+
+    rows_sorted = sorted(rows, key=lambda r: r['n'], reverse=True)
+    label_targets = {r['lineage'] for r in rows_sorted[:8]}
+    for r in rows:
+        if r['lineage'] in label_targets:
+            ax.annotate(r['lineage'], (r['unique_ratio'], r['hit_rate']),
+                        fontsize=6.5, alpha=0.85,
+                        xytext=(4, 2), textcoords='offset points')
+
+    ax.set_xlabel('Unique / Total Target Positions per Lineage')
+    ax.set_ylabel('Position Hit Rate (%)')
+    ax.set_title(f'Label Uniqueness vs Position Hit Rate by Lineage ({prefix.upper()})\n'
+                 f'X = unique target positions / total (0=concentrated/easy, 1=all distinct/hard), '
+                 f'n≥{min_samples}')
+    ax.set_xlim(-0.02, 1.05)
+    ax.set_ylim(-2, 105)
+    ax.axhline(y=0, color='gray', linewidth=0.5)
+    ax.grid(linestyle='--', alpha=0.35)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_labeldiversity_vs_accuracy.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Label-uniqueness vs accuracy scatter saved to {path}")
+
+
+def plot_simpson_vs_accuracy(details, output_dir, prefix="test", min_samples=None):
+    """ターゲット位置の多様度 vs 正解率の散布図を系統単位で保存する（エントロピーの代替）。
+
+    多様度は生態学標準の **Gini–Simpson 多様度指数 D = 1 − Σ pᵢ²** を使う。
+    「その系統でランダムに2つのターゲット変異を選んだとき、別々の位置になる確率」で、
+    生物系の読者に説明不要（Simpson の種多様度指数と同じ）。unique/total と違い
+    サンプル数バイアスに強い。
+      D → 0 : 少数の位置に集中（予測しやすい）
+      D → 1 : 多くの位置に均等に分散（予測が難しい）
+    系統粒度は Pango 上位2階層、min_samples は config.DIVERSITY_PLOT_MIN_SAMPLES に従う。
+    Y軸: position hit rate、点サイズ: num_samples（対数）、色: 系統ファミリー。
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if not details:
+        return
+    min_samples = _diversity_min_samples(min_samples)
+    rows = _lineage_diversity_rows(details, min_samples)
+    if not rows:
+        return
+
+    def _family(lin):
+        if lin.startswith('AY.'):  return 'AY.* (Delta sub)'
+        if lin.startswith('BA.'):  return 'BA.* (Omicron)'
+        if lin.startswith('B.1.'): return 'B.1.* (pre-Delta)'
+        if lin.startswith('XBB'): return 'XBB (recombinant)'
+        if lin.startswith('JN') or lin.startswith('EG') or lin.startswith('HK'):
+            return 'JN/EG/HK (late Omicron)'
+        return 'Other'
+
+    family_palette = {
+        'AY.* (Delta sub)':     '#e05c5c',
+        'BA.* (Omicron)':       '#5c8de0',
+        'B.1.* (pre-Delta)':    '#5cb85c',
+        'XBB (recombinant)':    '#e0a85c',
+        'JN/EG/HK (late Omicron)': '#a05ce0',
+        'Other':                '#aaaaaa',
+    }
+
+    xs = np.array([r['simpson'] for r in rows])
+    ys = np.array([r['hit_rate'] for r in rows])
+    ns = np.array([r['n'] for r in rows])
+    log_ns = np.log1p(ns)
+    sizes = 50 + (log_ns - log_ns.min()) / (log_ns.max() - log_ns.min() + 1e-9) * 750
+    families = [_family(r['lineage']) for r in rows]
+    colors = [family_palette[f] for f in families]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    plotted = set()
+    for x, y, s, c, fam in zip(xs, ys, sizes, colors, families):
+        lbl = fam if fam not in plotted else None
+        ax.scatter(x, y, s=s, c=c, alpha=0.75, edgecolors='gray', linewidths=0.4, label=lbl)
+        plotted.add(fam)
+
+    ax.legend(title='Lineage family', fontsize=7, title_fontsize=8,
+              loc='upper right', markerscale=0.6)
+
+    rows_sorted = sorted(rows, key=lambda r: r['n'], reverse=True)
+    label_targets = {r['lineage'] for r in rows_sorted[:8]}
+    for r in rows:
+        if r['lineage'] in label_targets:
+            ax.annotate(r['lineage'], (r['simpson'], r['hit_rate']),
+                        fontsize=6.5, alpha=0.85,
+                        xytext=(4, 2), textcoords='offset points')
+
+    ax.set_xlabel('Target Position Diversity  (Gini–Simpson  D = 1 − Σ pᵢ²)')
+    ax.set_ylabel('Position Hit Rate (%)')
+    ax.set_title(f'Target Diversity (Simpson) vs Position Hit Rate by Lineage ({prefix.upper()})\n'
+                 f'D=0: concentrated/easy … D→1: spread across many positions/hard, '
+                 f'n≥{min_samples}')
+    ax.set_xlim(-0.02, 1.05)
+    ax.set_ylim(-2, 105)
+    ax.axhline(y=0, color='gray', linewidth=0.5)
+    ax.grid(linestyle='--', alpha=0.35)
+
+    plt.tight_layout()
+    path = _get_plot_path(output_dir, f'{prefix}_diversity_simpson_vs_accuracy.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Simpson-diversity vs accuracy scatter saved to {path}")
 
 
 def plot_entropy_bin(entropy_bin_df, output_dir, prefix="test"):

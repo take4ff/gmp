@@ -59,6 +59,9 @@ from .utils.plotting import (
     plot_strength_fine,
     plot_lineage_metrics,
     plot_entropy_vs_accuracy,
+    plot_labeldiversity_vs_accuracy,
+    plot_simpson_vs_accuracy,
+    save_lineage_diversity_csv,
     plot_entropy_bin,
     plot_calibration,
     plot_region_metrics,
@@ -315,7 +318,7 @@ def build_components(class_counts_dict=None):
 
 def run_training(model, train_loader, val_loader, loss_fn, loss_wrapper,
                  optimizer, scheduler, run_output_dir, data_info, wandb,
-                 strength_thresholds, make_train_loader=None):
+                 strength_thresholds, make_train_loader=None, optuna_trial=None):
     """学習ループを実行し、best_model を保存する。
 
     Args:
@@ -393,12 +396,41 @@ def run_training(model, train_loader, val_loader, loss_fn, loss_wrapper,
         if early_stop_metric == "val_loss":
             current_metric = val_loss
         else:
+            metric_key = early_stop_metric.replace('val_', '')
+            # 指定キーが val_metrics に無いと m.get(key, 0) が常に 0 を返し、
+            # MODE='max' では「一度も改善しない＝best_model が保存されない」事故になる。
+            # これを防ぐため存在を検証し、無ければ WARNING を出して val_loss にフォールバックする。
+            available_keys = set().union(*(m.keys() for m in val_metrics.values())) if val_metrics else set()
             total_samples = sum(m['num_samples'] for m in val_metrics.values())
-            if total_samples > 0:
-                current_metric = sum(m.get(early_stop_metric.replace('val_', ''), 0) * m['num_samples']
+            if metric_key not in available_keys:
+                force_print(
+                    f"[WARNING] EARLY_STOPPING_METRIC='{early_stop_metric}' (key='{metric_key}') は "
+                    f"val_metrics に存在しません。利用可能: "
+                    f"{sorted(k for k in available_keys if k != 'num_samples')}. "
+                    f"val_loss にフォールバックします（EARLY_STOPPING_MODE='min' を確認）。"
+                )
+                current_metric = val_loss
+            elif total_samples > 0:
+                # タイムステップ長ごとの hit-rate を num_samples で重み付き平均
+                current_metric = sum(m.get(metric_key, 0) * m['num_samples']
                                      for m in val_metrics.values()) / total_samples
             else:
                 current_metric = val_loss
+
+        # Optuna pruning: 各エポックの early-stop 指標を報告し、見込みの薄い trial を打ち切る。
+        # study 方向と early_stop_mode が一致するときのみ報告する（不一致だと良い trial を
+        # 誤って枝刈りするため）。current_metric は上で算出済み。
+        if optuna_trial is not None:
+            import optuna
+            study_dir = getattr(config, 'OPTUNA_DIRECTION', 'maximize')
+            aligned = ((early_stop_mode == 'max' and study_dir == 'maximize') or
+                       (early_stop_mode == 'min' and study_dir == 'minimize'))
+            if aligned:
+                optuna_trial.report(current_metric, epoch)
+                if optuna_trial.should_prune():
+                    force_print(f"[Optuna] Trial pruned at epoch {epoch+1} "
+                                f"(metric={current_metric:.4f})")
+                    raise optuna.TrialPruned()
 
         # 改善したかの判定
         is_improved = False
@@ -432,6 +464,14 @@ def run_training(model, train_loader, val_loader, loss_fn, loss_wrapper,
 # 5. 最終評価・結果保存
 # ──────────────────────────────────────────────
 
+def _plot_on(name):
+    """config.PLOT_OUTPUTS に基づき、指定プロットを出力するかを返す（キー無し/未定義なら True）。"""
+    outputs = getattr(config, 'PLOT_OUTPUTS', None)
+    if not isinstance(outputs, dict):
+        return True
+    return outputs.get(name, True)
+
+
 def run_final_evaluation(model, val_loader, test_loader, loss_fn,
                          run_output_dir, data_info, strength_thresholds):
     """Validation・Test セットで最終評価を行い、全CSVとグラフを保存する。
@@ -454,18 +494,33 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         save_prediction_distribution_csv(details, run_output_dir, prefix=prefix)
         if getattr(config, 'SAVE_STRAIN_METRICS', False):
             save_strain_metrics_csv(details, run_output_dir, prefix=prefix)
-        plot_metrics_by_timestep(metrics, run_output_dir, prefix=prefix)
-        plot_category_metrics(cat_metrics, run_output_dir, prefix=prefix)
-        plot_strength_calibration(details, run_output_dir, prefix=prefix)
-        plot_per_position_recall(details, run_output_dir, prefix=prefix, top_n=getattr(config, "PLOT_TOP_N_POSITIONS", 40))
-        plot_strength_fine(details, run_output_dir, prefix=prefix)
-        plot_lineage_metrics(details, run_output_dir, prefix=prefix,
-                             top_n=getattr(config, 'PLOT_TOP_N_LINEAGES', 30))
-        plot_entropy_vs_accuracy(details, run_output_dir, prefix=prefix)
+        if _plot_on('metrics_by_timestep'):
+            plot_metrics_by_timestep(metrics, run_output_dir, prefix=prefix)
+        if _plot_on('category_metrics'):
+            plot_category_metrics(cat_metrics, run_output_dir, prefix=prefix)
+        if _plot_on('strength_calibration'):
+            plot_strength_calibration(details, run_output_dir, prefix=prefix)
+        if _plot_on('per_position_recall'):
+            plot_per_position_recall(details, run_output_dir, prefix=prefix, top_n=getattr(config, "PLOT_TOP_N_POSITIONS", 40))
+        if _plot_on('strength_fine'):
+            plot_strength_fine(details, run_output_dir, prefix=prefix)
+        if _plot_on('lineage_metrics'):
+            plot_lineage_metrics(details, run_output_dir, prefix=prefix,
+                                 top_n=getattr(config, 'PLOT_TOP_N_LINEAGES', 30))
+        # 散布図の裏づけ系統別テーブルを CSV 保存（run 間比較・再描画の基準。プロット有無に依らず常時出力）
+        save_lineage_diversity_csv(details, run_output_dir, prefix=prefix)
+        if _plot_on('entropy_vs_accuracy'):
+            plot_entropy_vs_accuracy(details, run_output_dir, prefix=prefix)
+        if _plot_on('labeldiversity_vs_accuracy'):
+            plot_labeldiversity_vs_accuracy(details, run_output_dir, prefix=prefix)
+        if _plot_on('simpson_vs_accuracy'):
+            plot_simpson_vs_accuracy(details, run_output_dir, prefix=prefix)
         df_ent = save_entropy_bin_csv(details, run_output_dir, prefix=prefix)
-        plot_entropy_bin(df_ent, run_output_dir, prefix=prefix)
+        if _plot_on('entropy_bin'):
+            plot_entropy_bin(df_ent, run_output_dir, prefix=prefix)
         save_nll_csv(details, run_output_dir, prefix=prefix)
-        plot_region_metrics(details, run_output_dir, prefix=prefix)
+        if _plot_on('region_metrics'):
+            plot_region_metrics(details, run_output_dir, prefix=prefix)
         return df_ts, df_cat
 
     # Validation
@@ -476,7 +531,8 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     val_df_ts, val_df_cat = _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
     if val_calib_bins:
         save_calibration_csv(val_calib_bins, run_output_dir, prefix="valid")
-        plot_calibration(val_calib_bins, run_output_dir, prefix="valid")
+        if _plot_on('calibration'):
+            plot_calibration(val_calib_bins, run_output_dir, prefix="valid")
 
     # Test
     test_loss = None
@@ -491,13 +547,16 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         test_df_ts, test_df_cat = _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
         if test_calib_bins:
             save_calibration_csv(test_calib_bins, run_output_dir, prefix="test")
-            plot_calibration(test_calib_bins, run_output_dir, prefix="test")
+            if _plot_on('calibration'):
+                plot_calibration(test_calib_bins, run_output_dir, prefix="test")
 
     # 統合レポート
     print_combined_report(val_details, test_details, strength_thresholds)
     if test_details:
-        plot_combined_val_test_metrics(val_metrics, test_metrics, run_output_dir)
-        plot_combined_category_comparison(val_details, test_details, strength_thresholds, run_output_dir)
+        if _plot_on('combined_val_test_metrics'):
+            plot_combined_val_test_metrics(val_metrics, test_metrics, run_output_dir)
+        if _plot_on('combined_category_comparison'):
+            plot_combined_category_comparison(val_details, test_details, strength_thresholds, run_output_dir)
         save_val_test_gap_csv(val_metrics, test_metrics, run_output_dir)
 
         # 結合したメトリクスCSVを出力（timestepでソート）
@@ -507,27 +566,32 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     # 月別 CSV とグラフを常に出力
     save_date_metrics_csv(val_metrics_ym,  run_output_dir, prefix='valid')
     save_date_metrics_csv(test_metrics_ym, run_output_dir, prefix='test')
-    plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
+    if _plot_on('metrics_by_date'):
+        plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
 
     # Top-K 評価 (Validation)
     eval_ks = getattr(config, "EVAL_TOP_KS", (1, 3, 5))
     force_print(f"[INFO] Evaluating Top-K precision (k={eval_ks}) on Validation...")
     val_topk = evaluate_topk(model, val_loader, ks=eval_ks)
     save_topk_precision_csv(val_topk, run_output_dir, prefix='valid')
-    plot_topk_precision(val_topk, run_output_dir, prefix='valid')
+    if _plot_on('topk_precision'):
+        plot_topk_precision(val_topk, run_output_dir, prefix='valid')
     if getattr(config, 'USE_R_PRECISION', False):
         save_r_precision_csv(val_topk, run_output_dir, prefix='valid')
-        plot_r_precision(val_topk, run_output_dir, prefix='valid')
+        if _plot_on('r_precision'):
+            plot_r_precision(val_topk, run_output_dir, prefix='valid')
 
     test_topk = None
     if len(test_loader) > 0:
         force_print(f"[INFO] Evaluating Top-K precision (k={eval_ks}) on Test...")
         test_topk = evaluate_topk(model, test_loader, ks=eval_ks)
         save_topk_precision_csv(test_topk, run_output_dir, prefix='test')
-        plot_topk_precision(test_topk, run_output_dir, prefix='test')
+        if _plot_on('topk_precision'):
+            plot_topk_precision(test_topk, run_output_dir, prefix='test')
         if getattr(config, 'USE_R_PRECISION', False):
             save_r_precision_csv(test_topk, run_output_dir, prefix='test')
-            plot_r_precision(test_topk, run_output_dir, prefix='test')
+            if _plot_on('r_precision'):
+                plot_r_precision(test_topk, run_output_dir, prefix='test')
 
     save_run_summary_json(
         val_metrics, test_metrics, val_topk, test_topk,
@@ -544,7 +608,7 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
 def run_visualization(model, run_output_dir, val_loader=None, test_loader=None):
     """変異位置分布プロット、語彙ネットワーク可視化、Attention ヒートマップを実行する。"""
     # 変異位置分布プロット
-    if config.SAVE_PREDICTIONS:
+    if config.SAVE_PREDICTIONS and _plot_on('mutation_dist'):
         for prefix in ('valid', 'test'):
             csv_path = os.path.join(run_output_dir, "csv", f'{prefix}_predictions.csv')
             if os.path.exists(csv_path):
@@ -552,7 +616,7 @@ def run_visualization(model, run_output_dir, val_loader=None, test_loader=None):
                 plot_mutation_dist(csv_path)
 
     # Attention ヒートマップ（Validation の最初のバッチを使用）
-    if val_loader is not None and getattr(config, "SAVE_ATTENTION_HEATMAP", True):
+    if val_loader is not None and getattr(config, "SAVE_ATTENTION_HEATMAP", True) and _plot_on('attention_heatmap'):
         try:
             sample_batch = next(iter(val_loader))
             plot_attention_heatmap(model, sample_batch, run_output_dir, prefix='valid')
@@ -571,14 +635,19 @@ def run_visualization(model, run_output_dir, val_loader=None, test_loader=None):
     pos_to_region = load_position_to_region(codon_csv)
 
     force_print(f"[INFO] Vocab network output dir: {run_output_dir}")
-    plot_base_embedding_network(model, config, run_output_dir, version)
-    plot_position_threshold_network(model, pos_to_region, run_output_dir, version)
-    plot_position_tsne(model, pos_to_region, run_output_dir, version)
-    plot_position_cluster_network(model, pos_to_region, run_output_dir, version)
-    if os.path.exists(freq_csv):
-        plot_major_mutation_network(model, pos_to_region, freq_csv, codon_csv, run_output_dir, version)
-    else:
-        force_print(f"[WARNING] freq_csv not found, skipping major mutation network: {freq_csv}")
+    if _plot_on('base_embedding_network'):
+        plot_base_embedding_network(model, config, run_output_dir, version)
+    if _plot_on('position_threshold_network'):
+        plot_position_threshold_network(model, pos_to_region, run_output_dir, version)
+    if _plot_on('position_tsne'):
+        plot_position_tsne(model, pos_to_region, run_output_dir, version)
+    if _plot_on('position_cluster_network'):
+        plot_position_cluster_network(model, pos_to_region, run_output_dir, version)
+    if _plot_on('major_mutation_network'):
+        if os.path.exists(freq_csv):
+            plot_major_mutation_network(model, pos_to_region, freq_csv, codon_csv, run_output_dir, version)
+        else:
+            force_print(f"[WARNING] freq_csv not found, skipping major mutation network: {freq_csv}")
 
 
 # ──────────────────────────────────────────────
@@ -696,7 +765,7 @@ def ensemble_evaluate(val_loader, test_loader, loss_fn, run_output_dir, strength
 # 7. エントリポイント
 # ──────────────────────────────────────────────
 
-def main():
+def main(optuna_trial=None):
     print(f"PID: {os.getpid()}")
     set_seed(config.SEED)
     force_print(f"Using device: {config.DEVICE}")
@@ -764,9 +833,11 @@ def main():
         optimizer, scheduler, run_output_dir, data_info, wandb,
         strength_thresholds=strength_thresholds,
         make_train_loader=make_train_loader,
+        optuna_trial=optuna_trial,
     )
     save_training_log(training_log, run_output_dir)
-    plot_training_curve(training_log, run_output_dir)
+    if _plot_on('training_curve'):
+        plot_training_curve(training_log, run_output_dir)
     save_early_stopping_json(training_log, best_model_path, run_output_dir, config.EPOCHS)
     save_model_summary_txt(model, run_output_dir)
 
@@ -958,8 +1029,94 @@ def run_walk_forward(folds, wf_run_dir: str):
     force_print(f"\n[INFO] Walk-forward complete. Results root: {wf_run_dir}")
 
 
+def _aggregate_seed_summaries(summaries):
+    """複数 run_summary の数値リーフを再帰的に mean/std/n へ集計する。
+
+    構造（ネストした dict）を保ったまま、各数値リーフを
+    {'mean': ..., 'std': ..., 'n': ..., 'values': [...]} に置き換えた dict を返す。
+    """
+    from statistics import mean as _mean, stdev as _stdev
+
+    def _agg(dicts):
+        keys = set()
+        for d in dicts:
+            if isinstance(d, dict):
+                keys |= set(d.keys())
+        out = {}
+        for k in sorted(keys):
+            vals = [d[k] for d in dicts if isinstance(d, dict) and k in d]
+            if vals and all(isinstance(v, dict) for v in vals):
+                out[k] = _agg(vals)
+            else:
+                nums = [v for v in vals
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                if nums:
+                    out[k] = {
+                        'mean': _mean(nums),
+                        'std': _stdev(nums) if len(nums) > 1 else 0.0,
+                        'n': len(nums),
+                        'values': nums,
+                    }
+        return out
+
+    return _agg([s for s in summaries if isinstance(s, dict)])
+
+
+def run_multi_seed(seeds, ms_run_dir):
+    """複数シードで main() を回し、run_summary を mean±std に集計する。
+
+    各シードは EXPERIMENT_NAME を multi_seed/<ts>/seed_<n> に切り替えて実行し、
+    出力された run_summary.json を回収して集計結果を ms_run_dir に保存する。
+    """
+    import json as _json
+    import glob as _glob
+
+    orig_seed = config.SEED
+    orig_exp = getattr(config, 'EXPERIMENT_NAME', '')
+    ms_tag = os.path.basename(ms_run_dir)
+
+    per_seed = {}
+    for seed in seeds:
+        force_print(f"\n{'='*60}")
+        force_print(f"  Multi-seed run: SEED={seed}")
+        force_print(f"{'='*60}")
+        config.SEED = seed
+        config.EXPERIMENT_NAME = f'multi_seed/{ms_tag}/seed_{seed}'
+        best_model_path = main()
+
+        summary = None
+        if best_model_path:
+            run_dir = os.path.dirname(os.path.dirname(best_model_path))
+            hits = _glob.glob(os.path.join(run_dir, '**', 'run_summary.json'),
+                              recursive=True)
+            if hits:
+                with open(hits[0]) as f:
+                    summary = _json.load(f)
+        per_seed[str(seed)] = summary
+        force_print(f"[INFO] SEED={seed} complete "
+                    f"(run_summary: {'found' if summary else 'MISSING'})")
+
+    # config を元に戻す
+    config.SEED = orig_seed
+    config.EXPERIMENT_NAME = orig_exp
+
+    valid_summaries = [v for v in per_seed.values() if isinstance(v, dict)]
+    result = {
+        'seeds': list(seeds),
+        'n_success': len(valid_summaries),
+        'aggregate': _aggregate_seed_summaries(valid_summaries),
+        'per_seed': per_seed,
+    }
+    out_path = os.path.join(ms_run_dir, 'multi_seed_summary.json')
+    with open(out_path, 'w') as f:
+        _json.dump(result, f, indent=2, ensure_ascii=False)
+    force_print(f"\n[INFO] Multi-seed complete ({len(valid_summaries)}/{len(seeds)} seeds). "
+                f"Aggregate saved to {out_path}")
+    return result
+
+
 def _run_entry():
-    """config.SPLIT_MODE に応じて単一実行 or Walk-forward を切り替えるエントリポイント。"""
+    """config.SPLIT_MODE / MULTI_SEED に応じて実行方式を切り替えるエントリポイント。"""
     if getattr(config, 'SPLIT_MODE', 'timestep') == 'walk_forward':
         from .scripts.eval.walk_forward import FOLDS
         wf_folds = getattr(config, 'WALK_FORWARD_FOLDS', None)
@@ -971,6 +1128,12 @@ def _run_entry():
         wf_run_dir = os.path.join(config.RESULT_SAVE_DIR, 'walk_forward', wf_timestamp)
         os.makedirs(wf_run_dir, exist_ok=True)
         run_walk_forward(selected, wf_run_dir)
+    elif getattr(config, 'MULTI_SEED', False):
+        seeds = getattr(config, 'MULTI_SEED_LIST', None) or [config.SEED]
+        ms_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ms_run_dir = os.path.join(config.RESULT_SAVE_DIR, 'multi_seed', ms_timestamp)
+        os.makedirs(ms_run_dir, exist_ok=True)
+        run_multi_seed(seeds, ms_run_dir)
     else:
         main()
 
