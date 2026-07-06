@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from . import config
 from .dataset import PetraDataset
-from .evaluate import evaluate_recall_topk
+from .evaluate import evaluate_recall_topk, PetraRepresentativenessWeights
 from .model import PetraDecoder
 from .tokenizer import MutationTokenizer
 from .train import evaluate_loss, train_epoch
@@ -30,7 +30,8 @@ def get_db_path() -> str:
     if config.DB_FILE:
         return config.DB_FILE
     try:
-        from transformer_260625.db.connection import get_db_path as _get
+        # 正典版 transformer_260702 と同一 DB を参照する（PETRA比較で train/test を完全一致させるため）
+        from transformer_260702.db.connection import get_db_path as _get
         return _get()
     except Exception:
         import glob
@@ -130,12 +131,15 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     best_model_path = os.path.join(out_dir, 'best_model.pth')
 
+    # representativeness 重み（country 未整備 DB では全て 1.0 にフォールバックする）
+    weights = PetraRepresentativenessWeights(db_path, split_type=2)
+
     # ---- Eval-only モード ----
     if args.eval_only:
         print(f'Loading checkpoint: {args.eval_only}')
         ckpt = torch.load(args.eval_only, map_location=device)
         model.load_state_dict(ckpt['model_state_dict'])
-        _run_evaluation(model, test_loader, tokenizer, device, out_dir)
+        _run_evaluation(model, test_loader, tokenizer, device, out_dir, weights)
         return
 
     # ---- Optimizer / Scheduler ----
@@ -190,7 +194,7 @@ def main():
     print(f'\n--- Evaluating best model (epoch saved) ---')
     ckpt = torch.load(best_model_path, map_location=device)
     model.load_state_dict(ckpt['model_state_dict'])
-    results = _run_evaluation(model, test_loader, tokenizer, device, out_dir)
+    results = _run_evaluation(model, test_loader, tokenizer, device, out_dir, weights)
     results['best_val_loss'] = best_val_loss
 
     with open(os.path.join(out_dir, 'results.json'), 'w') as f:
@@ -200,18 +204,18 @@ def main():
     return results
 
 
-def _run_evaluation(model, test_loader, tokenizer, device, out_dir) -> dict:
+def _run_evaluation(model, test_loader, tokenizer, device, out_dir, weights) -> dict:
     test_loss = evaluate_loss(model, test_loader, device)
     recall = evaluate_recall_topk(model, test_loader, tokenizer, device,
-                                  config.TOP_K_LIST)
+                                  config.TOP_K_LIST, weights=weights)
 
     print(f'Test loss (perplexity): {test_loss:.4f} (ppl={math.exp(test_loss):.1f})')
-    print('Test Recall@K (mutation tokens only):')
+    print(f'Test Recall@K (per-sequence macro-average, n={recall["n_sequences"]:,} sequences):')
     for k in config.TOP_K_LIST:
-        print(f'  @{k:3d}: {recall[f"recall@{k}"]:.4f}')
-    print(f'  evaluated on {recall["total_mut_tokens"]:,} mutation tokens')
+        print(f'  @{k:3d}: Average={recall["average"][f"recall@{k}"]:.4f}  '
+              f'Weighted={recall["weighted"][f"recall@{k}"]:.4f}')
 
-    results = {'test_loss': test_loss, **recall}
+    results = {'test_loss': test_loss, 'recall': recall}
     return results
 
 

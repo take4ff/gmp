@@ -84,6 +84,9 @@ class PetraDataset(IterableDataset):
                     'input_ids': torch.tensor(input_ids, dtype=torch.long),
                     'target_ids': torch.tensor(target_ids, dtype=torch.long),
                     'length': len(input_ids),
+                    # PETRA 準拠の representativeness 重み計算用（評価時のみ使用）
+                    'country': country,
+                    'collection_date': cdate,
                 }
 
         con.close()
@@ -103,4 +106,7 @@ class PetraDataset(IterableDataset):
             target_ids[i, :n] = item['target_ids']
             attention_mask[i, :n] = True
 
-        return input_ids, target_ids, attention_mask
+        countries = [item.get('country') for item in batch]
+        dates = [item.get('collection_date') for item in batch]
+
+        return input_ids, target_ids, attention_mask, countries, dates
