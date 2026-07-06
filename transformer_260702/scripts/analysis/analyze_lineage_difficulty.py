@@ -241,8 +241,8 @@ def main():
             'n_db_sample':           db_total_count.get(l, 0),
             'phylo_dist':            phylo_dist[l],
             'norm_phylo_dist':       round(nd, 4),
-            'target_entropy_bits':   round(h_bits, 4),
-            'entropy_norm':          round(h_bits / max_h, 4),
+            'db_target_entropy_bits':   round(h_bits, 4),
+            'db_target_entropy_norm':          round(h_bits / max_h, 4),
             'n_unique_positions':    n_uniq,
             'median_collection_date': median_date_map.get(l),
         })
@@ -260,7 +260,7 @@ def main():
     print(f"[INFO] Saved: {csv_path}")
     print(f"\n[TOP 10 難易度の高い系統]")
     print(df[['lineage', 'n_test_sample', 'n_db_sample', 'phylo_dist',
-              'target_entropy_bits', 'entropy_norm', 'n_unique_positions', 'difficulty_score']].head(10).to_string(index=False))
+              'db_target_entropy_bits', 'db_target_entropy_norm', 'n_unique_positions', 'difficulty_score']].head(10).to_string(index=False))
 
     # ----------------------------------------------------------------
     # 共通ヘルパー: jitter 付き散布図（周辺ヒストグラム）
@@ -438,7 +438,7 @@ def main():
     out_a = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy.png')
     scatter_with_marginals(
         df,
-        df['target_entropy_bits'].values,
+        df['db_target_entropy_bits'].values,
         'Shannon entropy H  (bits)',
         x_log=False,
         filename=out_a,
@@ -460,7 +460,7 @@ def main():
     out_e = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy_date.png')
     scatter_with_date_y(
         df,
-        df['target_entropy_bits'].values,
+        df['db_target_entropy_bits'].values,
         'Shannon entropy H  (bits)',
         filename=out_e,
         top_df=top10,
@@ -485,7 +485,7 @@ def main():
             if len(merged) > 5:
                 fig, axes = plt.subplots(1, 3, figsize=(18, 6))
                 cols = [
-                    ('target_entropy_bits', 'Shannon entropy H (bits)'),
+                    ('db_target_entropy_bits', 'Shannon entropy H (bits)'),
                     ('n_unique_positions',  'Unique target positions'),
                     ('norm_phylo_dist',     'Norm phylo distance to train'),
                 ]
@@ -529,7 +529,7 @@ def main():
                 out_c = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy_recall.png')
                 scatter_with_marginals(
                     merged_sorted,
-                    merged_sorted['target_entropy_bits'].values,
+                    merged_sorted['db_target_entropy_bits'].values,
                     'Shannon entropy H  (bits)',
                     x_log=False,
                     filename=out_c,
@@ -558,7 +558,7 @@ def main():
                 out_f = os.path.join(output_dir, 'lineage_difficulty_scatter_entropy_date_recall.png')
                 scatter_with_date_y(
                     merged_sorted,
-                    merged_sorted['target_entropy_bits'].values,
+                    merged_sorted['db_target_entropy_bits'].values,
                     'Shannon entropy H  (bits)',
                     filename=out_f,
                     top_df=top10_merged,

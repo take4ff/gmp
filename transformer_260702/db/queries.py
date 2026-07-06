@@ -17,6 +17,56 @@ def get_split_col():
     return 'split_type'
 
 
+def get_db_lineage_target_entropy(split_type, max_samples_per_lineage=2000, db_path=None):
+    """DB の指定 split の**生サンプル**（ユニークフィルタ等をかけない）から、
+    系統（フル Pango 名）別に「ターゲット位置エントロピー」を計算する。
+
+    モデル評価済み（フィルタ後）の eval 基準に対する **DB 基準**の難易度指標。
+    Returns: dict[strain_name] -> (entropy_bits, entropy_norm)
+    """
+    import re
+    import math
+    from collections import defaultdict, Counter
+
+    _MUT_RE = re.compile(r'[A-Za-z](\d+)[A-Za-z]')
+    split_col = get_split_col()
+    sn_col = 'strain_name_usher' if getattr(config, 'STRENGTH_SOURCE', 'ncbi') == 'usher' else 'strain_name_ncbi'
+
+    con = connect_db(db_path or get_db_path(), read_only=True)
+    try:
+        rows = con.execute(f"""
+            SELECT st.{sn_col}, s.raw_path
+            FROM samples s JOIN strains st ON s.strain_id = st.strain_id
+            WHERE s.{split_col} = ? AND st.{sn_col} IS NOT NULL
+        """, [split_type]).fetchall()
+    finally:
+        con.close()
+
+    lineage_positions = defaultdict(list)
+    seen = defaultdict(int)
+    for strain, raw_path in rows:
+        if seen[strain] >= max_samples_per_lineage:
+            continue
+        seen[strain] += 1
+        last_step = (raw_path or '').split('>')[-1]
+        for mut in last_step.split(','):
+            m = _MUT_RE.search(mut.strip())
+            if m:
+                lineage_positions[strain].append(int(m.group(1)))
+
+    result = {}
+    for strain, positions in lineage_positions.items():
+        if not positions:
+            result[strain] = (0.0, 0.0)
+            continue
+        counts = Counter(positions)
+        total = len(positions)
+        entropy = -sum((c / total) * math.log2(c / total) for c in counts.values())
+        max_entropy = math.log2(len(counts)) if len(counts) > 1 else 1.0
+        result[strain] = (round(entropy, 4), round(entropy / max_entropy, 4))
+    return result
+
+
 def get_db_data_info(db_path=None, split_type=None, max_cooccurrence=None):
     """DBからデータ情報を取得（data_info相当）。
 

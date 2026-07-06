@@ -676,6 +676,16 @@ def save_lineage_metrics_csv(details, output_dir, prefix="test"):
     if not details:
         return None
 
+    # DB 基準（フィルタ前・重複込み）のエントロピーを併記する。モデル評価済み(eval)基準と
+    # 対で見られるよう、同じフル Pango 粒度で系統別に DB から計算する。
+    db_entropy_map = {}
+    try:
+        from ..db.queries import get_db_lineage_target_entropy
+        split_type = {'train': 0, 'valid': 1, 'test': 2}.get(prefix, 2)
+        db_entropy_map = get_db_lineage_target_entropy(split_type)
+    except Exception as e:
+        _log.force_print(f"[WARNING] DB基準エントロピーの計算をスキップ（eval基準のみ出力）: {e}")
+
     tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
     lineage_stats = {}
 
@@ -708,12 +718,17 @@ def save_lineage_metrics_csv(details, output_dir, prefix="test"):
             max_entropy = math.log2(len(counts)) if len(counts) > 1 else 1.0
             normalized_entropy = entropy / max_entropy
 
+        db_ent = db_entropy_map.get(lineage, (0.0, 0.0))
         row = {
             'lineage': lineage,
             'num_samples': n,
             'avg_strength': round(s['strength_sum'] / n, 4) if n > 0 else 0.0,
-            'target_position_entropy': round(entropy, 4),
-            'target_position_entropy_norm': round(normalized_entropy, 4),
+            # eval 基準: モデルが実際に評価した(フィルタ後)サンプルの多様性
+            'eval_target_entropy': round(entropy, 4),
+            'eval_target_entropy_norm': round(normalized_entropy, 4),
+            # db 基準: DB 生サンプル(フィルタ前・重複込み)の多様性
+            'db_target_entropy': db_ent[0],
+            'db_target_entropy_norm': db_ent[1],
         }
         for t in tasks:
             row[f'{t}_hit_rate_pct'] = round(s['hits'][t] / n * 100, 2) if n > 0 else 0.0
