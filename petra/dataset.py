@@ -131,5 +131,9 @@ class PetraDataset(IterableDataset):
 
         countries = [item.get('country') for item in batch]
         dates = [item.get('collection_date') for item in batch]
+        # raw_path が同一foldのtrain窓に既出か（PETRAのCLM設計では raw_path が一致すると
+        # input/targetの対応も機械的に一致するため、リーク判定に使う）。
+        # 未設定（通常学習時など）は常にFalse。
+        is_leaked = [item.get('is_leaked', False) for item in batch]
 
-        return input_ids, target_ids, attention_mask, countries, dates
+        return input_ids, target_ids, attention_mask, countries, dates, is_leaked

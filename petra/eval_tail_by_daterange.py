@@ -70,17 +70,39 @@ def resolve_test_ids_by_daterange(db_path, split_date, split_end):
     return ids
 
 
+def get_raw_path_set(db_path, start, end):
+    """[start, end) の collection_date を持つサンプルのraw_path集合を返す（読み取り専用）。
+
+    PETRAのCLM設計ではraw_pathが完全一致するとinput/targetの対応も機械的に一致するため、
+    train窓のraw_path集合を使って「test/valのうちtrain窓に既出のraw_pathを持つサンプル
+    （is_leaked）」を判定するのに使う（サンプルを除外はせず、集計を分けるためだけに使用）。
+    """
+    con = duckdb.connect(db_path, read_only=True)
+    where = "collection_date IS NOT NULL AND collection_date != '' "
+    params = []
+    if start:
+        where += "AND RPAD(collection_date, 10, '-01-01') >= ? "
+        params.append(start)
+    if end:
+        where += "AND RPAD(collection_date, 10, '-01-01') < ? "
+        params.append(end)
+    rows = con.execute(f"SELECT DISTINCT raw_path FROM samples WHERE {where}", params).fetchall()
+    con.close()
+    return set(r[0] for r in rows)
+
+
 class _FixedIdsPetraDataset(IterableDataset):
     """PetraDataset とほぼ同じだが、あらかじめ解決済みの sample_id リストをそのまま使う版。"""
 
     def __init__(self, db_path, tokenizer, ids, max_seq_len=512, chunk_size=2000,
-                 max_history_steps=None):
+                 max_history_steps=None, leaked_raw_paths: set = None):
         self.db_path = db_path
         self.tokenizer = tokenizer
         self.ids = ids
         self.max_seq_len = max_seq_len
         self.chunk_size = chunk_size
         self.max_history_steps = max_history_steps
+        self.leaked_raw_paths = leaked_raw_paths
 
     def __len__(self):
         return len(self.ids)
@@ -109,12 +131,14 @@ class _FixedIdsPetraDataset(IterableDataset):
                     token_ids = token_ids[:self.max_seq_len - 1] + [self.tokenizer.eos_id]
                 input_ids = token_ids[:-1]
                 target_ids = token_ids[1:]
+                is_leaked = (self.leaked_raw_paths is not None and raw_path in self.leaked_raw_paths)
                 yield {
                     'input_ids': torch.tensor(input_ids, dtype=torch.long),
                     'target_ids': torch.tensor(target_ids, dtype=torch.long),
                     'length': len(input_ids),
                     'country': country,
                     'collection_date': cdate,
+                    'is_leaked': is_leaked,
                 }
         con.close()
 
@@ -122,6 +146,8 @@ class _FixedIdsPetraDataset(IterableDataset):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--checkpoint', required=True)
+    ap.add_argument('--train_start', default=None,
+                    help='このfoldのtrain窓の開始日（省略時はleaked/non_leakedの内訳を計算しない）')
     ap.add_argument('--split_date', required=True)
     ap.add_argument('--split_end', default=None)
     ap.add_argument('--force_cpu', action='store_true')
@@ -139,9 +165,17 @@ def main():
     print(f'Vocab size: {tokenizer.vocab_size}')
 
     ids = resolve_test_ids_by_daterange(db_path, args.split_date, args.split_end)
+
+    leaked_raw_paths = None
+    if args.train_start is not None:
+        leaked_raw_paths = get_raw_path_set(db_path, args.train_start, args.split_date)
+        print(f"[INFO] train窓 [{args.train_start}, {args.split_date}) のユニークraw_path数: "
+              f"{len(leaked_raw_paths):,}（test側でis_leaked判定に使用）")
+
     test_ds = _FixedIdsPetraDataset(db_path, tokenizer, ids, max_seq_len=petra_config.MAX_SEQ_LEN,
                                     chunk_size=petra_config.CHUNK_SIZE,
-                                    max_history_steps=petra_config.MAX_HISTORY_STEPS)
+                                    max_history_steps=petra_config.MAX_HISTORY_STEPS,
+                                    leaked_raw_paths=leaked_raw_paths)
     test_loader = DataLoader(test_ds, batch_size=petra_config.BATCH_SIZE,
                              collate_fn=PetraDataset.collate_fn,
                              num_workers=0, pin_memory=(device.type == 'cuda'))
@@ -177,6 +211,15 @@ def main():
         for k in petra_config.TOP_K_LIST:
             print(f'    @{k:3d}: Average={full["region"]["average"][f"recall@{k}"]:.4f}  '
                   f'Weighted={full["region"]["weighted"][f"recall@{k}"]:.4f}')
+    if leaked_raw_paths is not None:
+        print(f'  [non_leaked=train窓に未出現] n={full["non_leaked"]["n_sequences"]:,}')
+        for k in petra_config.TOP_K_LIST:
+            print(f'    @{k:3d}: Average={full["non_leaked"]["average"][f"recall@{k}"]:.4f}  '
+                  f'Weighted={full["non_leaked"]["weighted"][f"recall@{k}"]:.4f}')
+        print(f'  [leaked=train窓に既出] n={full["leaked"]["n_sequences"]:,}')
+        for k in petra_config.TOP_K_LIST:
+            print(f'    @{k:3d}: Average={full["leaked"]["average"][f"recall@{k}"]:.4f}  '
+                  f'Weighted={full["leaked"]["weighted"][f"recall@{k}"]:.4f}')
 
     print('\n--- 末尾のみ評価（提案モデルの position_hit_rate と対応） ---')
     tail = evaluate_recall_topk_tail_only(model, test_loader, tokenizer, device, petra_config.TOP_K_LIST,
@@ -194,6 +237,15 @@ def main():
         for k in petra_config.TOP_K_LIST:
             print(f'    @{k:3d}: Average={tail["region"]["average"][f"recall@{k}"]:.4f}  '
                   f'Weighted={tail["region"]["weighted"][f"recall@{k}"]:.4f}')
+    if leaked_raw_paths is not None:
+        print(f'  [non_leaked=train窓に未出現] n={tail["non_leaked"]["n_sequences"]:,}（真の汎化性能はこちら）')
+        for k in petra_config.TOP_K_LIST:
+            print(f'    @{k:3d}: Average={tail["non_leaked"]["average"][f"recall@{k}"]:.4f}  '
+                  f'Weighted={tail["non_leaked"]["weighted"][f"recall@{k}"]:.4f}')
+        print(f'  [leaked=train窓に既出] n={tail["leaked"]["n_sequences"]:,}（暗記込み・参考値）')
+        for k in petra_config.TOP_K_LIST:
+            print(f'    @{k:3d}: Average={tail["leaked"]["average"][f"recall@{k}"]:.4f}  '
+                  f'Weighted={tail["leaked"]["weighted"][f"recall@{k}"]:.4f}')
 
 
 if __name__ == '__main__':

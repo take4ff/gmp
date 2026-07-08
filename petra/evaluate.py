@@ -76,8 +76,15 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
     spike_per_seq_weight = []
     region_per_seq_recall = {k: [] for k in top_k_list}
     region_per_seq_weight = []
+    # raw_pathが同一foldのtrain窓に既出（is_leaked=True）かどうかで別集計する。
+    # PETRAのCLM設計ではraw_path一致でinput/targetの対応も機械的に一致するため、
+    # 「本当に汎化しているか」を見るにはleakedを除いたnon_leakedの数値を見る必要がある。
+    leaked_per_seq_recall = {k: [] for k in top_k_list}
+    leaked_per_seq_weight = []
+    nonleaked_per_seq_recall = {k: [] for k in top_k_list}
+    nonleaked_per_seq_weight = []
 
-    for input_ids, target_ids, _mask, countries, dates in loader:
+    for input_ids, target_ids, _mask, countries, dates, is_leaked_flags in loader:
         input_ids = input_ids.to(device)
         target_ids_dev = target_ids.to(device)
 
@@ -102,9 +109,17 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
             per_seq_weight.append(w)
 
             target = target_ids_dev[b, last_pos]
+            hits_by_k = {}
             for k in top_k_list:
                 hit = bool((topk_preds[b, last_pos, :k] == target).any().item())
+                hits_by_k[k] = hit
                 per_seq_recall[k].append(1.0 if hit else 0.0)
+
+            leak_bucket = leaked_per_seq_recall if is_leaked_flags[b] else nonleaked_per_seq_recall
+            leak_weight_bucket = leaked_per_seq_weight if is_leaked_flags[b] else nonleaked_per_seq_weight
+            leak_weight_bucket.append(w)
+            for k in top_k_list:
+                leak_bucket[k].append(1.0 if hits_by_k[k] else 0.0)
 
             # スパイク限定: 末尾の真の変異がスパイク範囲のときのみ集計
             if spike_tensor is not None and bool(torch.isin(target, spike_tensor).item()):
@@ -141,6 +156,8 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
         result['spike'] = _finalize(spike_per_seq_recall, spike_per_seq_weight)
     if region_tensor is not None:
         result['region'] = _finalize(region_per_seq_recall, region_per_seq_weight)
+    result['leaked'] = _finalize(leaked_per_seq_recall, leaked_per_seq_weight)
+    result['non_leaked'] = _finalize(nonleaked_per_seq_recall, nonleaked_per_seq_weight)
     return result
 
 
@@ -182,8 +199,12 @@ def evaluate_recall_topk(model, loader: DataLoader, tokenizer,
     spike_per_seq_weight = []
     region_per_seq_recall = {k: [] for k in top_k_list}
     region_per_seq_weight = []
+    leaked_per_seq_recall = {k: [] for k in top_k_list}
+    leaked_per_seq_weight = []
+    nonleaked_per_seq_recall = {k: [] for k in top_k_list}
+    nonleaked_per_seq_weight = []
 
-    for input_ids, target_ids, _mask, countries, dates in loader:
+    for input_ids, target_ids, _mask, countries, dates, is_leaked_flags in loader:
         input_ids = input_ids.to(device)
         target_ids_dev = target_ids.to(device)
 
@@ -214,6 +235,13 @@ def evaluate_recall_topk(model, loader: DataLoader, tokenizer,
             for k in top_k_list:
                 hits = int(correct_at[k][b].sum().item())
                 per_seq_recall[k].append(hits / n_targets)
+
+            leak_bucket = leaked_per_seq_recall if is_leaked_flags[b] else nonleaked_per_seq_recall
+            leak_weight_bucket = leaked_per_seq_weight if is_leaked_flags[b] else nonleaked_per_seq_weight
+            leak_weight_bucket.append(w)
+            for k in top_k_list:
+                hits = int(correct_at[k][b].sum().item())
+                leak_bucket[k].append(hits / n_targets)
 
             if is_spike is not None:
                 n_spike_targets = int(is_spike[b].sum().item())
@@ -248,6 +276,8 @@ def evaluate_recall_topk(model, loader: DataLoader, tokenizer,
         result['spike'] = _finalize(spike_per_seq_recall, spike_per_seq_weight)
     if region_tensor is not None:
         result['region'] = _finalize(region_per_seq_recall, region_per_seq_weight)
+    result['leaked'] = _finalize(leaked_per_seq_recall, leaked_per_seq_weight)
+    result['non_leaked'] = _finalize(nonleaked_per_seq_recall, nonleaked_per_seq_weight)
     return result
 
 

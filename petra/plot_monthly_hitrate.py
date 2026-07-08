@@ -23,20 +23,27 @@ from torch.utils.data import DataLoader
 from transformer_260707.scripts.eval.walk_forward import FOLDS
 from petra import config as petra_config
 from petra.dataset import PetraDataset
-from petra.eval_tail_by_daterange import resolve_test_ids_by_daterange, _FixedIdsPetraDataset
+from petra.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
+                                          get_raw_path_set)
 from petra.model import PetraDecoder
 from petra.tokenizer import MutationTokenizer
 
 
 @torch.no_grad()
 def eval_tail_by_month(model, loader, tokenizer, device, k=1):
-    """配列末尾のみの hit(0/1) を月ごとにリスト集計する。"""
+    """配列末尾のみの hit(0/1) を月ごとにリスト集計する。
+
+    is_leaked=True（raw_pathが同一foldのtrain窓に既出）のサンプルは month_hits とは別に
+    month_hits_nonleaked から除外する。PETRAのCLM設計ではraw_path一致でinput/targetの
+    対応も機械的に一致するため、真の汎化性能を見るには non_leaked 側を見る必要がある。
+    """
     model.eval()
     context_ids = set(i for i in range(tokenizer.vocab_size) if tokenizer.is_context_token(i))
     context_tensor = torch.tensor(sorted(context_ids), dtype=torch.long, device=device)
 
     month_hits = defaultdict(list)
-    for input_ids, target_ids, _mask, _countries, dates in loader:
+    month_hits_nonleaked = defaultdict(list)
+    for input_ids, target_ids, _mask, _countries, dates, is_leaked_flags in loader:
         input_ids = input_ids.to(device)
         target_ids_dev = target_ids.to(device)
         logits = model(input_ids)
@@ -56,7 +63,9 @@ def eval_tail_by_month(model, loader, tokenizer, device, k=1):
             date = dates[b]
             if date and len(date) >= 7:
                 month_hits[date[:7]].append(1.0 if hit else 0.0)
-    return month_hits
+                if not is_leaked_flags[b]:
+                    month_hits_nonleaked[date[:7]].append(1.0 if hit else 0.0)
+    return month_hits, month_hits_nonleaked
 
 
 def find_fold_checkpoints(wf_dir):
@@ -89,6 +98,7 @@ def main():
           f"（未完了フォールドは今回スキップ、後で再実行すれば追加される）")
 
     all_month_hits = defaultdict(list)
+    all_month_hits_nonleaked = defaultdict(list)
     per_fold_summary = []
 
     for fold_id, train_start, split_date, split_end, desc in FOLDS:
@@ -100,9 +110,13 @@ def main():
         if not ids:
             continue
 
+        leaked_raw_paths = get_raw_path_set(db_path, train_start, split_date)
+        print(f"  [INFO] train窓のユニークraw_path数: {len(leaked_raw_paths):,}（is_leaked判定に使用）")
+
         ds = _FixedIdsPetraDataset(db_path, tokenizer, ids, max_seq_len=petra_config.MAX_SEQ_LEN,
                                    chunk_size=petra_config.CHUNK_SIZE,
-                                   max_history_steps=petra_config.MAX_HISTORY_STEPS)
+                                   max_history_steps=petra_config.MAX_HISTORY_STEPS,
+                                   leaked_raw_paths=leaked_raw_paths)
         loader = DataLoader(ds, batch_size=petra_config.BATCH_SIZE,
                             collate_fn=PetraDataset.collate_fn,
                             num_workers=0, pin_memory=(device.type == 'cuda'))
@@ -116,13 +130,19 @@ def main():
         ckpt = torch.load(fold_ckpts[fold_id], map_location=device, weights_only=True)
         model.load_state_dict(ckpt['model_state_dict'])
 
-        month_hits = eval_tail_by_month(model, loader, tokenizer, device, k=1)
+        month_hits, month_hits_nonleaked = eval_tail_by_month(model, loader, tokenizer, device, k=1)
         for month, hits in sorted(month_hits.items()):
             all_month_hits[month].extend(hits)
+            nonleaked_hits = month_hits_nonleaked.get(month, [])
+            all_month_hits_nonleaked[month].extend(nonleaked_hits)
             rate = float(np.mean(hits) * 100)
-            print(f"  {month}: n={len(hits):,}, hit_rate@1={rate:.2f}%")
+            nonleaked_rate = float(np.mean(nonleaked_hits) * 100) if nonleaked_hits else float('nan')
+            print(f"  {month}: n={len(hits):,}, hit_rate@1={rate:.2f}%  "
+                  f"(non_leaked: n={len(nonleaked_hits):,}, hit_rate@1={nonleaked_rate:.2f}%)")
             per_fold_summary.append({'fold': fold_id, 'month': month,
-                                     'n_sequences': len(hits), 'hit_rate_pct': rate})
+                                     'n_sequences': len(hits), 'hit_rate_pct': rate,
+                                     'n_sequences_nonleaked': len(nonleaked_hits),
+                                     'hit_rate_pct_nonleaked': nonleaked_rate})
         del model
 
     if not all_month_hits:
@@ -131,21 +151,28 @@ def main():
     months = sorted(all_month_hits.keys())
     rates = [float(np.mean(all_month_hits[m]) * 100) for m in months]
     ns = [len(all_month_hits[m]) for m in months]
+    rates_nonleaked = [float(np.mean(all_month_hits_nonleaked[m]) * 100)
+                       if all_month_hits_nonleaked.get(m) else float('nan') for m in months]
+    ns_nonleaked = [len(all_month_hits_nonleaked.get(m, [])) for m in months]
 
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(max(14, len(months) * 0.35), 8),
         gridspec_kw={'height_ratios': [3, 1]}, sharex=True)
 
     ax1.plot(months, rates, marker='o', color='#c0392b',
-             label='PETRA: next-mutation-token top-1 (tail only)')
+             label='PETRA: next-mutation-token top-1 (tail only, all)')
+    ax1.plot(months, rates_nonleaked, marker='s', color='#2980b9', linestyle='--',
+             label='PETRA: same, non_leaked only (raw_path not seen in train window)')
     ax1.set_ylabel('Hit Rate (%)')
     ax1.set_title('PETRA Walk-forward: Monthly Test Hit Rate (tail-only, next mutation)')
     ax1.legend()
     ax1.grid(alpha=0.3)
 
-    ax2.bar(months, ns, color='gray')
+    ax2.bar(months, ns, color='gray', alpha=0.5, label='all')
+    ax2.bar(months, ns_nonleaked, color='#2980b9', alpha=0.7, label='non_leaked')
     ax2.set_yscale('log')
     ax2.set_ylabel('num_sequences\n(log)')
+    ax2.legend(fontsize=8)
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
 
@@ -155,7 +182,8 @@ def main():
     fig.savefig(fig_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
-    df = pd.DataFrame({'month': months, 'hit_rate_pct': rates, 'n_sequences': ns})
+    df = pd.DataFrame({'month': months, 'hit_rate_pct': rates, 'n_sequences': ns,
+                       'hit_rate_pct_nonleaked': rates_nonleaked, 'n_sequences_nonleaked': ns_nonleaked})
     csv_path = os.path.join(out_dir, 'petra_monthly_hitrate.csv')
     df.to_csv(csv_path, index=False)
     pd.DataFrame(per_fold_summary).to_csv(

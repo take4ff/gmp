@@ -315,6 +315,82 @@ fold3のfounder変異による底上げを避けるため、`petra/evaluate.py`�
 4. n<1,000の月（2022-04以降）は両モデルとも数値が乱高下し統計的に無意味（PETRA側は
    n=1〜9で100%連発）。fold4-7の全体平均Recall（Phase E結果）と同じ崩壊パターン。
 
+## データリーク調査（2026-07-08・fold4-7の高い数字の原因を追跡）
+
+fold4-7でPETRAのtail-only hit rateが50%を超える月が頻発した件（例: 2023-02 n=18で61.1%）を
+受けて、train窓とtest窓をまたいだ完全一致raw_pathの重複をDB実測で調査した。
+
+### 発見: train/test間でraw_pathが完全一致する重複が存在
+
+各foldのtrain窓・test窓で個別に`DISTINCT raw_path`を取得し重複を数えた結果:
+
+| fold | trainユニーク数 | testユニーク数 | 重複数 | testに占める重複率 |
+|---|---|---|---|---|
+| 1 | 214,190 | 546,011 | 11,151 | 2.0% |
+| 2 | 546,011 | 1,444,255 | 10,220 | 0.7% |
+| 3 | 1,444,255 | 215,262 | 21,189 | 9.8% |
+| 4 | 215,262 | 571 | 176 | 30.8% |
+| 5 | 571 | 165 | 50 | 30.3% |
+| **6** | 165 | 25 | **21** | **84.0%** |
+| **7** | 25 | 27 | **20** | **74.1%** |
+
+原因: `USE_UNIQUE_FILTER`（dedup）はtrain/valid/testをそれぞれ個別にクエリした結果に対して
+のみ適用されており（`transformer_260707/db/dataset.py:_get_sample_ids()`、`split_col = ?`で
+1つのsplitに絞ってから`drop_duplicates`）、**splitをまたいだ重複除去は行われていない**。
+fold6/7は系統多様性が枯渇しており、進化が止まった同一系統がtrain窓・test窓の両方で
+繰り返し提出されているため、この重複が高頻度で発生する。
+
+### 【最初の誤判定】「本体も同様に汚染されている」→ 検証により撤回
+
+初期の判断: PETRA(`petra/dataset.py`)は本体の`DBIterableDataset`をそのまま呼び出して
+sample_idを解決しているため、本体自身のwalk_forward評価も同じ重複の影響を受けている
+はずだと推測し、修正は共有クラス側（`transformer_260707/db/dataset.py`）に入れるべきと
+一旦提案した。
+
+**実地検証で撤回**: fold6の重複raw_path 21件**全件**について、train側代表サンプルと
+test側代表サンプルの`labels.targets`（本体の予測ターゲット）を直接比較したところ、
+**21件中21件（100%）でターゲットが不一致**だった。
+
+理由: 本体のターゲットは`labels`テーブルに個別サンプルごとに紐づく値（そのサンプル固有の
+実際の子孫の運命）であり、raw_path文字列から決定論的に導かれるものではない。進化が止まった
+同一系統が異なる時期に重複提出されても、その先の運命（ターゲット）はサンプルインスタンスごとに
+異なる。**そのため「同じraw_pathを訓練で見た」ことはテスト時の正解を教えない＝本体は
+この意味で構造的にリークしない。**
+
+一方PETRAはCLM（decoder-only, next-token prediction）設計のため、input/targetは同一raw_path
+文字列を1トークンずらしただけの関係。raw_pathが完全一致すれば input→target の対応も
+**機械的に**完全一致する。したがって「同じraw_pathを訓練で見た」ことがそのままテストの正解を
+教えてしまう、**PETRA固有の構造的リーク**であることが確定した。
+
+### 対応方針（ユーザ判断・2026-07-08）
+
+- **本体側（`transformer_260707/db/dataset.py`）の修正は不要**。fold間チェーン
+  （fold Nのtest期間=fold N+1のtrain期間）は意図された walk-forward 設計であり別問題。
+- **PETRA側は「重複サンプルを除外」ではなく「集計を分けて両方報告」する方式を採用**。
+  除外だと只でさえ枯渇したfold4-7のデータがさらに減ってしまうため、サンプルはそのまま使い、
+  各配列に `is_leaked`（raw_pathが同一foldのtrain窓に既出か）を付与して
+  「全体」「leaked（暗記込み・参考値）」「non_leaked（真の汎化性能）」の3種類を並べて出す。
+
+### 実装済み（タスク#10）
+
+- `petra/dataset.py`: `PetraDataset.collate_fn`が`is_leaked`フラグを含む6要素タプルを返すよう変更
+- `petra/eval_tail_by_daterange.py`: `get_raw_path_set(db_path, start, end)`ヘルパーを追加。
+  `_FixedIdsPetraDataset`に`leaked_raw_paths`パラメータを追加。CLIに`--train_start`を追加
+  （渡すとleaked/non_leaked内訳を表示、省略時は従来通り全体のみ）
+- `petra/plot_monthly_hitrate.py`: `FOLDS`から得られる`train_start`を使い、fold毎に自動で
+  leaked判定→月別プロットに「全体」と「non_leaked限定」の2本の折れ線＋サンプル数バーを追加
+- `petra/evaluate.py`: `evaluate_recall_topk`・`evaluate_recall_topk_tail_only`両方に
+  `leaked`/`non_leaked`キーを追加（spike/regionと同じ形式の`_finalize`ヘルパーを再利用）
+- `petra/train.py`: 6要素タプルに対応（学習ロジック自体は無変更）
+- **検証済み**: fold6実データ・ランダム初期化モデルで疎通確認。`leaked+non_leaked=overall`が
+  `evaluate_recall_topk`・`evaluate_recall_topk_tail_only`の両方で完全一致することを確認
+  （fold6 test n=21のうち19件がleaked、2件がnon_leaked）。
+
+### 今後: タスク#9（RoPE＋39ステップ窓での再学習）にこのleaked/non_leaked集計が組み込まれる
+
+再学習後は、fold6/7のような低データ・低多様性foldでもnon_leaked側の数値を見ることで、
+「暗記による底上げ」と「真の汎化性能」を区別して報告できるようになる。
+
 ## Phase F以前に実施した簡易ベースライン比較（2026-07-07・260702の既存walk_forward結果で検証）
 
 PETRA実学習（Phase E/F）を待たずに、学習不要の3種類のベースラインで「デルタ45%/35%、
@@ -442,15 +518,19 @@ PETRA実学習（Phase E/F）を待たずに、学習不要の3種類のベー�
 | 9.5 | **Phase F-lite: tail-only月別Hit Rateで本体と直接比較** | ✅完了（2026-07-08） | `petra/eval_tail_by_daterange.py`・`petra/plot_monthly_hitrate.py`を新規実装・実行。下記「tail-only月別比較」参照。petra_recall.py（Phase F本体）を待たずに①の判断材料が得られた |
 | 10 | B: メイン単発学習（timestep・全履歴） | ❌不要と判定・キャンセル | model.py等の同一性確認とwalk_forward積算方式の実装により不要と判定（詳細はPhase B節参照） |
 | 11 | C準備: genome_track/cooccurrence_constellation/local_explainへのwalk-forward対応実装 | ✅完了 | `--walk_forward_dir`（genome_track・cooccurrence_constellationは全フォールド積算、local_explainは`--fold`でVOC期選択）を追加。共通ヘルパは`_xai_common.py`に集約。import/`--help`確認済み |
-| 12 | C: ②③ XAI分析（260702の既存walk_forwardで実行） | ⏳次のアクション | PETRA学習完了によりブロック解除。260702の既存walk_forwardチェックポイントでそのまま実行可能 |
+| 12 | C: ②③ XAI分析（260702の既存walk_forwardで実行） | ✅完了（2026-07-08） | `genome_track`→`cooccurrence_constellation`→`local_explain`(fold3)を逐次実行し完走。共起ペア予測は実共起との一致率85.5〜90.0%（top50/100/200）。local_explainはfold3（Omicron初期BA.1/BA.2）で8サンプルのIG帰属を出力 |
 | 13 | X: メインモデルwalk_forward（260707・headline数値用） | ❌不要と判定・キャンセル（2026-07-08） | ユーザ判断。260702/260707の同一性根拠によりheadline数値も260702の既存walk_forwardで代用。詳細はPhase D節参照 |
 | 14 | D: 260707版でのXAI再実行・照合 | ❌不要（Phase Xキャンセルに伴い対象消滅） | Phase Xが無くなったため「260707版へ差し替えて再実行」も不要。Phase Cの結果がそのままcanonical |
 | 15 | F: PETRA head-to-head比較（petra_recall.py） | 優先度低（任意） | Phase F-lite（tail-only月別比較）で①の判断材料は既に得られたため、必須ではない |
+| 16 | データリーク調査: train/test間raw_path重複の発見・原因特定・本体/PETRAの構造差異の検証 | ✅完了（2026-07-08） | fold6重複21件全件で本体targetは100%不一致（本体は構造的にリークしない）と確認。詳細は「データリーク調査」節参照 |
+| 17 | PETRA側: leaked/non_leaked集計の実装（サンプル除外ではなく集計を分ける方式） | ✅完了（2026-07-08） | `petra/dataset.py`・`petra/evaluate.py`・`petra/eval_tail_by_daterange.py`・`petra/plot_monthly_hitrate.py`・`petra/train.py`を修正。fold6実データで疎通確認済み（leaked+non_leaked=overall一致） |
+| 18 | RoPE復元＋39ステップ窓をPETRAに実装 | ✅完了（2026-07-08） | `petra/model.py`をRoPE版に復元（スクラッチパッド退避分）。`petra/config.py`に`MAX_HISTORY_STEPS=39`追加、`tokenizer.encode()`に本体と同じ末尾スライス実装。合成データで45→39切り詰めを検証済み |
+| 19 | PETRA walk-forward再学習（RoPE＋39ステップ窓＋leaked/non_leaked集計込み） | ⏳次のアクション | 全7フォールド再学習が必要（アーキ・トークナイズ両方変更のため）。再学習後、tail-only月別比較・低データ期プール検定を再実行し、窓を揃えた上でのPETRA vs 本体の結論を確定させる |
 | — | MCC（マシューズ相関係数） | 検討のみ・実装見送り | ユーザ判断で追加不要と決定（2026-07-07） |
 
-**現在のGPU/プロセス状態（2026-07-08時点）**: PETRA walk-forward学習・tail-only月別比較とも完了。
-GPUは空いている。**次のアクションはPhase C（260702の既存walk_forwardでのXAI分析:
-genome_track / cooccurrence_constellation / local_explain）**。Phase X/Dのキャンセルにより、
+**現在のGPU/プロセス状態（2026-07-08時点）**: PETRA walk-forward学習・tail-only月別比較・
+Phase C（XAI分析）とも完了。GPUは空いている。**次のアクションはタスク19（PETRA walk-forward
+再学習、RoPE＋39ステップ窓＋leaked/non_leaked集計）**。Phase X/Dのキャンセルにより、
 これが完了すればXAI面での残作業は完結する（260707での再実行は不要）。
 
 **未解決の注意点**: `petra/model.py`は現在git HEAD相当（RoPE無し、絶対位置埋め込み版）。

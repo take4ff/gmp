@@ -19,7 +19,7 @@ def train_epoch(model, loader: DataLoader, optimizer, scheduler,
     total_tokens = 0
     amp_enabled = use_amp and device.type == 'cuda'
 
-    for input_ids, target_ids, _mask, _countries, _dates in loader:
+    for input_ids, target_ids, _mask, _countries, _dates, _is_leaked in loader:
         input_ids = input_ids.to(device)
         target_ids = target_ids.to(device)
 
@@ -54,7 +54,7 @@ def evaluate_loss(model, loader: DataLoader, device: torch.device,
     total_tokens = 0
     amp_enabled = use_amp and device.type == 'cuda'
 
-    for input_ids, target_ids, _mask, _countries, _dates in loader:
+    for input_ids, target_ids, _mask, _countries, _dates, _is_leaked in loader:
         input_ids = input_ids.to(device)
         target_ids = target_ids.to(device)
 
