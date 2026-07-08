@@ -10,6 +10,11 @@ x_cat は離散埋め込みのため IG はできないが、各入力スロッ�
 
 出力: {out}/local_explanations.json（サンプルごとに予測位置/遺伝子・寄与上位の入力変異・特徴）
 
+既定（--voc_search、常時有効）で、D614G・N501Y等の既知VOC定義変異がtop-1予測になっている
+サンプルを複数バッチから優先的に探して抽出する（--scan_batchesで走査上限を指定）。単一系統に
+偏ったfold（例: fold3のBA.1/BA.2初期）では先頭バッチだけだと同じ予測・帰属が繰り返されるため。
+見つからなかった分は従来通り先頭バッチの順送りサンプルで埋める。--no_voc_searchで旧動作に戻せる。
+
 Usage:
   python -m transformer_260707.scripts.analysis.local_explain \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_samples 8 --ig_steps 32
@@ -31,6 +36,45 @@ from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
 from transformer_260707.scripts.analysis import _xai_common as X
 from transformer_260707.scripts.analysis.feature_importance import _NUM_FEATURE_NAMES
+
+# 著名なVOC定義変異（Spike, nucleotide position -> 変異名）。
+# reference/codon/codon_mutation4.csv の該当行(base_pos, protein=S, protein_pos)と
+# 突合して塩基位置を確認済み（記憶からの引用ではなく本プロジェクトの参照データに基づく）。
+KNOWN_VOC_POSITIONS = {
+    23403: 'D614G (early pandemic, near-fixation)',
+    23063: 'N501Y (Alpha/Beta/Gamma/Omicron)',
+    22813: 'K417N/T (Beta/Gamma/Omicron)',
+    22917: 'L452R (Delta/Epsilon)',
+    22995: 'T478K (Delta)',
+    23012: 'E484K (Beta/Gamma)',
+    23604: 'P681R/H (Delta/Alpha)',
+}
+
+
+def _find_voc_samples(model, loader, device, voc_positions, n_needed, max_scan_batches):
+    """複数バッチをスキャンし、既知VOC変異位置がtop-1予測になっているサンプルを優先収集する。
+
+    fold3等、単一系統に偏ったデータでは先頭バッチだけだと同じ予測・帰属が繰り返され
+    ケーススタディとして代わり映えしないため、既知VOC変異を狙って探す。
+    見つかった分だけ返し、残りは呼び出し側で先頭バッチの順送りサンプルで埋める。
+    """
+    collected = []
+    fallback_batch = None
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(loader):
+            x_cat, x_num, mask = batch[0]
+            x_cat = x_cat.to(device); x_num = x_num.to(device); mask = mask.to(device)
+            if fallback_batch is None:
+                fallback_batch = (x_cat, x_num, mask)
+            out = model(x_cat, x_num, src_key_padding_mask=mask)
+            pred_pos = torch.argmax(out[1], dim=1)
+            for i in range(x_cat.shape[0]):
+                p = int(pred_pos[i].item())
+                if p in voc_positions and len(collected) < n_needed:
+                    collected.append((x_cat[i].clone(), x_num[i].clone(), mask[i].clone(), p))
+            if len(collected) >= n_needed or batch_idx + 1 >= max_scan_batches:
+                break
+    return collected, fallback_batch
 
 
 def _integrated_gradients(model, x_cat, x_num, mask, target_pos, steps):
@@ -60,6 +104,11 @@ def main():
     parser.add_argument('--top', type=int, default=5, help='上位いくつを表示するか')
     parser.add_argument('--force_cpu', action='store_true')
     parser.add_argument('--output_dir', type=str, default=None)
+    parser.add_argument('--voc_search', action='store_true', default=True,
+                         help='既知VOC変異(D614G, N501Y等)がtop-1予測のサンプルを優先抽出する（既定で有効）')
+    parser.add_argument('--no_voc_search', dest='voc_search', action='store_false')
+    parser.add_argument('--scan_batches', type=int, default=30,
+                         help='VOC変異サンプルを探すために走査する最大バッチ数')
     args = parser.parse_args()
 
     if args.walk_forward_dir:
@@ -84,12 +133,32 @@ def main():
     pos2gene = X.load_position_gene_map()
     feat_names = _NUM_FEATURE_NAMES[:config.NUM_CHEM_FEATURES]
 
-    # 先頭バッチから n_samples を説明
-    batch = next(iter(loader))
-    x_cat, x_num, mask = batch[0]
-    x_cat = x_cat.to(device); x_num = x_num.to(device); mask = mask.to(device)
-    B = min(args.n_samples, x_cat.shape[0])
-    x_cat, x_num, mask = x_cat[:B], x_num[:B], mask[:B]
+    voc_samples = []
+    if args.voc_search:
+        voc_samples, fallback_batch = _find_voc_samples(
+            model, loader, device, KNOWN_VOC_POSITIONS, args.n_samples, args.scan_batches)
+        force_print(f"[INFO] 既知VOC変異が予測されたサンプル: {len(voc_samples)}件"
+                     f"（最大{args.scan_batches}バッチ走査、対象: {list(KNOWN_VOC_POSITIONS.values())}）")
+    else:
+        fallback_batch = next(iter(loader))[0]
+        fallback_batch = tuple(t.to(device) for t in fallback_batch)
+
+    n_fallback = max(0, args.n_samples - len(voc_samples))
+    fb_x_cat, fb_x_num, fb_mask = fallback_batch
+    fb_x_cat, fb_x_num, fb_mask = fb_x_cat[:n_fallback], fb_x_num[:n_fallback], fb_mask[:n_fallback]
+
+    if voc_samples:
+        voc_x_cat = torch.stack([s[0] for s in voc_samples])
+        voc_x_num = torch.stack([s[1] for s in voc_samples])
+        voc_mask = torch.stack([s[2] for s in voc_samples])
+        x_cat = torch.cat([voc_x_cat, fb_x_cat], dim=0) if n_fallback > 0 else voc_x_cat
+        x_num = torch.cat([voc_x_num, fb_x_num], dim=0) if n_fallback > 0 else voc_x_num
+        mask = torch.cat([voc_mask, fb_mask], dim=0) if n_fallback > 0 else voc_mask
+    else:
+        x_cat, x_num, mask = fb_x_cat, fb_x_num, fb_mask
+
+    B = x_cat.shape[0]
+    is_voc_match = [True] * len(voc_samples) + [False] * (B - len(voc_samples))
 
     with torch.no_grad():
         out = model(x_cat, x_num, src_key_padding_mask=mask)
@@ -122,6 +191,8 @@ def main():
             'sample_index': i,
             'predicted_next_position': p,
             'predicted_gene': gene,
+            'is_known_voc_position': is_voc_match[i],
+            'voc_mutation_name': KNOWN_VOC_POSITIONS.get(p) if is_voc_match[i] else None,
             'top_features': [
                 {'feature': feat_names[j] if j < len(feat_names) else str(j),
                  'attribution': float(feat_attr[j])} for j in top_feats],
@@ -132,8 +203,9 @@ def main():
 
     X.save_json(explanations, out_dir, 'local_explanations.json')
 
-    for e in explanations[:min(3, len(explanations))]:
-        force_print(f"\n[sample {e['sample_index']}] 予測次変異位置={e['predicted_next_position']} ({e['predicted_gene']})")
+    for e in explanations:
+        voc_tag = f" [VOC: {e['voc_mutation_name']}]" if e['is_known_voc_position'] else ""
+        force_print(f"\n[sample {e['sample_index']}] 予測次変異位置={e['predicted_next_position']} ({e['predicted_gene']}){voc_tag}")
         force_print("  寄与の大きい特徴: " + ", ".join(f"{f['feature']}({f['attribution']:.3g})" for f in e['top_features']))
         force_print("  寄与の大きい入力変異: " + ", ".join(
             f"{m['position']}({m['gene']})" for m in e['top_input_mutations']))
