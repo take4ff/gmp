@@ -391,6 +391,125 @@ test側代表サンプルの`labels.targets`（本体の予測ターゲット）
 再学習後は、fold6/7のような低データ・低多様性foldでもnon_leaked側の数値を見ることで、
 「暗記による底上げ」と「真の汎化性能」を区別して報告できるようになる。
 
+## PETRA再学習（RoPE＋39ステップ窓）完了・最終結論（2026-07-08〜09）
+
+タスク#9で`petra/walk_forward.py`を再実行（`outputs/petra/walk_forward/20260708_145056/`）。
+RoPE化・39ステップ窓・leaked/non_leaked集計の3つを反映した状態で全7フォールド完走。
+
+**全体平均Recall@1（旧設定とほぼ同水準、founder変異による底上げは引き続き残存）**:
+fold1=80.3%, fold2=82.2%, fold3=94.3%, fold4=83.6%, fold5=86.9%, fold6=93.3%, fold7=96.3%
+（旧: 78.1/80.0/94.2/83.7/86.0/93.5/96.8% とほぼ同一。窓を39に揃えても全体平均は大きく変わらない
+= 39ステップの窓自体は元々ほとんどのサンプルでほぼ非制約だったことを示唆）。
+
+`petra/plot_monthly_hitrate.py`を新チェックポイントで再実行し、本体の`monthly_metrics_all_folds.csv`
+とnon_leaked版で再突合した結果、**2つの結論が確定した**:
+
+### 結論1: Delta期（頑健な大n月）で本体の優位性は残るが縮小（3〜6倍→約2倍）
+
+| 年月 | 本体 | PETRA(旧・窓不一致+リーク込み) | PETRA(新・39ステップ+non_leaked) |
+|---|---|---|---|
+| 2021-06 | 21.77% | 5.04% | 5.25% |
+| 2021-07 | 28.00% | 8.87% | 14.29% |
+| 2021-08 | 25.58% | 5.98% | 13.48% |
+| 2021-09 | 27.27% | 5.42% | 14.96% |
+| 2021-10 | 31.78% | 5.90% | 16.71% |
+| **2021-11** | **34.84%** | 5.14% | **17.48%** |
+| 2021-12 | 30.18% | 4.45% | 12.24% |
+
+窓を揃えてリークを除いても、本体はDelta期で一貫してPETRA型ベースラインの**約2倍**を維持。
+これが要旨の「①精度の良し悪しの判断基準」に使える、最も条件を揃えた比較結果。
+
+### 結論2: 低データ期（2022-07〜）の「PETRA優位」は窓不一致とリークの複合アーティファクトだった
+
+| モデル | プール結果（2022-07〜、non_leaked版） |
+|---|---|
+| 本体 | 38/406 = 9.36% |
+| PETRA(non_leaked) | 28/320 = 8.75% |
+| 2標本比率検定 | z=-0.284, **p=0.777（有意差なし）** |
+
+旧比較（窓不一致・リーク込み）ではz=6.42, p<1e-6でPETRAが有意に上回るとしていたが、**正しく
+補正すると有意差は消滅**。低データ期は両モデルとも訓練データ枯渇（fold5=523件・fold6=148件・
+fold7=24件）という共通の限界に直面しているだけで、アーキテクチャの優劣を反映した差ではないことが
+確定した。
+
+**How to apply**: 要旨に載せる比較数値は必ずこの最終版（39ステップ+non_leaked、
+`outputs/petra/walk_forward/20260708_145056/monthly_plot/`）を使う。旧版（`20260707_210406/`）は
+過大評価であり使わない。
+
+## 追加のXAI分析（2026-07-08〜09）
+
+Phase C完了後、要旨の考察を厚くするため以下を新規実装・実行した（全て`transformer_260707/scripts/`）。
+
+### `analysis/lineage_evolution_track.py`（新規）
+上位5系統（strain_name_usher基準: AY.4, BA.2, BA.1.1, B.1.1.7, BA.1）から代表サンプル1件ずつ
+（系統内でpath_lengthが中央値に最も近いもの）を選び、timestep×ゲノム位置で変異蓄積経路を可視化。
+**オミクロン系統3つ（BA.1・BA.1.1・BA.2）はtimestep 8〜10あたりで位置26000〜29000
+（N・ORF8・M遺伝子付近）に密集するクラスタを共有**——共通祖先（オミクロン創始変異群）の可視化に
+成功。AY.4（Delta）は突出して長い経路、B.1.1.7（Alpha）は独自の低位置変異から開始、という
+系統ごとの差異も見えた。
+（代表サンプル選定SQLの同点タイブレークが非決定的で実行毎に微妙に異なる日付が選ばれるが、
+多くの場合raw_path重複のため図の内容自体は再現性がある。）
+
+### `analysis/lineage_attention_compare.py`（新規）
+上記5系統の代表サンプルについて、実際の変異位置（x_cat由来のground truth）とモデルの
+Co-occurrence Attention重みを同一入力スロットで比較。**重要な発見**: 生のattention重みは、
+softmaxが同一timestep内で合計1になる制約により、共起数(co_count)が多いほど機械的に小さくなる
+構造的交絡を受ける（`attn_weight`の平均は厳密に`1/co_count`）。`relative_attn = attn_weight ×
+co_count`（1.0=一様分布基準）で補正すると、共起密集クラスタ内でもモデルが特定の位置を一様分布の
+最大7倍程度重視し、大半は逆に軽視するという**本物の選択的アテンション**が確認できた
+（生の重みだけを見ると「モデルはORF1abを重視しSpikeを軽視している」という誤った解釈をしてしまう
+ところだった）。出力は系統別重ね合わせ版(線なし)と系統別個別ファイル(経路を線で接続)の両方に対応。
+
+### `analysis/timestep_importance.py`（新規）
+`local_explain.py`と同じIntegrated Gradients機構を再利用し、集約軸を「どの特徴/位置か」ではなく
+「入力の何ステップ前(recency)か」に変更。全7フォールド・20,374サンプルで集計した結果:
+
+| recency | 平均\|IG\|重要度 |
+|---|---|
+| 0（直近1件） | **145.5**（突出） |
+| 1 | 41.7 |
+| 6〜7 | 60.1 / 59.2（副次的な山） |
+| 19〜20 | ~11.0（ピークの約7.6%） |
+| 38〜39 | ~3.4〜4.1（ピークの約2.5%） |
+
+直近の変異が圧倒的に重要（単調ではなく recency=6〜7 に副次ピーク）。**recency=20時点で既に
+ピークの1割未満、窓の端でも約2.5%まで減衰済みで、39ステップという入力窓の設計を裏付ける**
+（大きな情報の切り捨ては起きていなさそう）。
+
+### `visualization/plot_xai_outputs.py`（新規）
+既存のCSV/JSON専用出力（PNG無し）を可視化:
+- `local_explain`: サンプルごとの上位寄与特徴・入力変異を小さい棒グラフで並べる
+- `cooccurrence_constellation`: 予測ペア/実ペアのネットワーク図（`both`/`model_only`/`target_only`
+  で色分け）。**注意**: 元スクリプトの「復元率85.5〜90%」は「予測ペアが実ペア全体(4,140万通り)の
+  どこかに存在するか」という緩い基準であり、本可視化の「予測top25と実頻度top25が完全一致するか」
+  という厳しい基準とは別の指標（後者は重複0件だった）。両者は矛盾ではなく、モデルの上位予測は
+  生物学的に妥当だが最頻出の実ペアそのものとは限らない、という追加知見。
+- `majority_baseline`: フォールド別の多数決/ランダム基準比較（region/positionを別軸で、position軸
+  はsymlogスケール）
+
+### `feature_importance.py`の実行と副産物のバグ修正
+初めて実行したところ2つの問題が見つかった。(1) `collect_coattn_weights`内の`co_attn.forward`への
+monkey-patchが`co_occur_mask`引数を受け取らずTypeErrorでクラッシュ（修正済み、実際のシグネチャに
+合わせ`co_occur_mask=None`を追加）。(2) `--checkpoint`単発モードは`assign_fold_test_window`を
+呼ばないため、DBの`split_type_wf`列が直前に実行した別スクリプトの状態（別フォールド）のまま
+評価されてしまう（fold3のつもりが実際はfold7の17件で評価していた）。**walk-forward系スクリプトを
+連続実行する際は、単発`--checkpoint`モードのスクリプトを挟む前に必ず対象フォールドの
+`assign_fold_test_window`を明示的に呼び直す必要がある**。
+
+**hydrophobicity/charge重要度の調査**: ユーザーから「以前のアブレーションでcharge/hydrophobicityが
+精度に大きく影響した」との指摘を受け検証。fold1,2,3,4,5・position/aa_pos/synonymousの複数ヘッド・
+path_length=44-48サブセット（ユーザーの記憶にある条件、timestep分割のbaseline checkpoint
+`outputs/archive/transformer_260625/results/20260629_002051/`で確認）**全てで一貫してtop10圏外・
+他の上位特徴より1〜2桁小さい値**という結果になった。ユーザーから「その時の精度変化も2%程度で
+大きな影響ではない」との補足があり、矛盾ではなく整合的と判断。さらに`transformer_260109`
+（2026年1月の旧バージョン）ではNUM_CHEM_FEATURES=6（ホスト適応24種・成長4種が未実装）だったことを
+確認し、「特徴量が32〜36種に増えたことで相対重要度が希薄化した」という仮説を構造的に裏付けた。
+当時の生データディレクトリ(`usher_output/`)が現在のファイルシステムに存在しないため、旧
+チェックポイントでの直接再検証は不可能と判明し、調査はここで終了。
+
+**How to apply**: charge/hydrophobicityの効果を要旨で主張する場合は「小さいが有意な寄与」という
+正確な表現に留め、「重要な特徴」であるかのような誇張は避ける。
+
 ## Phase F以前に実施した簡易ベースライン比較（2026-07-07・260702の既存walk_forward結果で検証）
 
 PETRA実学習（Phase E/F）を待たずに、学習不要の3種類のベースラインで「デルタ45%/35%、
@@ -525,18 +644,19 @@ PETRA実学習（Phase E/F）を待たずに、学習不要の3種類のベー�
 | 16 | データリーク調査: train/test間raw_path重複の発見・原因特定・本体/PETRAの構造差異の検証 | ✅完了（2026-07-08） | fold6重複21件全件で本体targetは100%不一致（本体は構造的にリークしない）と確認。詳細は「データリーク調査」節参照 |
 | 17 | PETRA側: leaked/non_leaked集計の実装（サンプル除外ではなく集計を分ける方式） | ✅完了（2026-07-08） | `petra/dataset.py`・`petra/evaluate.py`・`petra/eval_tail_by_daterange.py`・`petra/plot_monthly_hitrate.py`・`petra/train.py`を修正。fold6実データで疎通確認済み（leaked+non_leaked=overall一致） |
 | 18 | RoPE復元＋39ステップ窓をPETRAに実装 | ✅完了（2026-07-08） | `petra/model.py`をRoPE版に復元（スクラッチパッド退避分）。`petra/config.py`に`MAX_HISTORY_STEPS=39`追加、`tokenizer.encode()`に本体と同じ末尾スライス実装。合成データで45→39切り詰めを検証済み |
-| 19 | PETRA walk-forward再学習（RoPE＋39ステップ窓＋leaked/non_leaked集計込み） | ⏳次のアクション | 全7フォールド再学習が必要（アーキ・トークナイズ両方変更のため）。再学習後、tail-only月別比較・低データ期プール検定を再実行し、窓を揃えた上でのPETRA vs 本体の結論を確定させる |
+| 19 | PETRA walk-forward再学習（RoPE＋39ステップ窓＋leaked/non_leaked集計込み） | ✅完了（2026-07-08〜09） | 全7フォールド再学習完走（`outputs/petra/walk_forward/20260708_145056/`）。詳細は「PETRA再学習（RoPE＋39ステップ窓）完了・最終結論」節参照 |
+| 20 | tail-only月別比較・低データ期プール検定の再実行（窓一致＋non_leaked版） | ✅完了（2026-07-09） | **最終結論確定**: Delta期は本体が一貫して約2倍優位（旧3〜6倍から補正）。低データ期(2022-07〜)の「PETRA有意」は窓不一致+リークの複合アーティファクトで、正しく補正すると有意差消滅(z=-0.284, p=0.777) |
+| 21 | 系統別変異蓄積経路の可視化（`lineage_evolution_track.py`、新規） | ✅完了 | 上位5系統の代表サンプルでtimestep×ゲノム位置の経路を可視化。オミクロン3系統(BA.1/BA.1.1/BA.2)がtimestep8-10で共通クラスタを共有することを確認 |
+| 22 | 代表サンプルのground truth vs attention重み比較（`lineage_attention_compare.py`、新規） | ✅完了 | raw attention weightはco_countで構造的に交絡（平均=1/co_count）することを発見。`relative_attn`補正版で本物の選択的attentionを確認。系統別個別ファイル＋全系統重ね合わせ版の両方出力 |
+| 23 | timestep(recency)重要度の減衰カーブ（`timestep_importance.py`、新規） | ✅完了 | 全7フォールド20,374サンプルで集計。recency=0が突出(145.5)、recency=20時点でピークの1割未満に減衰——39ステップ窓の設計を裏付け |
+| 24 | 既存CSV/JSON専用出力の可視化（`plot_xai_outputs.py`、新規） | ✅完了 | local_explain・cooccurrence_constellation（ネットワーク図）・majority_baselineを可視化。constellationの「復元率85-90%」と「top25完全一致率0%」は別指標である点に注意 |
+| 25 | `feature_importance.py`初回実行・バグ修正・fold横断比較 | ✅完了 | monkey-patchの引数不一致(`co_occur_mask`欠落)を修正。単発`--checkpoint`モードは`assign_fold_test_window`を呼ばないため、直前の別スクリプト実行のfold窓が残っていた事故も修正。fold1,2,3,4,5・position/aa_pos/synonymousの全ヘッドでhydrophobicity/chargeは一貫してtop10圏外(1-2桁小さい値) |
+| 26 | hydrophobicity/charge重要度低さの原因調査（旧アブレーションとの整合性確認） | ✅完了（調査終了） | ユーザ指摘の「2%程度の元々小さい効果」＋特徴量数6→32-36への増加による相対希薄化、で整合的と判断。`transformer_260109`(NUM_CHEM_FEATURES=6)での直接再検証は元データ(`usher_output/`)喪失のため不可能と判明 |
 | — | MCC（マシューズ相関係数） | 検討のみ・実装見送り | ユーザ判断で追加不要と決定（2026-07-07） |
+| — | `USE_HIERARCHICAL_PREDICTION`（提案3、Region→Position推論時マスキング） | ⏳未実行・実装済み・リーク確認済み | `config.py`に既存（既定False）。pos_region_mapはtrain分割のみから構築・マスキングはモデル自身のライブ予測を使うためリーク無しと確認済み（詳細は本文参照）。True/False比較未実施 |
 
-**現在のGPU/プロセス状態（2026-07-08時点）**: PETRA walk-forward学習・tail-only月別比較・
-Phase C（XAI分析）とも完了。GPUは空いている。**次のアクションはタスク19（PETRA walk-forward
-再学習、RoPE＋39ステップ窓＋leaked/non_leaked集計）**。Phase X/Dのキャンセルにより、
-これが完了すればXAI面での残作業は完結する（260707での再実行は不要）。
-
-**未解決の注意点**: `petra/model.py`は現在git HEAD相当（RoPE無し、絶対位置埋め込み版）。
-未コミットのRoPE改修版はスクラッチパッド（本セッション限り）に退避済みでリポジトリには
-反映されていない。RoPEを正式採用するか、この評価一式を旧アーキテクチャ基準のまま確定するかは
-今後判断が必要。
+**現在の状態（2026-07-09時点）**: PETRA比較・追加XAI分析・feature_importance調査、全て完了。
+残っているのは要旨本文の改訂と、任意項目（Phase F本体・階層的予測の実測・アブレーション比較図）のみ。
 
 
 ## 元のabstract本文（参考・変更前）

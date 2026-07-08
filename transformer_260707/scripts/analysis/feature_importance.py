@@ -198,8 +198,8 @@ def collect_coattn_weights(model, loader, n_batches, device):
     # monkey-patch: need_weights を常に True にして重みを横取り
     captured = []
 
-    def _patched(x, need_weights=False):
-        out, w = original_forward(x, need_weights=True)
+    def _patched(x, co_occur_mask=None, need_weights=False):
+        out, w = original_forward(x, co_occur_mask=co_occur_mask, need_weights=True)
         # w: [B*T, 1, C]
         captured.append(w.detach().cpu())
         return out

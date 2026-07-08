@@ -107,16 +107,25 @@ def main():
 
         T, C = w.shape
         n_valid = 0
+        co_count_per_t = (~is_pad).sum(axis=1)  # [T] そのtimestepの共起数（有効cスロット数）
         for t in range(T):
+            co_count = int(co_count_per_t[t])
+            if co_count == 0:
+                continue
             for c in range(C):
                 if is_pad[t, c]:
                     continue
                 n_valid += 1
                 p = int(pos[t, c])
+                # softmaxは同一timestep内で合計1になるよう正規化されるため、raw attn_weightは
+                # 共起数(co_count)が多いほど構造的に小さくなる（1/co_countが機械的な下限）。
+                # relative_attn = attn_weight * co_count は「一様分布(1/co_count)からの相対的な
+                # 重み」で、1.0が一様、>1が一様より重視、<1が一様より軽視されていることを示す。
                 rows.append({
                     'lineage': rep['lineage'], 'sample_id': rep['sample_id'], 'fold': fold_id,
                     'is_test_window': is_test_window, 'timestep_slot': t, 'position': p,
                     'gene': pos2gene.get(p, ('unknown', '0'))[0], 'attn_weight': float(w[t, c]),
+                    'co_count': co_count, 'relative_attn': float(w[t, c]) * co_count,
                 })
         print(f"  -> {n_valid} valid slots")
 
@@ -127,9 +136,20 @@ def main():
     out_dir = X.make_output_dir('lineage_attention_compare', args.output_dir)
     X.save_csv(df, out_dir, 'lineage_attention_compare.csv')
 
-    fig, axes = plt.subplots(1, 2, figsize=(18, 8), sharey=True)
-    colors = plt.cm.tab10.colors
     lineages = list(df['lineage'].unique())
+
+    def _lineage_path(sub):
+        # 同一timestepに複数の共起変異がある場合も1本の経路として辿れるよう
+        # timestep→position の順で安定ソートしてから線を引く。
+        return sub.sort_values(['timestep_slot', 'position'])
+
+    from matplotlib.colors import TwoSlopeNorm
+    vmax = max(df['relative_attn'].max(), 2.0)
+    rel_norm = TwoSlopeNorm(vcenter=1.0, vmin=0, vmax=vmax)
+
+    # 全系統重ね合わせ版（線なし、系統は色分けのみ）。3パネル: ground truth / raw attn / relative attn。
+    fig, axes = plt.subplots(1, 3, figsize=(26, 8), sharey=True)
+    colors = plt.cm.tab10.colors
 
     ax = axes[0]
     for i, lin in enumerate(lineages):
@@ -141,16 +161,55 @@ def main():
     ax.set_ylabel('Genome position (nt)')
     ax.legend(fontsize=8)
     ax.grid(alpha=0.2)
+    ax.invert_yaxis()  # 上=0, 下=30000
 
     ax = axes[1]
     sc = ax.scatter(df['timestep_slot'], df['position'], c=df['attn_weight'], cmap='viridis', s=36)
-    ax.set_title('Co-occurrence Attention weight (same slots)')
+    ax.set_title('Co-occurrence Attention weight (raw, confounded by co_count)')
     ax.set_xlabel('Input slot (timestep, right-aligned/padded)')
     ax.grid(alpha=0.2)
     plt.colorbar(sc, ax=ax, label='attention weight')
 
-    plt.tight_layout()
+    ax = axes[2]
+    sc = ax.scatter(df['timestep_slot'], df['position'], c=df['relative_attn'], cmap='RdBu_r',
+                    norm=rel_norm, s=36)
+    ax.set_title('Relative attention (attn_weight × co_count; 1.0 = uniform baseline)')
+    ax.set_xlabel('Input slot (timestep, right-aligned/padded)')
+    ax.grid(alpha=0.2)
+    plt.colorbar(sc, ax=ax, label='relative attention (1.0=uniform)')
+
     X.save_fig(fig, out_dir, 'lineage_attention_compare.png')
+
+    # 系統別に独立した画像ファイルも出力する（経路を線で繋ぎ、点の色をattention重みで塗る）。
+    # 各ファイル内は左=raw attn_weight（共起数で構造的に交絡）、右=relative_attn（1.0=一様分布基準に補正済み）。
+    def _safe_name(s):
+        return str(s).replace('/', '_').replace('.', '_')
+
+    for lin in lineages:
+        sub = _lineage_path(df[df['lineage'] == lin])
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 8), sharey=True)
+
+        ax1.plot(sub['timestep_slot'], sub['position'], '-', color='gray', alpha=0.6, linewidth=1, zorder=1)
+        sc1 = ax1.scatter(sub['timestep_slot'], sub['position'], c=sub['attn_weight'],
+                          cmap='viridis', vmin=0, vmax=1, s=50, zorder=2)
+        ax1.set_title('Raw attention weight')
+        ax1.set_xlabel('Input slot (timestep)')
+        ax1.set_ylabel('Genome position (nt)')
+        ax1.grid(alpha=0.2)
+        fig.colorbar(sc1, ax=ax1, label='attention weight')
+
+        ax2.plot(sub['timestep_slot'], sub['position'], '-', color='gray', alpha=0.6, linewidth=1, zorder=1)
+        sc2 = ax2.scatter(sub['timestep_slot'], sub['position'], c=sub['relative_attn'],
+                          cmap='RdBu_r', norm=rel_norm, s=50, zorder=2)
+        ax2.set_title('Relative attention (1.0=uniform)')
+        ax2.set_xlabel('Input slot (timestep)')
+        ax2.grid(alpha=0.2)
+        fig.colorbar(sc2, ax=ax2, label='relative attention (1.0=uniform)')
+
+        ax1.invert_yaxis()  # 上=0, 下=30000（sharey なので ax2 にも反映）
+        fig.suptitle(f'{lin}: mutation path colored by Co-occurrence Attention weight')
+        X.save_fig(fig, out_dir, f'lineage_attention_{_safe_name(lin)}.png')
 
 
 if __name__ == '__main__':
