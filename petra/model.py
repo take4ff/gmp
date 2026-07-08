@@ -1,4 +1,8 @@
-# petra/model.py — Decoder-only Transformer (PETra相当)
+# petra/model.py — Decoder-only Transformer (PETra相当、RoPE版)
+#
+# 原論文(petra/PETra)はMegatronのGPTModelを`position_embedding_type`/`rotary_percent`
+# 引数付きで呼んでおり、RoPE(回転位置埋め込み)を使っている可能性が高い。学習可能な絶対
+# 位置埋め込み(nn.Embedding)よりも原論文に近づけるため、本実装はRoPEを採用する。
 
 import math
 import torch
@@ -6,12 +10,90 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class PetraDecoder(nn.Module):
-    """Decoder-only Transformer（因果自己注意のみ、クロスアテンションなし）。
+class RotaryEmbedding(nn.Module):
+    """RoPE の cos/sin テーブルを事前計算するモジュール。"""
 
-    PyTorch の TransformerEncoderLayer に is_causal=True を使うことで
-    GPT-style の decoder-only Transformer を実現する。
-    """
+    def __init__(self, dim: int, max_seq_len: int = 2048, base: int = 10000):
+        super().__init__()
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        t = torch.arange(max_seq_len).float()
+        freqs = torch.einsum('i,j->ij', t, inv_freq)   # (max_seq_len, dim/2)
+        emb = torch.cat([freqs, freqs], dim=-1)        # (max_seq_len, dim)
+        self.register_buffer('cos_cached', emb.cos(), persistent=False)
+        self.register_buffer('sin_cached', emb.sin(), persistent=False)
+
+    def forward(self, seq_len: int):
+        return self.cos_cached[:seq_len], self.sin_cached[:seq_len]
+
+
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat([-x2, x1], dim=-1)
+
+
+def _apply_rotary_pos_emb(q, k, cos, sin):
+    """q, k: (B, n_heads, T, d_head)。cos, sin: (T, d_head)。"""
+    cos = cos.unsqueeze(0).unsqueeze(0)
+    sin = sin.unsqueeze(0).unsqueeze(0)
+    q_rot = (q * cos) + (_rotate_half(q) * sin)
+    k_rot = (k * cos) + (_rotate_half(k) * sin)
+    return q_rot, k_rot
+
+
+class CausalSelfAttentionRoPE(nn.Module):
+    """RoPEを適用した因果自己注意（`F.scaled_dot_product_attention`で計算）。"""
+
+    def __init__(self, d_model: int, n_heads: int, max_seq_len: int, dropout: float = 0.1):
+        super().__init__()
+        assert d_model % n_heads == 0, 'd_model must be divisible by n_heads'
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+        self.qkv = nn.Linear(d_model, 3 * d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.dropout = dropout
+        self.rotary = RotaryEmbedding(self.d_head, max_seq_len=max_seq_len)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        qkv = self.qkv(x).view(B, T, 3, self.n_heads, self.d_head).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]                       # (B, n_heads, T, d_head)
+
+        cos, sin = self.rotary(T)
+        cos, sin = cos.to(x.device, x.dtype), sin.to(x.device, x.dtype)
+        q, k = _apply_rotary_pos_emb(q, k, cos, sin)
+
+        attn_out = F.scaled_dot_product_attention(
+            q, k, v, is_causal=True,
+            dropout_p=self.dropout if self.training else 0.0,
+        )
+        attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, C)
+        return self.out_proj(attn_out)
+
+
+class PetraDecoderBlock(nn.Module):
+    """Pre-LN の decoder ブロック（RoPE自己注意 + GELU FFN）。"""
+
+    def __init__(self, d_model: int, n_heads: int, ffn_dim: int, max_seq_len: int,
+                 dropout: float = 0.1):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(d_model)
+        self.attn = CausalSelfAttentionRoPE(d_model, n_heads, max_seq_len, dropout)
+        self.ln2 = nn.LayerNorm(d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, ffn_dim),
+            nn.GELU(),
+            nn.Linear(ffn_dim, d_model),
+        )
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.drop(self.attn(self.ln1(x)))
+        x = x + self.drop(self.ffn(self.ln2(x)))
+        return x
+
+
+class PetraDecoder(nn.Module):
+    """Decoder-only Transformer（因果自己注意のみ、クロスアテンションなし、RoPE版）。"""
 
     def __init__(self, vocab_size: int, d_model: int, n_heads: int,
                  n_layers: int, ffn_dim: int, max_seq_len: int,
@@ -21,21 +103,12 @@ class PetraDecoder(nn.Module):
         self.max_seq_len = max_seq_len
 
         self.embed = nn.Embedding(vocab_size, d_model, padding_idx=0)
-        self.pos_embed = nn.Embedding(max_seq_len, d_model)
         self.drop = nn.Dropout(dropout)
 
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=ffn_dim,
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True,
-            norm_first=True,    # Pre-LN（GPT-2 スタイル）
-        )
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer, num_layers=n_layers, enable_nested_tensor=False
-        )
+        self.blocks = nn.ModuleList([
+            PetraDecoderBlock(d_model, n_heads, ffn_dim, max_seq_len, dropout)
+            for _ in range(n_layers)
+        ])
 
         self.ln_f = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, vocab_size, bias=False)
@@ -59,14 +132,9 @@ class PetraDecoder(nn.Module):
         Returns:
             logits: (B, T, vocab_size)
         """
-        B, T = input_ids.shape
-        pos = torch.arange(T, device=input_ids.device)
-
-        x = self.drop(self.embed(input_ids) + self.pos_embed(pos))
-
-        # 因果マスク（float: 0 = attend, -inf = block）
-        causal_mask = nn.Transformer.generate_square_subsequent_mask(T, device=input_ids.device)
-        x = self.transformer(x, mask=causal_mask, is_causal=True)
+        x = self.drop(self.embed(input_ids))   # 位置情報はRoPEで各層の自己注意内に注入される
+        for block in self.blocks:
+            x = block(x)
         x = self.ln_f(x)
         return self.head(x)
 

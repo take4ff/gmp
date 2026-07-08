@@ -2,7 +2,7 @@
 
 import random
 import torch
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 import duckdb
 
 
@@ -17,7 +17,8 @@ class PetraDataset(IterableDataset):
 
     def __init__(self, db_path: str, tokenizer, split_type: int,
                  max_seq_len: int = 512, shuffle: bool = False,
-                 chunk_size: int = 2000, split_col: str = 'split_type'):
+                 chunk_size: int = 2000, split_col: str = 'split_type',
+                 max_history_steps: int = None):
         self.db_path = db_path
         self.tokenizer = tokenizer
         self.split_type = split_type
@@ -25,16 +26,30 @@ class PetraDataset(IterableDataset):
         self.shuffle = shuffle
         self.chunk_size = chunk_size
         self.split_col = split_col
-        self._length = self._count()
+        self.max_history_steps = max_history_steps
+        # 「同一データでの厳密比較」を保証するため、独自にフィルタを再実装するのではなく
+        # 本体(transformer_260707/db/dataset.py)の DBIterableDataset が実際に解決する
+        # sample_id 集合をそのまま再利用する。これにより USE_UNIQUE_FILTER（重複排除）だけでなく
+        # MAX_CO_OCCURRENCE（共起数上限）・EVAL_MAX_Y_CO_OCCURRENCE（評価時ターゲット共起上限）・
+        # USE_TRAIN_ENTROPY_FILTER 等、本体の全フィルタリングロジックと完全に一致する。
+        self._ids = self._resolve_ids_from_main_model()
+        self._length = len(self._ids)
 
-    def _count(self) -> int:
-        con = duckdb.connect(self.db_path, read_only=True)
-        n = con.execute(
-            f'SELECT COUNT(*) FROM samples WHERE {self.split_col} = ?',
-            [self.split_type]
-        ).fetchone()[0]
-        con.close()
-        return n
+    def _resolve_ids_from_main_model(self) -> list[int]:
+        from transformer_260707 import config as main_config
+        from transformer_260707.db.dataset import DBIterableDataset
+
+        main_ds = DBIterableDataset(
+            db_path=self.db_path,
+            split_type=self.split_type,
+            max_cooccurrence=main_config.MAX_CO_OCCURRENCE,
+            split_col_override=self.split_col,
+        )
+        ids = main_ds.sample_ids
+        print(f"[INFO] PetraDataset(split={self.split_type}): 本体 DBIterableDataset と同一の "
+              f"{len(ids):,}件を使用（USE_UNIQUE_FILTER/MAX_CO_OCCURRENCE/"
+              f"EVAL_MAX_Y_CO_OCCURRENCE等、本体の全フィルタ込み）")
+        return ids
 
     @staticmethod
     def _has_country_col(con) -> bool:
@@ -47,10 +62,17 @@ class PetraDataset(IterableDataset):
     def __iter__(self):
         con = duckdb.connect(self.db_path, read_only=True)
 
-        ids = [r[0] for r in con.execute(
-            f'SELECT sample_id FROM samples WHERE {self.split_col} = ?',
-            [self.split_type]
-        ).fetchall()]
+        ids = list(self._ids)
+
+        # DataLoader(num_workers>0) 使用時、各ワーカーがこの __iter__ を独立に呼ぶため、
+        # sharding しないと全ワーカーが同一データを重複して処理し実質 num_workers 倍の
+        # 重複学習になってしまう（本体 db/dataset.py で修正済みと同じ落とし穴）。
+        # shuffle より先に固定順序でシャーディングすることで、各ワーカーの担当分を合わせると
+        # ちょうど全体を1回ずつ覆う（shuffle後にシャーディングすると各ワーカーが独立乱数で
+        # 部分集合を選ぶことになり、重複・欠落が生じるため順序が重要）。
+        worker = get_worker_info()
+        if worker is not None:
+            ids = ids[worker.id::worker.num_workers]
 
         if self.shuffle:
             random.shuffle(ids)
@@ -71,7 +93,8 @@ class PetraDataset(IterableDataset):
             for row in rows:
                 raw_path, cdate, clade = row[0], row[1], row[2]
                 country = row[3] if has_country else None
-                token_ids = self.tokenizer.encode(raw_path, cdate, clade, country)
+                token_ids = self.tokenizer.encode(raw_path, cdate, clade, country,
+                                                  max_history_steps=self.max_history_steps)
 
                 # 長すぎる場合は末尾を切り捨て（EOS を必ず末尾に）
                 if len(token_ids) > self.max_seq_len:
