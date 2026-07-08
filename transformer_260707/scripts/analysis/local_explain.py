@@ -13,6 +13,11 @@ x_cat は離散埋め込みのため IG はできないが、各入力スロッ�
 Usage:
   python -m transformer_260707.scripts.analysis.local_explain \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_samples 8 --ig_steps 32
+
+  # walk-forward: 特定のVOC期を担当するフォールドを指定して、その期のtestサンプルで
+  # ケーススタディを行う（例: fold 3 = Omicron BA.1/BA.2 初期）
+  python -m transformer_260707.scripts.analysis.local_explain \\
+      --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp> --fold 3 --n_samples 8
 """
 
 import argparse
@@ -45,7 +50,10 @@ def _integrated_gradients(model, x_cat, x_num, mask, target_pos, steps):
 
 def main():
     parser = argparse.ArgumentParser(description='Local explanation via Integrated Gradients')
-    parser.add_argument('--checkpoint', type=str, required=True)
+    parser.add_argument('--checkpoint', type=str, default=None)
+    parser.add_argument('--walk_forward_dir', type=str, default=None,
+                         help='walk_forward 結果ディレクトリ（--fold と併用。特定VOC期のフォールドで説明する）')
+    parser.add_argument('--fold', type=int, default=None, help='walk_forward_dir 使用時に対象とするフォールドID')
     parser.add_argument('--split', type=str, default='test', choices=['train', 'val', 'test'])
     parser.add_argument('--n_samples', type=int, default=8, help='説明するサンプル数（先頭から）')
     parser.add_argument('--ig_steps', type=int, default=32)
@@ -53,6 +61,20 @@ def main():
     parser.add_argument('--force_cpu', action='store_true')
     parser.add_argument('--output_dir', type=str, default=None)
     args = parser.parse_args()
+
+    if args.walk_forward_dir:
+        if args.fold is None:
+            raise SystemExit("--walk_forward_dir 使用時は --fold の指定が必要です")
+        fold_ckpts = X.discover_fold_checkpoints(args.walk_forward_dir, [args.fold])
+        if args.fold not in fold_ckpts:
+            raise SystemExit(f"[ERROR] fold {args.fold} のチェックポイントが見つかりません: {args.walk_forward_dir}")
+        train_start, split_date, split_end = X.get_fold_windows()[args.fold]
+        from transformer_260707.db.connection import get_db_path
+        X.assign_fold_test_window(get_db_path(), train_start, split_date, split_end)
+        args.checkpoint = fold_ckpts[args.fold]
+        force_print(f"[INFO] Fold {args.fold} (test window [{split_date}, {split_end})) の checkpoint を使用: {args.checkpoint}")
+    elif not args.checkpoint:
+        raise SystemExit("--checkpoint または --walk_forward_dir+--fold のいずれかが必要です")
 
     out_dir = X.make_output_dir('local_explain', args.output_dir)
     force_print(f"Output dir: {out_dir}")

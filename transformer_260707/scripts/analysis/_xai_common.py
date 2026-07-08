@@ -123,6 +123,69 @@ def load_position_gene_map(codon_csv=None):
     return pos2gene
 
 
+def get_fold_windows():
+    """scripts/eval/walk_forward.py の FOLDS を fold_id -> (train_start, split_date, split_end) に変換する。"""
+    from transformer_260707.scripts.eval.walk_forward import FOLDS
+    return {f[0]: (f[1], f[2], f[3]) for f in FOLDS}
+
+
+def discover_fold_checkpoints(walk_forward_dir, folds=None):
+    """walk_forward_dir 以下の fold_N/*/models/best_model.pth を探索し {fold_id: path} を返す。"""
+    import re
+    fold_ckpts = {}
+    for root, _dirs, files in os.walk(walk_forward_dir):
+        if 'best_model.pth' in files:
+            m = re.search(r'fold_(\d+)', root)
+            if m:
+                fold_ckpts[int(m.group(1))] = os.path.join(root, 'best_model.pth')
+    if folds:
+        fold_ckpts = {f: p for f, p in fold_ckpts.items() if f in set(folds)}
+    return fold_ckpts
+
+
+def load_fold_model(checkpoint, device):
+    """config_snapshot を反映してフォールドのモデルを構築・ロードする（loader は作らない）。"""
+    from transformer_260707.model import HierarchicalTransformer
+    load_config_snapshot(os.path.dirname(checkpoint))
+    config.NUM_DATALOADER_WORKERS = 0
+    model = HierarchicalTransformer().to(device)
+    ckpt = torch.load(checkpoint, map_location=device, weights_only=True)
+    model.load_state_dict(ckpt['model_state_dict'])
+    model.eval()
+    force_print(f"[INFO] Loaded fold checkpoint: {checkpoint} (epoch={ckpt.get('epoch', -1) + 1})")
+    return model
+
+
+def assign_fold_test_window(db_path, train_start, split_date, split_end):
+    """フォールドの test ウィンドウ [split_date, split_end) だけを split_type_wf=2 に割り当てる（軽量版）。
+
+    assign_wf_splits() は train/valid 分割も行い遅いため、test しか読まない分析用途では
+    こちらの2本のUPDATEで済ませる。他の walk_forward プロセスと同時実行しないこと
+    （split_type_wf は共有DB列）。
+    """
+    from transformer_260707.db.connection import connect_db
+    config.WALK_FORWARD_TRAIN_START = train_start
+    config.TEMPORAL_SPLIT_DATE = split_date
+    config.TEMPORAL_SPLIT_TEST_END = split_end
+    config.USE_UNIQUE_FILTER = False
+    config.USE_TRAIN_ENTROPY_FILTER = False
+    con = connect_db(db_path, read_only=False)
+    cols = [r[1] for r in con.execute("PRAGMA table_info('samples')").fetchall()]
+    if 'split_type_wf' not in cols:
+        con.execute("ALTER TABLE samples ADD COLUMN split_type_wf INTEGER DEFAULT -1")
+    con.execute("UPDATE samples SET split_type_wf = -1")
+    base = ("UPDATE samples SET split_type_wf = 2 WHERE collection_date IS NOT NULL "
+            "AND collection_date != '' AND RPAD(collection_date, 10, '-01-01') >= ?")
+    if split_end is None:
+        con.execute(base, [split_date])
+    else:
+        con.execute(base + " AND RPAD(collection_date, 10, '-01-01') < ?", [split_date, split_end])
+    n_test = con.execute("SELECT COUNT(*) FROM samples WHERE split_type_wf = 2").fetchone()[0]
+    con.close()
+    force_print(f"[INFO] test split_type_wf=2 に {n_test:,} 件を割り当て")
+    return n_test
+
+
 def compute_position_importance(model, loader, n_batches, device, pos_head_idx=1):
     """テストバッチを流し、ゲノム位置ごとに集計する。
 
