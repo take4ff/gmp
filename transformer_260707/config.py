@@ -143,6 +143,18 @@ PAM250_CSV        = "reference/aa_properties/PAM250.csv"
 SEQUENCES_CSV     = "reference/sequences-241017.csv"  # 株別サンプル数CSV
 HOST_ADAPTATION_CSV  = "reference/codon/SCV2_host_adaptation_features.csv"
 
+# --- Point-in-time 変異頻度（リーク修正）---
+# FREQ_CSV(reference/table_set.csv)はデータセット全期間から静的に1回だけ計算されており、
+# walk-forward等の時系列評価ではtest窓より未来の変異頻度情報が特徴量(codon_freq, x_num[...,0])
+# に混入する（時系列データリーク）。True にすると、db/dataset.py の _process_sample が
+# config.TEMPORAL_SPLIT_DATE（walk-forwardフォールドのsplit_date、assign_fold_test_window等で
+# 設定済み）に対応する reference/point_in_time_freq/{TEMPORAL_SPLIT_DATE}.csv
+# （scripts/preprocess/generate_point_in_time_freq.py で事前生成）を使って codon_freq を
+# 動的に上書きする（DB再構築は不要。ABLATION_MASKSと同じデータロード時オーバーライド方式）。
+# 該当ファイルが無い場合は警告を出しFREQ_CSV由来の値のまま（フォールバック、既定動作と同一）。
+USE_POINT_IN_TIME_FREQ = False
+POINT_IN_TIME_FREQ_DIR = "reference/point_in_time_freq"
+
 OUTPUT_DIR = 'outputs/transformer_260707/'
 MODEL_SAVE_DIR = OUTPUT_DIR + 'models'
 RESULT_SAVE_DIR = OUTPUT_DIR + 'results'

@@ -87,6 +87,53 @@ def _get_aa_after_lut():
     return lut
 
 
+# --- point-in-time 変異頻度ルックアップ（config.USE_POINT_IN_TIME_FREQ=True のときのみ）---
+# {(base_before:'A'|'T'|'G'|'C', position:int, base_after:'A'|'T'|'G'|'C') -> count} を
+# config.TEMPORAL_SPLIT_DATE（cutoff日付）ごとにキャッシュする。
+_REV_BASE_VOCABS = None
+_POINT_IN_TIME_FREQ_CACHE = {}
+
+
+def _get_rev_base_vocabs():
+    global _REV_BASE_VOCABS
+    if _REV_BASE_VOCABS is None:
+        _REV_BASE_VOCABS = {v: k for k, v in config.BASE_VOCABS.items()}
+    return _REV_BASE_VOCABS
+
+
+def _get_point_in_time_freq_dict():
+    """現在の config.TEMPORAL_SPLIT_DATE に対応する point-in-time 頻度表を返す（キャッシュ）。
+
+    ファイルが見つからない場合は空dictを返し警告を1回だけ出す（呼び出し側は0.0にフォールバック）。
+    """
+    import os
+    cutoff = getattr(config, 'TEMPORAL_SPLIT_DATE', None)
+    if cutoff in _POINT_IN_TIME_FREQ_CACHE:
+        return _POINT_IN_TIME_FREQ_CACHE[cutoff]
+
+    freq_dir = getattr(config, 'POINT_IN_TIME_FREQ_DIR', 'reference/point_in_time_freq')
+    path = os.path.join(freq_dir, f'{cutoff}.csv')
+    d = {}
+    if cutoff is not None and os.path.exists(path):
+        import csv as _csv
+        with open(path, newline='') as f:
+            reader = _csv.DictReader(f)
+            transitions = [c for c in reader.fieldnames if c != 'position']
+            for row in reader:
+                pos = int(row['position'])
+                for t in transitions:
+                    count = float(row[t])
+                    if count > 0:
+                        bef, aft = t.split('->')
+                        d[(bef, pos, aft)] = count
+        print(f"[INFO] Loaded point-in-time freq table: {path} ({len(d):,} 非ゼロ変異)")
+    else:
+        print(f"[WARNING] point-in-time freq table not found for cutoff={cutoff} "
+              f"(expected {path})。FREQ_CSV由来の値のままフォールバックします。")
+    _POINT_IN_TIME_FREQ_CACHE[cutoff] = d
+    return d
+
+
 class DBIterableDataset(IterableDataset):
     """DuckDBからバッチ単位でデータを読み込むIterableDataset。
 
@@ -515,6 +562,17 @@ class DBIterableDataset(IterableDataset):
 
                 cat = list(cat_origin)
                 num = list(num_origin)
+
+                # point-in-time 変異頻度でcodon_freq(num[0])を上書き（時系列リーク修正）。
+                # cat[0]=base_before token, cat[1]=position, cat[2]=base_after token
+                # （db/feature.py Mutation_features_fast の cat_feat 構成に一致）。
+                if getattr(config, 'USE_POINT_IN_TIME_FREQ', False) and len(num) > 0:
+                    rev_base = _get_rev_base_vocabs()
+                    bef = rev_base.get(cat[0])
+                    aft = rev_base.get(cat[2])
+                    if bef in ('A', 'T', 'G', 'C') and aft in ('A', 'T', 'G', 'C'):
+                        freq_dict = _get_point_in_time_freq_dict()
+                        num[0] = freq_dict.get((bef, cat[1], aft), 0.0)
 
                 # 数値特徴量の個別マスク（キー順はモジュール定数 _NUM_MASK_KEYS_* を参照）。
                 # num構造の並びは _NUM_MASK_KEYS_BASE のコメント/順序に一致する。
