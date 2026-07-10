@@ -19,11 +19,11 @@ recency の定義: recency=0 が「最も直近の変異（入力の末尾）」
   {out}/timestep_importance.png   … recency vs 平均寄与度（サンプル数を併記）
 
 Usage:
-  python -m transformer_260707.scripts.analysis.timestep_importance \\
+  python -m transformer_260707.scripts.analysis.xai.timestep_importance \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_batches 20 --ig_steps 32
 
   # walk-forward: 各フォールドを自分の test 期間で評価し、全期間分を積算する
-  python -m transformer_260707.scripts.analysis.timestep_importance \\
+  python -m transformer_260707.scripts.analysis.xai.timestep_importance \\
       --walk_forward_dir outputs/transformer_260702/results/walk_forward/<timestamp> --n_batches 20
 """
 
@@ -35,8 +35,8 @@ import matplotlib.pyplot as plt
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
-from transformer_260707.scripts.analysis.local_explain import _integrated_gradients
+from transformer_260707.scripts.analysis.xai import _xai_common as X
+from transformer_260707.scripts.analysis.xai.local_explain import _integrated_gradients
 
 
 def compute_timestep_importance(model, loader, n_batches, device, ig_steps,

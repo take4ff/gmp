@@ -15,7 +15,7 @@
       したがってここで導く精度上限は「これより下がることはない」という安全側（緩め）の値である。
 
 Usage:
-    python -m transformer_260707.scripts.analysis.entropy_accuracy_analysis \\
+    python -m transformer_260707.scripts.analysis.xai.entropy_accuracy_analysis \\
         --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp>
 """
 import argparse
@@ -30,7 +30,7 @@ from scipy.optimize import brentq
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 TASK_COLS = ['region_hit_rate_pct', 'position_hit_rate_pct', 'aa_pos_hit_rate_pct',
              'codon_pos_hit_rate_pct', 'synonymous_hit_rate_pct']

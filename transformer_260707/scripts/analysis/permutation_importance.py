@@ -32,7 +32,7 @@ from transformer_260707 import config
 from transformer_260707.evaluate import evaluate
 from transformer_260707.utils.losses import build_loss_fn
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 from transformer_260707.scripts.analysis.feature_importance import _NUM_FEATURE_NAMES
 
 

@@ -1,4 +1,4 @@
-# petra/plot_monthly_hitrate.py — PETRA walk-forwardの月別Hit Rate（末尾のみ）をプロットする。
+# petra/eval/plot_monthly_hitrate.py — PETRA walk-forwardの月別Hit Rate（末尾のみ）をプロットする。
 #
 # 本体の monthly_hitrate_all_folds.png と同じレイアウト（月別折れ線 + サンプル数logバー）で、
 # PETRAの「変異パス末尾の変異1件」予測精度（提案モデルのposition_hit_rateと対応するタスク）を
@@ -8,7 +8,7 @@
 # （他フォールドの学習が同時に走っていても安全）。
 #
 # Usage:
-#   python -m petra.plot_monthly_hitrate --walk_forward_dir outputs/petra/walk_forward/<timestamp>
+#   python -m petra.eval.plot_monthly_hitrate --walk_forward_dir outputs/petra/walk_forward/<timestamp>
 import argparse
 import os
 import re
@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader
 from transformer_260707.scripts.eval.walk_forward import FOLDS
 from petra import config as petra_config
 from petra.dataset import PetraDataset
-from petra.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
+from petra.eval.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
                                           get_raw_path_set)
 from petra.model import PetraDecoder
 from petra.tokenizer import MutationTokenizer

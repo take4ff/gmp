@@ -21,7 +21,7 @@ genome_track.py 自体は再実行しない（モデルforward不要・軽量な
   {out}/summary.json           … Spearman相関・VOC一致件数などのサマリ統計
 
 Usage:
-  python -m transformer_260707.scripts.analysis.mutation_hotspot_report \\
+  python -m transformer_260707.scripts.analysis.xai.mutation_hotspot_report \\
       --position_csv outputs/.../genome_track*/position_importance.csv \\
       --gene_csv outputs/.../genome_track*/gene_importance.csv
 """
@@ -38,8 +38,8 @@ from scipy.stats import spearmanr
 from scipy.stats import pearsonr
 
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
-from transformer_260707.scripts.analysis.local_explain import KNOWN_VOC_POSITIONS
+from transformer_260707.scripts.analysis.xai import _xai_common as X
+from transformer_260707.scripts.analysis.xai.local_explain import KNOWN_VOC_POSITIONS
 
 
 def calibration_stats(gene_ranking):

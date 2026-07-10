@@ -5,7 +5,7 @@
 |予測位置-正解位置|<=tolerance を正解とみなす複数の tolerance を同時に計算する
 （共起正解が複数ある場合は最も近い正解との距離で判定）。
 
-petra.plot_monthly_position_tolerance と対になる月別粒度のCSVを出力し、
+petra.eval.plot_monthly_position_tolerance と対になる月別粒度のCSVを出力し、
 plot_position_tolerance_comparison.py で両モデルを重ねてプロットする。
 
 Usage:
@@ -22,7 +22,7 @@ import torch
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 
 @torch.no_grad()

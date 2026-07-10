@@ -1,4 +1,4 @@
-# --- transformer_260707/scripts/eval/petra_weights.py ---
+# --- petra/eval/weights.py ---
 """PETRA の representativeness 重みを移植する（Weighted Recall 用）。
 
 PETRA (petra/PETra/data_preprocess/process_usher.py) の実装から確認した式:

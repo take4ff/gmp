@@ -10,7 +10,7 @@ lineage_evolution_track.py で選んだ代表サンプル（系統ごとに path
 常に同一スロットで一致することを保証するため）。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.lineage_attention_compare \\
+  python -m transformer_260707.scripts.analysis.xai.lineage_attention_compare \\
       --walk_forward_dir outputs/transformer_260702/results/walk_forward/20260706_223816 \\
       --top_n_lineages 5 [--force_cpu]
 """
@@ -24,10 +24,10 @@ import matplotlib.pyplot as plt
 from transformer_260707 import config
 from transformer_260707.db.connection import get_db_path
 from transformer_260707.db.dataset import DBIterableDataset, _NUM_MASK_KEYS_BASE
-from transformer_260707.scripts.analysis import _xai_common as X
-from transformer_260707.scripts.analysis.attention_by_month import (
+from transformer_260707.scripts.analysis.xai import _xai_common as X
+from transformer_260707.scripts.analysis.xai.attention_by_month import (
     _attach_attention_capture, POS_COL, BASE_BEFORE_COL)
-from transformer_260707.scripts.analysis.lineage_evolution_track import pick_representative_samples
+from transformer_260707.scripts.analysis.xai.lineage_evolution_track import pick_representative_samples
 
 
 def _build_single_sample_batch(db_path, sample_id):

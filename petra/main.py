@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 
 from . import config
 from .dataset import PetraDataset
-from .evaluate import evaluate_recall_topk, PetraRepresentativenessWeights
+from .eval.evaluate import evaluate_recall_topk, PetraRepresentativenessWeights
 from .model import PetraDecoder
 from .tokenizer import MutationTokenizer
 from .train import evaluate_loss, train_epoch
@@ -260,7 +260,7 @@ def main():
 
 def _run_evaluation(model, test_loader, tokenizer, device, out_dir, weights,
                     log_prefix='') -> dict:
-    from .evaluate import build_spike_token_ids, build_region_token_ids
+    from .eval.evaluate import build_spike_token_ids, build_region_token_ids
     spike_ids = build_spike_token_ids(tokenizer)
     region_ids = build_region_token_ids(tokenizer)
 

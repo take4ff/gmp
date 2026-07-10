@@ -18,7 +18,7 @@ import pandas as pd
 from transformer_260707 import config
 from transformer_260707.db.connection import get_db_path, connect_db
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 from transformer_260707.scripts.eval.walk_forward import FOLDS
 
 

@@ -1,4 +1,4 @@
-# petra/walk_forward.py — PETRA比較モデルの半年次walk-forward学習
+# petra/eval/walk_forward.py — PETRA比較モデルの半年次walk-forward学習
 #
 # transformer_260707/scripts/eval/walk_forward.py と全く同じ FOLDS 定義・同じ
 # split_type_wf 列・同じ assign_wf_splits() を使い、本体の walk_forward と直接
@@ -13,8 +13,8 @@
 # 同時に実行すると互いに split_type_wf を上書きし合い壊れるため、同時実行しないこと。
 #
 # Usage:
-#   python -m petra.walk_forward
-#   python -m petra.walk_forward --folds 1 2 3   # 一部のフォールドのみ
+#   python -m petra.eval.walk_forward
+#   python -m petra.eval.walk_forward --folds 1 2 3   # 一部のフォールドのみ
 import argparse
 import json
 import os
@@ -25,7 +25,7 @@ from transformer_260707.db.connection import connect_db, get_db_path
 from transformer_260707.db.queries import assign_wf_splits
 from transformer_260707.scripts.eval.walk_forward import FOLDS
 
-from . import main as petra_main
+from .. import main as petra_main
 
 
 def main():

@@ -16,12 +16,12 @@ x_cat は離散埋め込みのため IG はできないが、各入力スロッ�
 見つからなかった分は従来通り先頭バッチの順送りサンプルで埋める。--no_voc_searchで旧動作に戻せる。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.local_explain \\
+  python -m transformer_260707.scripts.analysis.xai.local_explain \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_samples 8 --ig_steps 32
 
   # walk-forward: 特定のVOC期を担当するフォールドを指定して、その期のtestサンプルで
   # ケーススタディを行う（例: fold 3 = Omicron BA.1/BA.2 初期）
-  python -m transformer_260707.scripts.analysis.local_explain \\
+  python -m transformer_260707.scripts.analysis.xai.local_explain \\
       --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp> --fold 3 --n_samples 8
 """
 
@@ -34,7 +34,7 @@ import torch
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 from transformer_260707.scripts.analysis.feature_importance import _NUM_FEATURE_NAMES
 
 # 著名なVOC定義変異（Spike, nucleotide position -> 変異名）。

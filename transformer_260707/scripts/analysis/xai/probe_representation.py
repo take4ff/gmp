@@ -14,7 +14,7 @@
 出力: {out}/probe_results.json
 
 Usage:
-  python -m transformer_260707.scripts.analysis.probe_representation \\
+  python -m transformer_260707.scripts.analysis.xai.probe_representation \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_batches 150
 """
 
@@ -27,7 +27,7 @@ import torch
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 
 def _collect(model, loader, n_batches, device, pos2gene):

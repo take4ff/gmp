@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 
 # ─────────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@
 outputs/.../scripts/xai_all/<timestamp>/<analysis>/ にまとめる。1本が失敗しても継続する。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.run_all_xai \\
+  python -m transformer_260707.scripts.analysis.xai.run_all_xai \\
       --checkpoint outputs/.../models/best_model.pth --split test
   # 一部だけ:  --only genome_track homoplasy_alignment
   # 除外:      --skip local_explain
@@ -28,7 +28,7 @@ from datetime import datetime
 
 from transformer_260707.utils.logging import force_print
 
-BASE = 'transformer_260707.scripts.analysis'
+BASE = 'transformer_260707.scripts.analysis.xai'
 
 # 実行順と各スクリプト固有のデフォルト引数
 ANALYSES = {

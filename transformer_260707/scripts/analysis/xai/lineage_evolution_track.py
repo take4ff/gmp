@@ -10,7 +10,7 @@ path_lengthが中央値に最も近いもの＝典型例）、raw_pathを timest
 （ground truth）を使う点に注意。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.lineage_evolution_track \\
+  python -m transformer_260707.scripts.analysis.xai.lineage_evolution_track \\
       --top_n_lineages 5
 """
 
@@ -21,7 +21,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from transformer_260707.db.connection import connect_db, get_db_path
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 _MUT_RE = re.compile(r'^[ACGT-](\d+)[ACGT-]$')
 

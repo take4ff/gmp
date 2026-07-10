@@ -12,13 +12,13 @@
   {out}/gene_importance.png        … 遺伝子別バー
 
 Usage:
-  python -m transformer_260707.scripts.analysis.genome_track \\
+  python -m transformer_260707.scripts.analysis.xai.genome_track \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_batches 100
 
   # walk-forward: 各フォールドを自分の test 期間で評価し、全期間分を積算する
   # （単一のtimestep/全履歴モデルを別途学習する必要がない。split_type_wf は
   #  他の walk_forward プロセスと共有のため同時実行しないこと）
-  python -m transformer_260707.scripts.analysis.genome_track \\
+  python -m transformer_260707.scripts.analysis.xai.genome_track \\
       --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp> --n_batches 100
 """
 
@@ -31,7 +31,7 @@ import pandas as pd
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 
 def _aggregate_and_report(pred_mass, target_count, n_samples, out_dir, pos2gene):

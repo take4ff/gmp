@@ -1,4 +1,4 @@
-# petra/plot_monthly_position_tolerance.py — PETRA walk-forwardの月別「位置のみ許容誤差付き
+# petra/eval/plot_monthly_position_tolerance.py — PETRA walk-forwardの月別「位置のみ許容誤差付き
 # Top-1正解率」（塩基不一致でも位置が近ければ正解）を集計する。
 #
 # 既存の plot_monthly_hitrate.py（変異トークン完全一致＝位置＋塩基一致）とは判定基準が異なる
@@ -12,7 +12,7 @@
 # （他フォールドの学習が同時に走っていても安全）。
 #
 # Usage:
-#   python -m petra.plot_monthly_position_tolerance \
+#   python -m petra.eval.plot_monthly_position_tolerance \
 #       --walk_forward_dir outputs/petra/walk_forward/<timestamp> --tolerances 0 5 10 50
 import argparse
 import os
@@ -26,12 +26,12 @@ from torch.utils.data import DataLoader
 from transformer_260707.scripts.eval.walk_forward import FOLDS
 from petra import config as petra_config
 from petra.dataset import PetraDataset
-from petra.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
+from petra.eval.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
                                           get_raw_path_set)
-from petra.evaluate import build_position_lookup
+from petra.eval.evaluate import build_position_lookup
 from petra.model import PetraDecoder
 from petra.tokenizer import MutationTokenizer
-from petra.plot_monthly_hitrate import find_fold_checkpoints
+from petra.eval.plot_monthly_hitrate import find_fold_checkpoints
 
 
 @torch.no_grad()

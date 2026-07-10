@@ -13,10 +13,10 @@
 #
 # 2 つのモード:
 #   (A) 単一チェックポイント:
-#     python -m transformer_260707.scripts.analysis.attention_by_month \
+#     python -m transformer_260707.scripts.analysis.xai.attention_by_month \
 #         --checkpoint outputs/.../models/best_model.pth [--split test] [--include_duplicates]
 #   (B) walk_forward 日付別（各フォールドを自分の test ウィンドウで評価し全期間を連結・外挿なし）:
-#     python -m transformer_260707.scripts.analysis.attention_by_month \
+#     python -m transformer_260707.scripts.analysis.xai.attention_by_month \
 #         --walk_forward_dir outputs/transformer_260707/results/walk_forward/20260706_223816
 import argparse
 import os
@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 # x_cat の列インデックス（pretrain.py: position=1, region=7 と一致）
 POS_COL = 1

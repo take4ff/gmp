@@ -13,7 +13,7 @@
   {out}/homoplasy_scatter.png      … 再発回数 vs 予測質量の散布図
 
 Usage:
-  python -m transformer_260707.scripts.analysis.homoplasy_alignment \\
+  python -m transformer_260707.scripts.analysis.xai.homoplasy_alignment \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_batches 100
 """
 
@@ -25,7 +25,7 @@ import numpy as np
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 
 def _load_recurrence(path):

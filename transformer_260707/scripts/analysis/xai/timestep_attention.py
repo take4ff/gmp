@@ -15,10 +15,10 @@ front-paddingのため常にインデックス T-1）」が他のどのtimestep�
   {out}/timestep_attention.png   … layer別 recency vs 平均attention重み
 
 Usage:
-  python -m transformer_260707.scripts.analysis.timestep_attention \\
+  python -m transformer_260707.scripts.analysis.xai.timestep_attention \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_batches 50
 
-  python -m transformer_260707.scripts.analysis.timestep_attention \\
+  python -m transformer_260707.scripts.analysis.xai.timestep_attention \\
       --walk_forward_dir outputs/transformer_260702/results/walk_forward/<timestamp> --n_batches 50
 """
 
@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 
 def _attach_encoder_attention_capture(model):

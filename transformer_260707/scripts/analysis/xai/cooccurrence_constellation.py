@@ -12,11 +12,11 @@
   {out}/constellation_overlap.json     … 予測ペアが実ペアと一致する割合
 
 Usage:
-  python -m transformer_260707.scripts.analysis.cooccurrence_constellation \\
+  python -m transformer_260707.scripts.analysis.xai.cooccurrence_constellation \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_batches 100 --top_k 5
 
   # walk-forward: 各フォールドを自分の test 期間で評価し、ペア頻度を全期間分積算する
-  python -m transformer_260707.scripts.analysis.cooccurrence_constellation \\
+  python -m transformer_260707.scripts.analysis.xai.cooccurrence_constellation \\
       --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp> --n_batches 100
 """
 
@@ -31,7 +31,7 @@ import torch
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
+from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 
 def _accumulate(model, loader, n_batches, device, top_k):

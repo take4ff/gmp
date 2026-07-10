@@ -2,7 +2,7 @@
 """提案モデルとPETRA型ベースラインの、位置予測の許容誤差(tolerance)別・月別Hit Rateを比較する。
 
 position_tolerance_monthly.py（提案モデル側）と
-petra.plot_monthly_position_tolerance（PETRA側）の出力CSVを読み込み、
+petra.eval.plot_monthly_position_tolerance（PETRA側）の出力CSVを読み込み、
 tolerance ごとに別ファイル（1ファイル=1tolerance、両モデルの月別折れ線を重ねる）で保存する。
 PETRA側はnon_leaked（train窓に未出現＝真の汎化性能）の数値を使う（本体は構造的にリークしない
 ため素の数値をそのまま使う。詳細は petra_comparison.md 参照）。

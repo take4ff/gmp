@@ -1,4 +1,4 @@
-# petra/evaluate.py — PETRA 準拠 Recall@K 評価（per-sequence macro-average + Weighted）
+# petra/eval/evaluate.py — PETRA 準拠 Recall@K 評価（per-sequence macro-average + Weighted）
 #
 # PETRA 原論文/リポジトリ (petra/PETra/model_training/eval_mutgpt.py) を精読して確認した集計式:
 #   各配列(サンプル)について、その配列内の変異トークン位置での recall_i@K
@@ -345,14 +345,14 @@ def evaluate_recall_topk(model, loader: DataLoader, tokenizer,
 
 
 class PetraRepresentativenessWeights:
-    """PETRA の representativeness 重み（transformer_260707/scripts/eval/petra_weights.py を再利用）。
+    """PETRA の representativeness 重み（petra/eval/weights.py を再利用）。
 
     weight(country, yymm) = proc(population(country) / seq_count(country, yymm))
     country/yymm が不明な場合は 1.0（中立、Average と同一）にフォールバックする。
     """
 
     def __init__(self, db_path: str, split_type: int):
-        from transformer_260707.scripts.eval.petra_weights import (
+        from petra.eval.weights import (
             parse_country_population, get_strain_country_map,
             compute_representativeness_weight, _to_yymm,
         )

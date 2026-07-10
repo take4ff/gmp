@@ -11,7 +11,7 @@ PETRA (arXiv:2511.03976 / xz-keg/PETra, petra/PETra/model_training/eval_mutgpt.p
   - **Weighted Recall@K** = Σ(weight_i * recall_i@K) / Σ(weight_i)。
     weight_i は representativeness = proc(population(country) / seq_count(country, yymm))。
     ※ PETRA の forward_step() で `ret_tensor[:,0]=ret_tensor[:,0]*weight/nummut` に対応
-      （petra_weights.py に移植済み）。country は DB 再構築後（samples.country 有り）でのみ有効、
+      （petra/eval/weights.py に移植済み）。country は DB 再構築後（samples.country 有り）でのみ有効、
       無ければ weight=1.0 にフォールボックし Average と同一になる。
   - **核酸（全位置）** と **スパイク（核酸 21563-25384 の S 遺伝子）** を別々に報告。
 
@@ -30,8 +30,8 @@ import torch
 
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
-from transformer_260707.scripts.analysis import _xai_common as X
-from transformer_260707.scripts.eval.petra_weights import (
+from transformer_260707.scripts.analysis.xai import _xai_common as X
+from petra.eval.weights import (
     parse_country_population, get_strain_country_map,
     compute_representativeness_weight, _to_yymm,
 )

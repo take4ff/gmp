@@ -1,4 +1,4 @@
-# petra/eval_tail_by_daterange.py — 変異パス末尾のみでの Recall@K を、日付範囲で
+# petra/eval/eval_tail_by_daterange.py — 変異パス末尾のみでの Recall@K を、日付範囲で
 # 直接指定したフォールドのテストデータに対して評価する。
 #
 # 通常の walk_forward 評価は共有DB列 split_type_wf を使うが、他フォールドの学習が
@@ -11,7 +11,7 @@
 # 手動で再現する。
 #
 # Usage:
-#   python -m petra.eval_tail_by_daterange --checkpoint outputs/petra/walk_forward/.../fold_1/best_model.pth \
+#   python -m petra.eval.eval_tail_by_daterange --checkpoint outputs/petra/walk_forward/.../fold_1/best_model.pth \
 #       --train_start "" --split_date 2021-01-01 --split_end 2021-07-01
 import argparse
 import pickle
@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, IterableDataset
 from transformer_260707 import config as main_config
 from petra import config as petra_config
 from petra.dataset import PetraDataset
-from petra.evaluate import evaluate_recall_topk, evaluate_recall_topk_tail_only, PetraRepresentativenessWeights
+from petra.eval.evaluate import evaluate_recall_topk, evaluate_recall_topk_tail_only, PetraRepresentativenessWeights
 from petra.model import PetraDecoder
 from petra.tokenizer import MutationTokenizer
 
@@ -192,7 +192,7 @@ def main():
     print(f'Loaded checkpoint: {args.checkpoint} (epoch={ckpt.get("epoch")}, val_loss={ckpt.get("val_loss"):.4f})')
 
     weights = PetraRepresentativenessWeights(db_path, split_type=2)
-    from petra.evaluate import build_spike_token_ids, build_region_token_ids
+    from petra.eval.evaluate import build_spike_token_ids, build_region_token_ids
     spike_ids = build_spike_token_ids(tokenizer)
     region_ids = build_region_token_ids(tokenizer)
 
