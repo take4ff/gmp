@@ -193,6 +193,7 @@ TRAIN_MAX = 40 # TS:1-40を学習に利用(TRAIN_MAX > MAX_SEQ_LEN + TARGET_LEN)
 VALID_NUM = 3
 MAX_CO_OCCURRENCE = 20  # 最大共起数上限（Omicron等に対応するため5から20へ緩和）
 EVAL_MAX_Y_CO_OCCURRENCE = 5  # 評価時に過剰な情報漏洩を防ぐためのターゲット共起上限
+RAW_PATH_TRUNCATE_LEN = 5000  # samples.raw_path 保存時の文字数上限（末尾を保持、直近履歴を必要とする下流処理のため）
 VALID_RATIO = 0.2
 
 # --- サンプリングモード設定 ---

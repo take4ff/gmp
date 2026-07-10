@@ -618,7 +618,7 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
     return avg_loss, final_metrics_by_ts, detailed_results, metrics_by_category, final_metrics_by_ym, calib_bins
 
 
-def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
+def evaluate_topk(model, dataloader, ks=(1, 3, 5), position_tolerances=None):
     """複数の K 値で Top-K Precision / Recall を同時に計算する。
 
     USE_R_PRECISION=True の場合、各サンプルの K=len(target_set) で計算した
@@ -628,6 +628,11 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
         model: 評価対象モデル
         dataloader: DataLoader
         ks: 評価する K の値のタプル (例: (1, 3, 5))
+        position_tolerances: 指定すると 'position' タスクについて、Top-1 予測位置が
+            正解位置（共起の場合は最も近いもの）から±tolerance以内なら正解とみなす
+            許容誤差付き Top-1 正解率を追加計算する（例: (0, 5, 10, 50)）。
+            tolerance=0 は「予測位置 == 正解位置」の完全一致（既存の position[1]['hit_rate']
+            と同一の判定基準）。
 
     Returns:
         dict: {
@@ -635,7 +640,8 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
                 k: {'precision': float, 'recall': float, 'hit_rate': float},
                 ...,
                 'r_precision': {'precision': float, 'recall': float, 'hit_rate': float}  # USE_R_PRECISION=True のみ
-            }
+            },
+            'position_tolerance': {tolerance: {'hit_rate': float, 'n': int}, ...}  # position_tolerances 指定時のみ
         }
         task_name は 'region' / 'position' / 'aa_pos' / 'codon_pos' / 'synonymous'
     """
@@ -650,6 +656,10 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
     # R-Precision 用統計（動的 K = len(target_set)）
     if use_r_precision:
         rp_stats = {t: {'tp': 0, 'fp': 0, 'total_targets': 0, 'hits': 0, 'n': 0} for t in tasks}
+
+    # 位置の許容誤差付き Top-1 正解率用統計
+    if position_tolerances:
+        pos_tol_stats = {t: {'hits': 0, 'n': 0} for t in position_tolerances}
 
     def _topk_preds(tensor, k):
         actual_k = min(k, tensor.size(1))
@@ -722,6 +732,14 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
                         rp_stats[task]['hits']          += int(tp_r > 0)
                         rp_stats[task]['n']             += 1
 
+                    # 位置の許容誤差付き Top-1 正解率（'position' タスクのみ）
+                    if position_tolerances and task == 'position':
+                        pred_top1 = row[0]
+                        min_dist = min(abs(pred_top1 - tp) for tp in t_set)
+                        for tol in position_tolerances:
+                            pos_tol_stats[tol]['n']    += 1
+                            pos_tol_stats[tol]['hits'] += int(min_dist <= tol)
+
     results = {}
     for task in tasks:
         results[task] = {}
@@ -741,5 +759,12 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5)):
             recall      = (s['tp'] / s['total_targets'] * 100) if s['total_targets'] > 0 else 0.0
             hit_rate    = (s['hits'] / s['n'] * 100) if s['n'] > 0 else 0.0
             results[task]['r_precision'] = {'precision': precision, 'recall': recall, 'hit_rate': hit_rate}
+
+    if position_tolerances:
+        results['position_tolerance'] = {}
+        for tol in position_tolerances:
+            s = pos_tol_stats[tol]
+            hit_rate = (s['hits'] / s['n'] * 100) if s['n'] > 0 else 0.0
+            results['position_tolerance'][tol] = {'hit_rate': hit_rate, 'n': s['n']}
 
     return results

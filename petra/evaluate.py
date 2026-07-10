@@ -41,11 +41,27 @@ def build_region_token_ids(tokenizer) -> set[int]:
     return set(i for i in range(tokenizer.vocab_size) if tokenizer.is_region_token(i))
 
 
+def build_position_lookup(tokenizer) -> dict:
+    """変異トークン（例 "A23403G"）の token id -> ゲノム位置(int) の辞書を返す。
+
+    v1（フラットトークン）専用。BOS/EOS/PAD/UNK/年月/クレード/国等の非変異トークンは
+    キーに含めない（position tolerance 評価で target/pred がこれらの場合は None 扱いにする）。
+    """
+    lookup = {}
+    for tok_id, tok in enumerate(tokenizer.id2token):
+        m = _MUT_TOKEN_RE.match(tok)
+        if m:
+            lookup[tok_id] = int(m.group(1))
+    return lookup
+
+
 @torch.no_grad()
 def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
                                     device: torch.device, top_k_list: list[int],
                                     weights=None, spike_token_ids: set[int] = None,
-                                    region_token_ids: set[int] = None) -> dict:
+                                    region_token_ids: set[int] = None,
+                                    position_lookup: dict = None,
+                                    position_tolerances: list = None) -> dict:
     """変異パス末尾の変異1件のみを評価する Recall@K（提案モデルの position_hit_rate と
     同じ「まだ見ぬ次の変異1件を予測する」タスクに揃えるための版）。
 
@@ -57,6 +73,12 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
     region_token_ids を渡すと（v2の9フィールド化時のみ有効）、末尾の変異イベントに含まれる
     「最後の[REGION_xxx]トークン位置」も別途評価し、提案モデルの region_hit_rate と対応する
     「次の変異の遺伝子領域を当てられるか」を計測する。v1（region_token_idsが空）では計算しない。
+
+    position_lookup + position_tolerances を渡すと、塩基一致を問わない「位置のみ」の
+    許容誤差付き Top-1 正解率を追加計算する（build_position_lookup() 参照）。
+    tolerance=0 は「予測位置 == 正解位置」（塩基不一致でも正解扱い）で、既存の
+    recall@1（トークン完全一致＝位置も塩基も一致）とは判定基準が異なる点に注意。
+    tolerance>0 は |予測位置 - 正解位置| <= tolerance を正解とみなす。
     """
     model.eval()
     max_k = max(top_k_list)
@@ -83,6 +105,15 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
     leaked_per_seq_weight = []
     nonleaked_per_seq_recall = {k: [] for k in top_k_list}
     nonleaked_per_seq_weight = []
+
+    do_pos_tol = position_lookup is not None and position_tolerances
+    if do_pos_tol:
+        pos_tol_hit = {t: [] for t in position_tolerances}
+        pos_tol_weight = []
+        pos_tol_leaked_hit = {t: [] for t in position_tolerances}
+        pos_tol_leaked_weight = []
+        pos_tol_nonleaked_hit = {t: [] for t in position_tolerances}
+        pos_tol_nonleaked_weight = []
 
     for input_ids, target_ids, _mask, countries, dates, is_leaked_flags in loader:
         input_ids = input_ids.to(device)
@@ -139,6 +170,22 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
                         hit = bool((topk_preds[b, r_pos, :k] == r_target).any().item())
                         region_per_seq_recall[k].append(1.0 if hit else 0.0)
 
+            # 位置のみの許容誤差付き Top-1 正解率（塩基不一致でも位置が近ければ正解扱い）
+            if do_pos_tol:
+                target_pos = position_lookup.get(int(target.item()))
+                if target_pos is not None:
+                    pred_tok = int(topk_preds[b, last_pos, 0].item())
+                    pred_pos = position_lookup.get(pred_tok)
+                    dist = abs(pred_pos - target_pos) if pred_pos is not None else None
+                    pos_tol_weight.append(w)
+                    leak_pos_hit = pos_tol_leaked_hit if is_leaked_flags[b] else pos_tol_nonleaked_hit
+                    leak_pos_weight = pos_tol_leaked_weight if is_leaked_flags[b] else pos_tol_nonleaked_weight
+                    leak_pos_weight.append(w)
+                    for t in position_tolerances:
+                        hit = (dist is not None) and (dist <= t)
+                        pos_tol_hit[t].append(1.0 if hit else 0.0)
+                        leak_pos_hit[t].append(1.0 if hit else 0.0)
+
     def _finalize(recalls, weights_list):
         n = len(weights_list)
         out = {'n_sequences': n, 'average': {}, 'weighted': {}}
@@ -151,6 +198,18 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
             )
         return out
 
+    def _finalize_tolerance(hits_by_t, weights_list):
+        n = len(weights_list)
+        out = {'n_sequences': n, 'average': {}, 'weighted': {}}
+        w_arr = np.array(weights_list) if n else np.array([])
+        for t in position_tolerances:
+            vals = np.array(hits_by_t[t])
+            out['average'][f'position_acc@tol{t}'] = float(vals.mean()) if n else 0.0
+            out['weighted'][f'position_acc@tol{t}'] = (
+                float((w_arr * vals).sum() / w_arr.sum()) if n and w_arr.sum() > 0 else 0.0
+            )
+        return out
+
     result = _finalize(per_seq_recall, per_seq_weight)
     if spike_tensor is not None:
         result['spike'] = _finalize(spike_per_seq_recall, spike_per_seq_weight)
@@ -158,6 +217,10 @@ def evaluate_recall_topk_tail_only(model, loader: DataLoader, tokenizer,
         result['region'] = _finalize(region_per_seq_recall, region_per_seq_weight)
     result['leaked'] = _finalize(leaked_per_seq_recall, leaked_per_seq_weight)
     result['non_leaked'] = _finalize(nonleaked_per_seq_recall, nonleaked_per_seq_weight)
+    if do_pos_tol:
+        result['position_tolerance'] = _finalize_tolerance(pos_tol_hit, pos_tol_weight)
+        result['position_tolerance_leaked'] = _finalize_tolerance(pos_tol_leaked_hit, pos_tol_leaked_weight)
+        result['position_tolerance_non_leaked'] = _finalize_tolerance(pos_tol_nonleaked_hit, pos_tol_nonleaked_weight)
     return result
 
 

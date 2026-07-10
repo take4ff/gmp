@@ -359,7 +359,9 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
                         stats['excluded_short_path'] += 1
                         continue
 
-                    raw_path_str = data[2][:500]
+                    # 末尾（直近の履歴）を保持する。USE_SUBSTITUTION_HEAD の最終ステップ取得や
+                    # Soft Target の末尾スライスなど、下流処理はいずれも末尾側の情報を必要とするため。
+                    raw_path_str = data[2][-config.RAW_PATH_TRUNCATE_LEN:]
                     current_chunk_data.append((data[0], raw_path_str, path_length, max_cooc, feature_path[:-config.TARGET_LEN], y_targets))
                     stats['valid_samples'] += 1
 

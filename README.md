@@ -100,6 +100,23 @@ graph TD
 | カテゴリ特徴量 | `9 + 2×CONTEXT_WINDOW` | base_before, position, base_after, codon_pos, aa_before, aa_pos, aa_after, region, synonymous, 前後コンテキスト塩基 |
 | 数値特徴量 | 32（+4） | 物理化学6 + ホスト適応24 + 累積変異カウント2（+ 亜系統成長4：`USE_LINEAGE_GROWTH_FEATURES=True` で計36） |
 
+### シーケンスデータ
+#### condition
+##### reference/sequences-241017.csv (2024/10/18)
+Virus/Taxonomy:Severe acute respiratory syndrome coronavirus 2, taxid:2697049
+Sequence Length min:29000 max:30000
+Host:Homo sapiens (human), taxid:9606
+Release Date: From Jan 1, 2020 To Oct 18, 2024
+number : 8,938,263
+
+##### reference/sequences-241017_2.csv (2026/07/10)
+Virus/Taxonomy:Severe acute respiratory syndrome coronavirus 2, taxid:2697049
+Sequence Length min:29000 max:30000
+Host:Homo sapiens (human), taxid:9606
+Release Date: From Oct 18, 2024 To Jul 10, 2026
+Collection Date: From Jan 1, 2020 To Oct 18, 2024
+number : 8,938,263
+
 ---
 
 ## 🚀 Usage（実行方法）

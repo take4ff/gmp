@@ -16,6 +16,7 @@ def get_feature_config_hash():
         str(config.TARGET_LEN),
         str(config.DATA_BASE_DIR),
         str(config.MAX_CO_OCCURRENCE),  # 最大共起数上限
+        str(config.RAW_PATH_TRUNCATE_LEN),  # raw_path保存時の切り詰め文字数
         "v2_strength_clade", # スキーマバージョン情報追加（DB再構築を強制）
     ]
     config_string = "_".join(relevant_configs)
