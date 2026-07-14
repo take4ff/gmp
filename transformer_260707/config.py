@@ -136,11 +136,17 @@ TRAIN_STRENGTH_MIN = 6.0             # 学習に使用する最小感染規模 (
 
 # --- パス設定 ---
 DATA_BASE_DIR = '../usher_output/'
+# DATA_BASE_DIR に加えて取り込む追加のUsher出力ディレクトリ（同一の <lineage>/<N>/ 構造が前提）。
+# usher/README.md の新規サンプル配置パイプラインで生成した usher_output2 を追加。
+EXTRA_DATA_BASE_DIRS = ['../usher_output2/']
 CODON_CSV         = "reference/codon/codon_mutation4.csv"
 FREQ_CSV          = "reference/table_set.csv"
 DISSIMILARITY_CSV = "reference/aa_properties/dissimilarity_metrics.csv"
 PAM250_CSV        = "reference/aa_properties/PAM250.csv"
 SEQUENCES_CSV     = "reference/sequences-241017.csv"  # 株別サンプル数CSV
+# SEQUENCES_CSV に加えて取り込む追加のサンプル一覧CSV（同一スキーマが前提）。
+# usher_output2 に対応する新規サンプル一覧。
+EXTRA_SEQUENCES_CSV = ['reference/sequences-241017_2.csv']
 HOST_ADAPTATION_CSV  = "reference/codon/SCV2_host_adaptation_features.csv"
 
 # --- Point-in-time 変異頻度（リーク修正）---
@@ -193,7 +199,7 @@ TRAIN_MAX = 40 # TS:1-40を学習に利用(TRAIN_MAX > MAX_SEQ_LEN + TARGET_LEN)
 VALID_NUM = 3
 MAX_CO_OCCURRENCE = 20  # 最大共起数上限（Omicron等に対応するため5から20へ緩和）
 EVAL_MAX_Y_CO_OCCURRENCE = 5  # 評価時に過剰な情報漏洩を防ぐためのターゲット共起上限
-RAW_PATH_TRUNCATE_LEN = 5000  # samples.raw_path 保存時の文字数上限（末尾を保持、直近履歴を必要とする下流処理のため）
+RAW_PATH_TRUNCATE_LEN = None  # samples.raw_path 保存時の文字数上限。None=切り詰めなし（完全な履歴文字列を保存、正確性優先）
 VALID_RATIO = 0.2
 
 # --- サンプリングモード設定 ---

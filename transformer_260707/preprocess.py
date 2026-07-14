@@ -45,16 +45,36 @@ def load_static_data(silent=False):
     )
 
 
-def load_collection_dates():
-    """SEQUENCES_CSV から Accession と Collection_Date のマッピングを読み込む。"""
-    csv_path = config.SEQUENCES_CSV
-    if not os.path.exists(csv_path):
-        force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
-        return {}
+def get_all_data_base_dirs():
+    """DATA_BASE_DIR と EXTRA_DATA_BASE_DIRS（usher_output2 等の追加Usher出力）を合わせて返す。"""
+    return [config.DATA_BASE_DIR] + list(getattr(config, 'EXTRA_DATA_BASE_DIRS', []))
 
+
+def get_all_sequences_csv_paths():
+    """SEQUENCES_CSV と EXTRA_SEQUENCES_CSV（usher_output2 等の追加サンプル一覧）を合わせて返す。"""
+    return [config.SEQUENCES_CSV] + list(getattr(config, 'EXTRA_SEQUENCES_CSV', []))
+
+
+def load_combined_sequences_df(usecols=None):
+    """SEQUENCES_CSV と EXTRA_SEQUENCES_CSV を結合した1つのDataFrameを返す（同一スキーマ前提）。"""
+    dfs = []
+    for csv_path in get_all_sequences_csv_paths():
+        if not os.path.exists(csv_path):
+            force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
+            continue
+        dfs.append(pd.read_csv(csv_path, usecols=usecols))
+    if not dfs:
+        return pd.DataFrame(columns=usecols or [])
+    return pd.concat(dfs, ignore_index=True)
+
+
+def load_collection_dates():
+    """SEQUENCES_CSV(+EXTRA_SEQUENCES_CSV) から Accession と Collection_Date のマッピングを読み込む。"""
     force_print("[INFO] Loading collection dates from CSV...")
     start = time.time()
-    df = pd.read_csv(csv_path, usecols=['Accession', 'Collection_Date'])
+    df = load_combined_sequences_df(usecols=['Accession', 'Collection_Date'])
+    if df.empty:
+        return {}
     df['Collection_Date'] = df['Collection_Date'].fillna('')
     mapping = dict(zip(df['Accession'], df['Collection_Date']))
     elapsed = time.time() - start
@@ -62,22 +82,47 @@ def load_collection_dates():
     return mapping
 
 
+def load_release_dates():
+    """SEQUENCES_CSV(+EXTRA_SEQUENCES_CSV) から Accession と Release_Date のマッピングを読み込む。
+
+    採取日(Collection_Date)と公開日(Release_Date)の乖離（usher_output2 のような
+    後日公開サンプル）を後から分析できるようにするため。
+    """
+    csv_paths = [p for p in get_all_sequences_csv_paths() if os.path.exists(p)]
+    if not csv_paths:
+        force_print(f"[WARNING] Sequences CSV not found: {config.SEQUENCES_CSV}")
+        return {}
+
+    # Release_Date カラムが存在しない旧版 CSV はスキップ
+    if not all('Release_Date' in pd.read_csv(p, nrows=0).columns for p in csv_paths):
+        force_print("[WARNING] 'Release_Date' column not found in one of the CSVs; release_date will be empty")
+        return {}
+
+    force_print("[INFO] Loading release dates from CSV...")
+    start = time.time()
+    df = load_combined_sequences_df(usecols=['Accession', 'Release_Date'])
+    df['Release_Date'] = df['Release_Date'].fillna('')
+    mapping = dict(zip(df['Accession'], df['Release_Date']))
+    elapsed = time.time() - start
+    force_print(f"[INFO] Loaded {len(mapping):,} release dates in {elapsed:.1f} seconds")
+    return mapping
+
+
 def load_countries():
-    """SEQUENCES_CSV から Accession と Country のマッピングを読み込む。"""
-    csv_path = config.SEQUENCES_CSV
-    if not os.path.exists(csv_path):
-        force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
+    """SEQUENCES_CSV(+EXTRA_SEQUENCES_CSV) から Accession と Country のマッピングを読み込む。"""
+    csv_paths = [p for p in get_all_sequences_csv_paths() if os.path.exists(p)]
+    if not csv_paths:
+        force_print(f"[WARNING] Sequences CSV not found: {config.SEQUENCES_CSV}")
         return {}
 
     # Country カラムが存在しない旧版 CSV はスキップ
-    df_head = pd.read_csv(csv_path, nrows=0)
-    if 'Country' not in df_head.columns:
-        force_print("[WARNING] 'Country' column not found in CSV; country will be empty")
+    if not all('Country' in pd.read_csv(p, nrows=0).columns for p in csv_paths):
+        force_print("[WARNING] 'Country' column not found in one of the CSVs; country will be empty")
         return {}
 
     force_print("[INFO] Loading countries from CSV...")
     start = time.time()
-    df = pd.read_csv(csv_path, usecols=['Accession', 'Country'])
+    df = load_combined_sequences_df(usecols=['Accession', 'Country'])
     df['Country'] = df['Country'].fillna('')
     mapping = dict(zip(df['Accession'], df['Country']))
     elapsed = time.time() - start
@@ -87,15 +132,11 @@ def load_countries():
 
 def compute_strain_strength_from_csv():
     """CSVから株の流行度を計算する。"""
-    csv_path = config.SEQUENCES_CSV
-
-    if not os.path.exists(csv_path):
-        force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
+    import math
+    df = load_combined_sequences_df()
+    if df.empty:
         return {}
 
-    import math
-    df = pd.read_csv(csv_path)
-    
     column = getattr(config, 'STRENGTH_CSV_COLUMN', 'Pango lineage')
     if column not in df.columns:
         force_print(f"[WARNING] Column '{column}' not found in CSV. Falling back to first column.")
@@ -133,14 +174,12 @@ def build_growth_lut():
     if not getattr(config, 'USE_LINEAGE_GROWTH_FEATURES', False):
         return {}
     from .db.growth_features import build_growth_lut as _build
-    csv_path = config.SEQUENCES_CSV
     lin_col = getattr(config, 'GROWTH_LINEAGE_CSV_COLUMN', 'Pangolin')
     date_col = getattr(config, 'GROWTH_DATE_CSV_COLUMN', 'Collection_Date')
     window = getattr(config, 'GROWTH_WINDOW_WEEKS', 4)
-    if not os.path.exists(csv_path):
-        force_print(f"[WARNING] SEQUENCES_CSV not found ({csv_path}); growth features will be 0.")
+    df = load_combined_sequences_df(usecols=[lin_col, date_col])
+    if df.empty:
         return {}
-    df = pd.read_csv(csv_path, usecols=lambda c: c in (lin_col, date_col))
     if lin_col not in df.columns or date_col not in df.columns:
         force_print(f"[WARNING] growth: 列 '{lin_col}'/'{date_col}' が CSV に無い。成長特徴は0になります。")
         return {}
@@ -154,14 +193,13 @@ def import_strains_to_db(con, strain_to_strength):
     """株マスタをDBに登録する。"""
     force_print("[INFO] Importing strains to DB...")
 
-    # Accession -> Pangolin(NCBI) のマッピングをロード
+    # Accession -> Pangolin(NCBI) のマッピングをロード（SEQUENCES_CSV + EXTRA_SEQUENCES_CSV）
     csv_path = config.SEQUENCES_CSV
     acc_to_pango = {}
-    if os.path.exists(csv_path):
+    df_seq = load_combined_sequences_df(usecols=['Accession', 'Pangolin'])
+    if not df_seq.empty:
         force_print("[INFO] Loading Accession to Pangolin mapping from CSV...")
         start_t = time.time()
-        # メモリ節約のため必要なカラムのみロード
-        df_seq = pd.read_csv(csv_path, usecols=['Accession', 'Pangolin'])
         df_seq['Pangolin'] = df_seq['Pangolin'].fillna('')
         acc_to_pango = dict(zip(df_seq['Accession'], df_seq['Pangolin']))
         elapsed = time.time() - start_t
@@ -169,8 +207,11 @@ def import_strains_to_db(con, strain_to_strength):
     else:
         force_print(f"[WARNING] Sequences CSV not found for mapping: {csv_path}")
 
-    usher_dir = config.DATA_BASE_DIR
-    strains = sorted([f for f in os.listdir(usher_dir) if not f.startswith('.')])
+    data_base_dirs = get_all_data_base_dirs()
+    strains = sorted({
+        f for usher_dir in data_base_dirs if os.path.isdir(usher_dir)
+        for f in os.listdir(usher_dir) if not f.startswith('.')
+    })
 
     from collections import Counter
     import math
@@ -179,10 +220,12 @@ def import_strains_to_db(con, strain_to_strength):
         clade_counts = Counter()
         ncbi_name_counts = Counter()
         usher_sample_count = 0
-        
-        # すべての timestep フォルダを探索
-        strain_path = os.path.join(usher_dir, strain_name)
-        if os.path.exists(strain_path):
+
+        # すべての base dir × timestep フォルダを探索
+        for usher_dir in data_base_dirs:
+            strain_path = os.path.join(usher_dir, strain_name)
+            if not os.path.exists(strain_path):
+                continue
             timesteps = [d for d in os.listdir(strain_path) if d.isdigit()]
             for ts in timesteps:
                 clades_file = os.path.join(strain_path, ts, 'clades.txt')
@@ -202,7 +245,7 @@ def import_strains_to_db(con, strain_to_strength):
                                     usher_sample_count += 1
                     except Exception:
                         pass
-        
+
         # 最頻値の取得
         most_common_clade = clade_counts.most_common(1)[0][0] if clade_counts else None
         most_common_ncbi_name = ncbi_name_counts.most_common(1)[0][0] if ncbi_name_counts else strain_name
@@ -283,8 +326,9 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
     Returns:
         tuple: (list of chunk_cache_paths, dict of stats)
     """
-    usher_dir = config.DATA_BASE_DIR
-    file_paths = import_mutation_paths(usher_dir, strain_name)
+    file_paths = []
+    for usher_dir in get_all_data_base_dirs():
+        file_paths.extend(import_mutation_paths(usher_dir, strain_name))
 
     stats = {
         'total_raw_lines': 0,
@@ -359,9 +403,14 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
                         stats['excluded_short_path'] += 1
                         continue
 
-                    # 末尾（直近の履歴）を保持する。USE_SUBSTITUTION_HEAD の最終ステップ取得や
-                    # Soft Target の末尾スライスなど、下流処理はいずれも末尾側の情報を必要とするため。
-                    raw_path_str = data[2][-config.RAW_PATH_TRUNCATE_LEN:]
+                    # RAW_PATH_TRUNCATE_LEN=None なら切り詰めなし（完全な履歴文字列を保存）。
+                    # 値を設定する場合は末尾（直近の履歴）を保持する。USE_SUBSTITUTION_HEAD の
+                    # 最終ステップ取得や Soft Target の末尾スライスなど、下流処理はいずれも
+                    # 末尾側の情報を必要とするため。
+                    if config.RAW_PATH_TRUNCATE_LEN is None:
+                        raw_path_str = data[2]
+                    else:
+                        raw_path_str = data[2][-config.RAW_PATH_TRUNCATE_LEN:]
                     current_chunk_data.append((data[0], raw_path_str, path_length, max_cooc, feature_path[:-config.TARGET_LEN], y_targets))
                     stats['valid_samples'] += 1
 
@@ -468,7 +517,7 @@ def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
         df_samples = pd.DataFrame(samples_buffer, columns=[
             'sample_id', 'strain_id', 'raw_path', 'path_length',
             'max_cooccurrence', 'split_type', 'split_type_date', 'split_type_wf', 'strength_score',
-            'collection_date', 'country', 'accession'
+            'collection_date', 'country', 'accession', 'release_date'
         ])
         con.execute("INSERT INTO samples SELECT * FROM df_samples")
 
@@ -490,7 +539,7 @@ def flush_buffers_to_db(con, samples_buffer, features_buffer, labels_buffer):
 
 
 def append_strain_to_buffers(strain_id, strain_strength, samples_data,
-                             collection_date_dict, country_dict,
+                             collection_date_dict, country_dict, release_date_dict,
                              samples_buffer, features_buffer, labels_buffer,
                              sample_id_counter, feature_id_counter, label_id_counter,
                              lineage_name=None, growth_lut=None):
@@ -509,6 +558,7 @@ def append_strain_to_buffers(strain_id, strain_strength, samples_data,
     for sample_name, raw_path_str, path_length, max_cooc, x_features, y_targets in samples_data:
         collection_date = collection_date_dict.get(sample_name, '')
         country = country_dict.get(sample_name, '')
+        release_date = release_date_dict.get(sample_name, '')
         # 亜系統の成長4値（このサンプルの系統×収集日、全タイムステップ共通）
         growth = list(growth_for(growth_lut or {}, lineage_name, collection_date)) if _use_growth else None
         samples_buffer.append((
@@ -524,6 +574,7 @@ def append_strain_to_buffers(strain_id, strain_strength, samples_data,
             collection_date,
             country,
             sample_name,  # NCBI Accession（外部CSVとのJOINキー）
+            release_date,
         ))
 
         for ts_idx, ts_events in enumerate(x_features):
@@ -574,9 +625,10 @@ def main():
     codon_data, freq_dict, dissim_dict, pam250_dict, host_adapt_dict = load_static_data()
     strain_to_strength = compute_strain_strength_from_csv()
     
-    # 採取日・国マッピングをロード
+    # 採取日・国・公開日マッピングをロード
     collection_date_dict = load_collection_dates()
     country_dict = load_countries()
+    release_date_dict = load_release_dates()
     growth_lut = build_growth_lut()   # 亜系統の成長特徴LUT（USE_LINEAGE_GROWTH_FEATURES=False なら空）
 
     # psutilを用いた動的メモリ監視の初期化
@@ -666,7 +718,7 @@ def main():
                                     # バッファに追加
                                     sample_id, feature_id, label_id = append_strain_to_buffers(
                                         strain_id, strain_strength, samples_data,
-                                        collection_date_dict, country_dict,
+                                        collection_date_dict, country_dict, release_date_dict,
                                         samples_buffer, features_buffer, labels_buffer,
                                         sample_id, feature_id, label_id,
                                         lineage_name=result_name, growth_lut=growth_lut

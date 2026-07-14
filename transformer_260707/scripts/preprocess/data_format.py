@@ -1,16 +1,19 @@
 # --- transformer_260707/scripts/data_format.py ---
 # UShER 出力の mutation-paths.txt を mutation_paths.tsv に変換する前処理スクリプト。
 # preprocess.py より先に実行する（1回限りの変換処理）。
-# Usage: python -m transformer_260707.scripts.data_format
+# Usage: python -m transformer_260707.scripts.preprocess.data_format
+#        python -m transformer_260707.scripts.preprocess.data_format --base-dir ../usher_output2/
+import argparse
 import os
 import re
 import pandas as pd
 from transformer_260707 import config
 
 
-def get_usher_output_dir():
-    """config.DATA_BASE_DIR を絶対パスに解決する。"""
-    return os.path.abspath(config.DATA_BASE_DIR)
+def get_usher_output_dirs():
+    """config.DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS を絶対パスに解決したリストで返す。"""
+    dirs = [config.DATA_BASE_DIR] + list(getattr(config, 'EXTRA_DATA_BASE_DIRS', []))
+    return [os.path.abspath(d) for d in dirs]
 
 
 def process_mutation_paths_safe(strain_dir, strain):
@@ -123,10 +126,8 @@ def process_mutation_paths_safe(strain_dir, strain):
         print(f"Error processing strain {strain}: {e}")
 
 
-def main():
+def process_one_dir(usher_output_dir):
     import time
-
-    usher_output_dir = get_usher_output_dir()
 
     if not os.path.exists(usher_output_dir):
         print(f"Directory not found: {usher_output_dir}")
@@ -160,9 +161,21 @@ def main():
                   f"| Elapsed: {elapsed:.1f}s | Success: {success_count} Errors: {error_count} ---")
 
     total_time = time.time() - start_time
-    print(f"\n=== Complete === Total: {total_time:.1f}s | "
+    print(f"\n=== Complete ({usher_output_dir}) === Total: {total_time:.1f}s | "
           f"Success: {success_count} | Errors: {error_count} | "
           f"Rate: {success_count / max(len(usher_folders), 1) * 100:.1f}%")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='UShER出力(mutation-paths.txt)をTSVに変換する')
+    parser.add_argument('--base-dir', help='処理対象を1ディレクトリのみに限定する'
+                         '（省略時は DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS の全てを処理）')
+    args = parser.parse_args()
+
+    target_dirs = [os.path.abspath(args.base_dir)] if args.base_dir else get_usher_output_dirs()
+
+    for usher_output_dir in target_dirs:
+        process_one_dir(usher_output_dir)
 
 
 if __name__ == '__main__':

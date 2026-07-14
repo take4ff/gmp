@@ -15,6 +15,7 @@ def get_feature_config_hash():
         str(config.MAX_SEQ_LEN),
         str(config.TARGET_LEN),
         str(config.DATA_BASE_DIR),
+        str(getattr(config, 'EXTRA_DATA_BASE_DIRS', [])),  # 追加のUsher出力ディレクトリ
         str(config.MAX_CO_OCCURRENCE),  # 最大共起数上限
         str(config.RAW_PATH_TRUNCATE_LEN),  # raw_path保存時の切り詰め文字数
         "v2_strength_clade", # スキーマバージョン情報追加（DB再構築を強制）
@@ -97,7 +98,8 @@ def init_db(db_path=None):
             strength_score REAL DEFAULT 0.0,
             collection_date VARCHAR,
             country VARCHAR,
-            accession VARCHAR
+            accession VARCHAR,
+            release_date VARCHAR
         )
     """)
 
