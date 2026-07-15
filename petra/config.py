@@ -61,3 +61,14 @@ VOCAB_CACHE = 'cache/petra_vocab.pkl'
 USE_REGION_FIELDS = False       # True で6フィールド化（mut/pos/nuc_mut/region/region_pos/region_mut）
 VOCAB_CACHE_V2 = 'cache/petra_vocab_v2.pkl'
 CODON_CSV = 'reference/codon/codon_mutation4.csv'
+
+# --- 原論文 mutation_encoding(version=1) 準拠オプション ---
+# 原論文の実際のheadlineモデル(116M/458Mパラメータ)は、[mut]トークンを元の塩基(ref)を
+# 無視して(position, 変異後塩基)のみで決定する（A1TとG1Tは同一トークン）。
+# 現状のUSE_REGION_FIELDS=Falseの実装は生の変異文字列(例"A23403G", ref込み)をそのまま
+# トークン化しており、この点だけ原論文と異なる。Trueにすると、USE_REGION_FIELDSの値に
+# 関わらず[mut]トークンの決定方法だけをversion=1準拠に切り替える（直交フラグ）。
+# 既存のv1実行(walk_forward済み)とキャッシュ・語彙サイズが変わるため別キャッシュを使う。
+DROP_REF_BASE = False
+VOCAB_CACHE_NOREF = 'cache/petra_vocab_noref.pkl'
+VOCAB_CACHE_V2_NOREF = 'cache/petra_vocab_v2_noref.pkl'

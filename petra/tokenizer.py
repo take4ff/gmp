@@ -16,6 +16,7 @@
 import os
 import re
 import csv as _csv
+from typing import Optional
 import pickle
 
 SPECIAL_TOKENS = ['[PAD]', '[BOS]', '[EOS]', '[UNK]', '[SEP]']
@@ -79,10 +80,15 @@ class MutationTokenizer:
     語彙は DB (+ v2 の場合は codon_mutation4.csv) から構築し、cache に保存・再利用する。
     """
 
-    def __init__(self, use_region_fields: bool = False):
+    def __init__(self, use_region_fields: bool = False, drop_ref_base: bool = False):
         self.token2id: dict[str, int] = {}
         self.id2token: list[str] = []
         self.use_region_fields = use_region_fields
+        # 原論文 mutation_encoding(version=1) に合わせ、[mut]トークンを元の塩基(ref)を無視して
+        # (position, 変異後塩基)のみで決定する。A1TとG1Tのように終状態が同じなら同一トークンになる。
+        # PETRAはdecoder-onlyのcausal self-attentionで、ある位置の「現在の塩基」はトラジェクトリ
+        # 内の過去トークンから理論上復元可能なため、情報は実質失われない。
+        self.drop_ref_base = drop_ref_base
         self._ann: dict = {}          # base_pos -> 遺伝子注釈（use_region_fields=True のときのみ）
         self._dna2protein: dict = {}  # コドン -> アミノ酸
 
@@ -133,7 +139,10 @@ class MutationTokenizer:
                 f'SELECT raw_path FROM samples LIMIT {chunk_size} OFFSET {offset}'
             ).fetchall()
             for (raw_path,) in rows:
-                mutations.update(_parse_mutations(raw_path))
+                for m in _parse_mutations(raw_path):
+                    key = self._mut_key(m)
+                    if key is not None:
+                        mutations.add(key)
             offset += chunk_size
             if offset % 100000 == 0:
                 print(f'  scanned {offset}/{total} samples, '
@@ -190,6 +199,20 @@ class MutationTokenizer:
             self.token2id[tok] = len(self.id2token)
             self.id2token.append(tok)
 
+    def _mut_key(self, m: str) -> Optional[str]:
+        """[mut]トークンの語彙キーを返す。drop_ref_base=False なら生の変異文字列
+        （例"A23403G"）をそのまま使う。True なら原論文 mutation_encoding(version=1) に
+        合わせ、元の塩基(ref)を無視した(position, 変異後塩基)キー（例"MUT_23403G"）に
+        正規化する。パースできない場合はNone。
+        """
+        if not self.drop_ref_base:
+            return m
+        parts = _parse_mutation_parts(m)
+        if parts is None:
+            return None
+        _, pos, alt = parts
+        return f'MUT_{pos}{alt}'
+
     # ------------------------------------------------------------------ #
     # エンコード / デコード
     # ------------------------------------------------------------------ #
@@ -199,11 +222,17 @@ class MutationTokenizer:
         True なら [mut, pos, nuc_mut, region, region_pos, region_mut] の6トークン。
         """
         unk = self.token2id['[UNK]']
-        mut_id = self.token2id.get(m, unk)
+        need_parts = self.drop_ref_base or self.use_region_fields
+        parts = _parse_mutation_parts(m) if need_parts else None
+
+        if self.drop_ref_base:
+            mut_id = unk if parts is None else self.token2id.get(f'MUT_{parts[1]}{parts[2]}', unk)
+        else:
+            mut_id = self.token2id.get(m, unk)
+
         if not self.use_region_fields:
             return [mut_id]
 
-        parts = _parse_mutation_parts(m)
         if parts is None:
             return [mut_id, unk, unk, unk, unk, unk]
         ref, pos, alt = parts
@@ -323,14 +352,16 @@ class MutationTokenizer:
         os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
         with open(path, 'wb') as f:
             pickle.dump({'token2id': self.token2id, 'id2token': self.id2token,
-                        'use_region_fields': self.use_region_fields}, f)
+                        'use_region_fields': self.use_region_fields,
+                        'drop_ref_base': self.drop_ref_base}, f)
         print(f'Tokenizer saved to {path}')
 
     @classmethod
     def load(cls, path: str) -> 'MutationTokenizer':
         with open(path, 'rb') as f:
             data = pickle.load(f)
-        tok = cls(use_region_fields=data.get('use_region_fields', False))
+        tok = cls(use_region_fields=data.get('use_region_fields', False),
+                  drop_ref_base=data.get('drop_ref_base', False))
         tok.token2id = data['token2id']
         tok.id2token = data['id2token']
         if tok.use_region_fields:

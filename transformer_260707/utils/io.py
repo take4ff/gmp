@@ -15,7 +15,17 @@ from .. import config
 # ==========================================
 
 def get_config_hash():
-    """config設定からハッシュを生成（設定変更時にキャッシュを無効化するため）。"""
+    """config設定からハッシュを生成（設定変更時にキャッシュを無効化するため）。
+
+    注意: preprocess.py の株レベルキャッシュ(strains/strains_chunks/strains_meta)は
+    このハッシュをキーにしており、db/connection.py:get_feature_config_hash()（DBファイル名用）
+    とは別関数。2026-07-15、RAW_PATH_TRUNCATE_LEN/EXTRA_DATA_BASE_DIRS変更後もこのハッシュが
+    変わらず古いキャッシュが再利用され続け、usher_output2データとraw_path切り詰め修正の両方が
+    反映されない事故が発生したため、両者をここに追加した。
+    ただし FREQ_CSV/CODON_CSV 等の参照CSVの「内容」変更（ファイルパス自体は不変）はこの
+    ハッシュに反映されない。これらの参照データを更新した場合は、株キャッシュを手動で
+    削除すること（cache/incremental_features/{strains,strains_chunks,strains_meta}/）。
+    """
     try:
         sampling_mode = getattr(config, 'SAMPLING_MODE', 'proportional')
 
@@ -24,6 +34,8 @@ def get_config_hash():
             str(config.TRAIN_MAX),
             str(config.VALID_NUM),
             str(config.DATA_BASE_DIR),
+            str(getattr(config, 'EXTRA_DATA_BASE_DIRS', [])),
+            str(getattr(config, 'RAW_PATH_TRUNCATE_LEN', None)),
             str(config.TARGET_LEN),
             str(config.MAX_CO_OCCURRENCE),
             str(config.VALID_RATIO),

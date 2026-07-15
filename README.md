@@ -1,16 +1,21 @@
-# 🧬 Viral Genome Mutation Prediction Model (v260702)
+# 🧬 Viral Genome Mutation Prediction Model (v260707)
 
 本プロジェクトは、新型コロナウイルス（SARS-CoV-2）をはじめとするウイルスゲノムの変異発生予測を行う、高度な時系列マルチタスク・ディープラーニングモデル（Hierarchical Transformer）のコードベースです。
 変異の時系列的な蓄積ステップ（Mutation Step）と、同時に発生した共起変異の集合を高度にモデル化し、将来のパンデミックを引き起こす変異の早期予測と進化シミュレーションを実現します。
 
 ---
 
-## ✨ 主要機能（v260702 搭載機能）
+## ✨ 主要機能（v260707 搭載機能）
 
 - **NCBI/UShERダブル系統名・流行度システムの統合（動的切り替え）**
   - 配列メタデータ上の系統名（NCBI）と、系統樹トポロジー上の placements から得られる系統名（UShER）の双方をDBに抽出し、保持・表示。
   - UShERの `clades.txt` からNextclade名（Clade最頻値）およびサンプル数を自動集計する機構を導入。
   - `config.STRENGTH_SOURCE` の切り替え（`'ncbi'` / `'usher'`) だけで、モデル学習や評価時に参照する系統名・流行度を動的に切り替え可能。
+
+- **追加Usher出力ディレクトリ・追加サンプル一覧CSVの取り込み**
+  - `config.DATA_BASE_DIR`（デフォルト `../usher_output/`）に加え、`config.EXTRA_DATA_BASE_DIRS`（リスト）で同一の `<lineage>/<N>/` 構造を持つ追加のUsher出力ディレクトリを取り込める。`scripts/preprocess/data_format.py` と `preprocess.py` は両方とも自動的に全ディレクトリを横断して処理する（`--base-dir` 指定時は1ディレクトリのみに限定可能）。
+  - 対応する追加サンプル一覧は `config.EXTRA_SEQUENCES_CSV`（リスト）で指定し、`SEQUENCES_CSV` と同一スキーマ前提で結合ロードされる。
+  - 現行設定: `EXTRA_DATA_BASE_DIRS = ['../usher_output2/']` / `EXTRA_SEQUENCES_CSV = ['reference/sequences-241017_2.csv']`。
 
 - **ホスト適応特徴量の統合（24次元）**
   - `reference/codon/SCV2_host_adaptation_features.csv` に集約された24種類のコドン組成ベース特徴量を数値入力に追加。
@@ -53,7 +58,7 @@
 - **メンテナンスフリーな動的ロギング**
   - バージョンアップに伴う日付コードの置換漏れを防ぐため、エラーログメッセージ内のパッケージ名を `{__package__}` を用いて自動取得するよう動的化。
 
-- **実験ハーネス・高速化・分析ツール（v260702 拡張）**
+- **実験ハーネス・高速化・分析ツール（v260707 拡張）**
   - **マルチシード検証**（mean±std 集計）・**Walk-forward 検証**（半年次7フォールド）・**Optuna ハイパラ探索**（オフライン SQLite・pruning）の3ハーネス。
   - **DataLoader 並列化**によるデータ律速の解消（実測 ~2.0x）、**プロット出力の個別トグル**、**早期終了の hit-rate 対応**。
   - **特徴量重要度**（Permutation＝精度寄与 / Gradient×Input＝感度）に加え、**生物学的 XAI スイート**（ゲノムトラック／ホモプラシー整合／コンステレーション復元／Integrated Gradients 局所説明／表現プロービング）を単独スクリプトで提供。`run_all_xai` で一括実行可。
@@ -102,14 +107,14 @@ graph TD
 
 ### シーケンスデータ
 #### condition
-##### reference/sequences-241017.csv (2024/10/18)
+##### reference/sequences-241017.csv (2024/10/18) — `config.SEQUENCES_CSV`
 Virus/Taxonomy:Severe acute respiratory syndrome coronavirus 2, taxid:2697049
 Sequence Length min:29000 max:30000
 Host:Homo sapiens (human), taxid:9606
 Release Date: From Jan 1, 2020 To Oct 18, 2024
 number : 8,938,263
 
-##### reference/sequences-241017_2.csv (2026/07/10)
+##### reference/sequences-241017_2.csv (2026/07/10) — `config.EXTRA_SEQUENCES_CSV[0]`（`usher_output2/` に対応）
 Virus/Taxonomy:Severe acute respiratory syndrome coronavirus 2, taxid:2697049
 Sequence Length min:29000 max:30000
 Host:Homo sapiens (human), taxid:9606
@@ -137,35 +142,39 @@ conda activate gvp25-05
 
 ### 2. UShER 出力の変換（初回のみ）
 ```bash
-python -m transformer_260702.scripts.preprocess.data_format
+# config.DATA_BASE_DIR + config.EXTRA_DATA_BASE_DIRS を自動で全て処理する
+python -m transformer_260707.scripts.preprocess.data_format
+
+# 1ディレクトリのみに限定したい場合は --base-dir を指定
+python -m transformer_260707.scripts.preprocess.data_format --base-dir ../usher_output2/
 ```
 
 ### 3. DuckDB データベースの前処理（初回 or DB 再構築時）
 ```bash
-nice -n 19 python -m transformer_260702.preprocess
+nice -n 19 python -m transformer_260707.preprocess
 ```
 `config.py` の `NUM_CHEM_FEATURES`・`CONTEXT_WINDOW`・`ABLATION_MASKS` が変更されると、設定ハッシュが自動的に変わり次回実行時に DB が再構築される。
 
 ### 4. モデルの学習および評価の実行
 ```bash
-nohup python -m transformer_260702.main > nohup0.out 2>&1 &
+nohup python -m transformer_260707.main > nohup0.out 2>&1 &
 tail -f nohup0.out
 ```
-実行完了後、`outputs/transformer_260702/results/<EXPERIMENT_NAME>/<timestamp>/` にすべてのログ、学習曲線、集計CSV、および評価プロット画像が自動保存される。
+実行完了後、`outputs/transformer_260707/results/<EXPERIMENT_NAME>/<timestamp>/` にすべてのログ、学習曲線、集計CSV、および評価プロット画像が自動保存される。
 
 ### 5. 実験ハーネス（複数シード検証・ハイパラ探索）
 ```bash
 # 複数シードで学習→評価し、主要指標を mean±std に集計（single run のノイズ判定用）
-python -m transformer_260702.scripts.eval.multi_seed --seeds 42 1 7
+python -m transformer_260707.scripts.eval.multi_seed --seeds 42 1 7
 #   → results/multi_seed/<ts>/multi_seed_summary.json（aggregate に mean/std/values）
 
 # 半年次 Walk-forward 検証（全7フォールド。config.SPLIT_MODE を触らず起動可）
-nohup python -m transformer_260702.scripts.eval.walk_forward > nohup_wf.out 2>&1 &
-python -m transformer_260702.scripts.eval.walk_forward --folds 2 6   # 特定フォールドのみ
+nohup python -m transformer_260707.scripts.eval.walk_forward > nohup_wf.out 2>&1 &
+python -m transformer_260707.scripts.eval.walk_forward --folds 2 6   # 特定フォールドのみ
 
 # Optuna ハイパラ探索（ローカル SQLite 保存＝オフライン・中断再開可、pruning つき）
 pip install optuna   # 未導入の場合
-python -m transformer_260702.scripts.eval.optuna_search --n-trials 15 --params lr loss_weights
+python -m transformer_260707.scripts.eval.optuna_search --n-trials 15 --params lr loss_weights
 #   → outputs/.../scripts/optuna/<study>.db（全 trial 履歴）, <study>_best.json（ベスト構成）
 ```
 > **探索コストの目安**: 1 trial = 1 学習（実測 1 epoch ≈ 40〜70 分）。フル 15 epoch × 多 trial は数日規模になるため、探索は短 epoch・少 trial（＋pruning）で回し、上位構成のみ multi-seed / walk-forward でフル検証する二段構えを推奨。
@@ -175,19 +184,19 @@ python -m transformer_260702.scripts.eval.optuna_search --n-trials 15 --params l
 
 ```bash
 # 特徴量重要度（数値特徴32/36次元）
-python -m transformer_260702.scripts.analysis.feature_importance --checkpoint <best.pth>        # Gradient×Input（感度）＋埋め込みノルム＋Co-Attn重み
-python -m transformer_260702.scripts.analysis.permutation_importance --checkpoint <best.pth> \
+python -m transformer_260707.scripts.analysis.feature_importance --checkpoint <best.pth>        # Gradient×Input（感度）＋埋め込みノルム＋Co-Attn重み
+python -m transformer_260707.scripts.analysis.permutation_importance --checkpoint <best.pth> \
     --metric position_hit_rate --n_batches 50 --n_repeats 2                                      # 精度寄与（再学習不要）
 
 # 生物学的 XAI（位置→遺伝子 annotation・外部データと突き合わせ）
-python -m transformer_260702.scripts.analysis.genome_track --checkpoint <best.pth>               # ①位置/遺伝子別の予測質量 → ゲノム地図
-python -m transformer_260702.scripts.analysis.homoplasy_alignment --checkpoint <best.pth>        # ②重要度 vs homoplasy 相関＋problematic 負コントロール
-python -m transformer_260702.scripts.analysis.cooccurrence_constellation --checkpoint <best.pth> # ③共予測ペア vs 実共起（変異株コンステレーション復元）
-python -m transformer_260702.scripts.analysis.local_explain --checkpoint <best.pth>              # ④Integrated Gradients による1予測の局所説明
-python -m transformer_260702.scripts.analysis.probe_representation --checkpoint <best.pth>       # ⑤内部表現の線形プロービング（gene/Spike/同義 を復元できるか）
+python -m transformer_260707.scripts.analysis.genome_track --checkpoint <best.pth>               # ①位置/遺伝子別の予測質量 → ゲノム地図
+python -m transformer_260707.scripts.analysis.homoplasy_alignment --checkpoint <best.pth>        # ②重要度 vs homoplasy 相関＋problematic 負コントロール
+python -m transformer_260707.scripts.analysis.cooccurrence_constellation --checkpoint <best.pth> # ③共予測ペア vs 実共起（変異株コンステレーション復元）
+python -m transformer_260707.scripts.analysis.local_explain --checkpoint <best.pth>              # ④Integrated Gradients による1予測の局所説明
+python -m transformer_260707.scripts.analysis.probe_representation --checkpoint <best.pth>       # ⑤内部表現の線形プロービング（gene/Spike/同義 を復元できるか）
 
 # ↑の新規5本を一括実行（出力を xai_all/<ts>/<analysis>/ に集約、失敗継続）
-python -m transformer_260702.scripts.analysis.run_all_xai --checkpoint <best.pth> --split test
+python -m transformer_260707.scripts.analysis.run_all_xai --checkpoint <best.pth> --split test
 #   --only / --skip で対象選択、--n_batches で共通上書き、--force_cpu、--dry_run（コマンド確認のみ）
 ```
 
@@ -201,11 +210,11 @@ python -m transformer_260702.scripts.analysis.run_all_xai --checkpoint <best.pth
 
 ### ユーティリティ
 ```bash
-python -m transformer_260702.scripts.inspect.inspect_duckdb    # DB スキーマ確認
-python -m transformer_260702.scripts.inspect.view_one_sample   # サンプル内容確認（数値特徴量を表示。成長特徴有効時は36次元）
-python -m transformer_260702.scripts.analysis.aggregate_strains    # 株別集計
-python -m transformer_260702.scripts.analysis.aggregate_lineages   # 系統別集計
-python -m transformer_260702.scripts.analysis.aggregate_variants   # 月別変異株集計
+python -m transformer_260707.scripts.inspect.inspect_duckdb    # DB スキーマ確認
+python -m transformer_260707.scripts.inspect.view_one_sample   # サンプル内容確認（数値特徴量を表示。成長特徴有効時は36次元）
+python -m transformer_260707.scripts.analysis.aggregate_strains    # 株別集計
+python -m transformer_260707.scripts.analysis.aggregate_lineages   # 系統別集計
+python -m transformer_260707.scripts.analysis.aggregate_variants   # 月別変異株集計
 ```
 
 ---
@@ -477,7 +486,7 @@ ABLATION_MASKS = {
 
 ---
 
-## ⚙️ 学習設定・実験ハーネス・高速化（v260702 で拡張）
+## ⚙️ 学習設定・実験ハーネス・高速化（v260707 で拡張）
 
 ### 早期終了の対象メトリクス（hit-rate 対応）
 `val_loss` は hit-rate と乖離することがある（例: MLM 事前学習は hit-rate を上げるが loss は悪化）ため、**実際の評価指標で checkpoint を選べる**よう早期終了の対象を切り替え可能。
@@ -636,7 +645,7 @@ ABLATION_MASKS = {
   Fold7: W6 →  Train([2023/07, 2024/01)) Test: 2024/01 ─  (Most recent)
   ```
 * **集計**: 各 fold の Hit Rate / Recall を fold ごとにプロットし、精度の時系列推移を可視化する。最終評価は全 fold 平均・標準偏差で報告する。
-* **ステータス**: 実装済み。`SPLIT_MODE='walk_forward'` を設定して `python -m transformer_260702.main`（または `scripts/eval/walk_forward.py`）を実行すると、全7フォールドを順番に学習・評価し、結果を `results/walk_forward/<timestamp>/` に保存する。`WALK_FORWARD_FOLDS = [2, 6]` で移行フォールドのみ先行実行も可能。
+* **ステータス**: 実装済み。`SPLIT_MODE='walk_forward'` を設定して `python -m transformer_260707.main`（または `scripts/eval/walk_forward.py`）を実行すると、全7フォールドを順番に学習・評価し、結果を `results/walk_forward/<timestamp>/` に保存する。`WALK_FORWARD_FOLDS = [2, 6]` で移行フォールドのみ先行実行も可能。
 
 * **初回実行結果（2026-07, `results/walk_forward/20260705_203818`, USE_PRETRAINING=True/MODE='mlm', transformer_260625版）**:
   - 全7フォールド完了。**エントロピー崩壊パターン（上記「根本原因」節）が時系列を通して一貫していることを確認**（詳細・プール集計表は「Walk-forward による時系列での再確認」参照）。

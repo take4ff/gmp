@@ -7,7 +7,6 @@ import numpy as np
 
 import matplotlib.colors as mcolors
 from matplotlib import cm
-import cv2
 
 import glob
 import re
@@ -52,6 +51,21 @@ def import_mutation_paths(base_dir, strain):
 
     if not file_paths:
         raise FileNotFoundError(f"mutation_paths_{strain}.tsvが{strain_dir}内に見つかりませんでした。")
+
+    return file_paths
+
+
+def import_mutation_paths_multi(base_dirs, strain):
+    """DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS（usher_output2等）を横断してmutation_paths.tsvを集める。"""
+    file_paths = []
+    for base_dir in base_dirs:
+        try:
+            file_paths.extend(import_mutation_paths(base_dir, strain))
+        except FileNotFoundError:
+            continue
+
+    if not file_paths:
+        raise FileNotFoundError(f"mutation_paths_{strain}.tsvがどのbase_dirにも見つかりませんでした: {base_dirs}")
 
     return file_paths
 
@@ -174,6 +188,7 @@ def save_heatmap(df, step, output_dir = 'timestep_heatmaps'):
 
 # タイムステップごとのヒートマップ画像から動画を作成
 def create_video_from_heatmaps(image_folder, output_video_path="timestep_heatmaps/mutation_heatmaps_video.mp4", fps=2):
+    import cv2  # table_set.csv生成では未使用のため遅延import（cv2未導入環境でも他の処理を実行可能に）
     # Get list of image files sorted by timestep
     images = [img for img in os.listdir(image_folder) if img.endswith(".png") and "heatmap_timestep" in img]
     images.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))  # Sort by timestep
@@ -309,14 +324,19 @@ def compress_csv_rows_folder(input_dir, output_dir, step=100):
     return df_compressed_ts
 
 # %%
-usher_dir = '../usher_output/'
-files =  sorted([filename for filename in os.listdir(usher_dir) if not filename.startswith('.')])
+from transformer_260707.preprocess import get_all_data_base_dirs
+
+data_base_dirs = get_all_data_base_dirs()  # DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS(usher_output2等)
+files = sorted({
+    f for d in data_base_dirs if os.path.isdir(d)
+    for f in os.listdir(d) if not f.startswith('.')
+})
 print(files)
 print(len(files))
 
 strains = files
 
-dir_ver = "260610"
+dir_ver = "260715"
 output_dir = os.path.join("outputs/table_heatmap", dir_ver)
 tables_dir = os.path.join(output_dir, "timestep_tables/strains")
 
@@ -369,8 +389,11 @@ create_video_from_heatmaps(heatmaps_dir, heatmaps_dir+"/mutation_heatmaps_video.
 
 # %%
 # --- データ読み込み・前処理 ---
-usher_dir = '../usher_output/'
-files =  sorted([filename for filename in os.listdir(usher_dir) if not filename.startswith('.')])
+data_base_dirs = get_all_data_base_dirs()  # DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS(usher_output2等)
+files = sorted({
+    f for d in data_base_dirs if os.path.isdir(d)
+    for f in os.listdir(d) if not f.startswith('.')
+})
 print(files)
 print(len(files))
 
@@ -382,7 +405,7 @@ names = []
 lengths = []
 paths = []
 for strain in strains:
-    file_paths = import_mutation_paths(usher_dir,strain)
+    file_paths = import_mutation_paths_multi(data_base_dirs, strain)
     for file_path in file_paths:
         print(f"[INFO]import: {file_path}")
         f = open(file_path, 'r',encoding="utf-8_sig")

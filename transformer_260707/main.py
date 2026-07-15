@@ -882,6 +882,9 @@ def _wf_patch_config(train_start, split_date: str, split_end, fold_id: int, wf_r
     config.TEMPORAL_SPLIT_DATE       = split_date
     config.TEMPORAL_SPLIT_TEST_END   = split_end
     config.FORCE_DATE_REASSIGN       = False  # run_walk_forward が事前に assign_wf_splits を呼ぶ
+    # walk-forwardは時系列リーク検証が主目的のため、静的FREQ_CSVではなく
+    # このフォールドのsplit_date時点のpoint-in-time頻度を強制的に使用する。
+    config.USE_POINT_IN_TIME_FREQ    = True
     config.EXPERIMENT_NAME           = f'walk_forward/{os.path.basename(wf_run_dir)}/fold_{fold_id}'
     config.WANDB_RUN_NAME            = f'wf_fold{fold_id}_{split_date}'
 

@@ -24,6 +24,7 @@ from transformer_260707 import config as main_config
 from petra import config as petra_config
 from petra.dataset import PetraDataset
 from petra.eval.evaluate import evaluate_recall_topk, evaluate_recall_topk_tail_only, PetraRepresentativenessWeights
+from petra.main import resolve_vocab_cache_path
 from petra.model import PetraDecoder
 from petra.tokenizer import MutationTokenizer
 
@@ -161,7 +162,7 @@ def main():
     from transformer_260707.db.connection import get_db_path
     db_path = get_db_path()
 
-    tokenizer = MutationTokenizer.load(petra_config.VOCAB_CACHE)
+    tokenizer = MutationTokenizer.load(resolve_vocab_cache_path())
     print(f'Vocab size: {tokenizer.vocab_size}')
 
     ids = resolve_test_ids_by_daterange(db_path, args.split_date, args.split_end)

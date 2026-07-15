@@ -51,20 +51,32 @@ def get_split_col() -> str:
 # 語彙構築
 # ------------------------------------------------------------------ #
 
-def build_tokenizer(db_path: str, force: bool = False) -> MutationTokenizer:
-    """USE_REGION_FIELDS に応じて v1(cache/petra_vocab.pkl) / v2(cache/petra_vocab_v2.pkl)
-    のキャッシュを使い分ける。v1実行中プロセスとキャッシュファイルが衝突しないようにするため。
+def resolve_vocab_cache_path() -> str:
+    """USE_REGION_FIELDS / DROP_REF_BASE の組み合わせに応じたキャッシュファイルパスを返す。
+    学習(build_tokenizer)・評価スクリプト双方から呼び、設定と読み込むキャッシュの不一致を防ぐ。
     """
     use_region = getattr(config, 'USE_REGION_FIELDS', False)
-    cache = config.VOCAB_CACHE_V2 if use_region else config.VOCAB_CACHE
+    drop_ref = getattr(config, 'DROP_REF_BASE', False)
+    if drop_ref:
+        return config.VOCAB_CACHE_V2_NOREF if use_region else config.VOCAB_CACHE_NOREF
+    return config.VOCAB_CACHE_V2 if use_region else config.VOCAB_CACHE
+
+
+def build_tokenizer(db_path: str, force: bool = False) -> MutationTokenizer:
+    """USE_REGION_FIELDS / DROP_REF_BASE の組み合わせに応じてキャッシュを使い分ける。
+    実行中の他プロセスとキャッシュファイルが衝突しないようにするため。
+    """
+    use_region = getattr(config, 'USE_REGION_FIELDS', False)
+    drop_ref = getattr(config, 'DROP_REF_BASE', False)
+    cache = resolve_vocab_cache_path()
     if not force and os.path.exists(cache):
         print(f'Loading tokenizer from {cache}')
         tok = MutationTokenizer.load(cache)
         print(f'Vocab size: {tok.vocab_size}')
         return tok
 
-    print(f'Building tokenizer from DB (use_region_fields={use_region})...')
-    tok = MutationTokenizer(use_region_fields=use_region)
+    print(f'Building tokenizer from DB (use_region_fields={use_region}, drop_ref_base={drop_ref})...')
+    tok = MutationTokenizer(use_region_fields=use_region, drop_ref_base=drop_ref)
     codon_csv = config.CODON_CSV if use_region else None
     tok.build_from_db(db_path, chunk_size=config.CHUNK_SIZE, codon_csv=codon_csv)
     tok.save(cache)

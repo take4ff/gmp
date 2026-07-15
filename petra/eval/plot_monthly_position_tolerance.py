@@ -29,6 +29,7 @@ from petra.dataset import PetraDataset
 from petra.eval.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
                                           get_raw_path_set)
 from petra.eval.evaluate import build_position_lookup
+from petra.main import resolve_vocab_cache_path
 from petra.model import PetraDecoder
 from petra.tokenizer import MutationTokenizer
 from petra.eval.plot_monthly_hitrate import find_fold_checkpoints
@@ -96,7 +97,7 @@ def main():
 
     from transformer_260707.db.connection import get_db_path
     db_path = get_db_path()
-    tokenizer = MutationTokenizer.load(petra_config.VOCAB_CACHE)
+    tokenizer = MutationTokenizer.load(resolve_vocab_cache_path())
     position_lookup = build_position_lookup(tokenizer)
     print(f'Vocab size: {tokenizer.vocab_size}, device={device}, '
           f'tolerances={args.tolerances}, position_lookup size={len(position_lookup):,}')
