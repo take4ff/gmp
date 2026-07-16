@@ -5,6 +5,19 @@
 
 ---
 
+## 📚 詳細ドキュメント
+
+本 README は概要・アーキテクチャ・実行方法に絞っています。詳細な研究ノート・提案・履歴は以下を参照してください。
+
+- [docs/features.md](docs/features.md) — 主要機能の実装詳細
+- [docs/ablation.md](docs/ablation.md) — アブレーションマスク全項目
+- [docs/xai_usage.md](docs/xai_usage.md) — 特徴量重要度・XAI分析の全コマンド
+- [docs/analysis.md](docs/analysis.md) — 精度特性の分析・根本課題・改善の方向性
+- [docs/roadmap.md](docs/roadmap.md) — 今後の展望（未実装の提案一覧）
+- [docs/changelog.md](docs/changelog.md) — 既知の不具合・修正履歴
+
+---
+
 ## ✨ 主要機能（v260707 搭載機能）
 
 - **NCBI/UShERダブル系統名・流行度システムの統合** — `config.STRENGTH_SOURCE`（`'ncbi'`/`'usher'`）で参照系統名・流行度を動的切り替え。
@@ -212,24 +225,6 @@ python -m transformer_260707.scripts.analysis.aggregate_variants   # 月別変�
 
 ---
 
-## 📚 詳細ドキュメント
-
-本 README は概要・アーキテクチャ・実行方法に絞っています。詳細な研究ノート・提案・履歴は以下を参照してください。
-
-- [docs/analysis.md](docs/analysis.md) — 精度特性の分析・根本課題・改善の方向性
-- [docs/roadmap.md](docs/roadmap.md) — 今後の展望（未実装の提案一覧）
-- [docs/changelog.md](docs/changelog.md) — 既知の不具合・修正履歴
-
----
-
-## 🔍 精度特性の分析と根本課題
-
-Omicron 出現期以降の精度低下・ターゲットエントロピー爆発という根本原因の分析、および改善の方向性（評価指標の転換／エントロピーフィルタリング／階層的予測／系統埋め込み等）と、ラベル多義性そのものを扱う発展的提案（6〜12）は分量が大きいため別ドキュメントに分離しました。
-
-**→ 詳細は [docs/analysis.md](docs/analysis.md) を参照。**
-
----
-
 ## 🔬 Ablation Study（アブレーション実験）
 
 `config.py` 内のフラグで各特徴量やニューラルネットワーク層の有効/無効を切り替え、各コンポーネントが予測性能に与える影響度を測定できます。主要な構造系フラグ:
@@ -352,21 +347,7 @@ ABLATION_MASKS = {
 
 ---
 
-### 📅 Future Roadmap（今後の展望）
-
-予測精度のさらなる向上と生物学的妥当性の強化に向けた未実装項目（PLM統合・構造特徴量・EVEscape・Walk-forward検証の詳細・地域別層別評価・recency weighting・マルチバイラル汎化）は別ドキュメントに分離しました。
-
-**→ 詳細は [docs/roadmap.md](docs/roadmap.md) を参照。**
-
-※ 実装済みの全機能は `config.py` 上のフラグによりワンタッチで有効/無効の切り替えが可能な設計とします。
-
----
-
-## 🐛 既知の不具合・修正履歴
-
-過去に発見・修正されたバグの症状・原因・修正内容は別ドキュメントに分離しました（`base_after`/`aa_after` ラベル付与バグ、`walk_forward` の列欠落、`CO_ATTN_N_LAYERS > 1` での NaN 伝播バグ等）。
-
-**→ 詳細は [docs/changelog.md](docs/changelog.md) を参照。**
+※ 実装済みの全機能は `config.py` 上のフラグによりワンタッチで有効/無効の切り替えが可能な設計とします。未実装の提案・既知の不具合は冒頭「📚 詳細ドキュメント」の各リンクを参照してください。
 
 ---
 
