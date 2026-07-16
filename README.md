@@ -7,62 +7,21 @@
 
 ## ✨ 主要機能（v260707 搭載機能）
 
-- **NCBI/UShERダブル系統名・流行度システムの統合（動的切り替え）**
-  - 配列メタデータ上の系統名（NCBI）と、系統樹トポロジー上の placements から得られる系統名（UShER）の双方をDBに抽出し、保持・表示。
-  - UShERの `clades.txt` からNextclade名（Clade最頻値）およびサンプル数を自動集計する機構を導入。
-  - `config.STRENGTH_SOURCE` の切り替え（`'ncbi'` / `'usher'`) だけで、モデル学習や評価時に参照する系統名・流行度を動的に切り替え可能。
+- **NCBI/UShERダブル系統名・流行度システムの統合** — `config.STRENGTH_SOURCE`（`'ncbi'`/`'usher'`）で参照系統名・流行度を動的切り替え。
+- **追加Usher出力ディレクトリ・追加サンプルCSVの取り込み** — `EXTRA_DATA_BASE_DIRS` / `EXTRA_SEQUENCES_CSV` で複数データソースを横断処理。
+- **ホスト適応特徴量（24次元）** — RSCU・コドン頻度・CAI 等のコドン組成ベース特徴量。
+- **パス内累積変異カウント特徴量** — シノニマス/ノンシノニマス変異の累積数（`cum_syn`/`cum_nonsyn`）。
+- **亜系統の流行ダイナミクス特徴（4次元）** — 収集日以前のデータのみで計算する因果的な成長・適応度代理（`USE_LINEAGE_GROWTH_FEATURES`）。
+- **前後コンテキスト塩基の窓幅拡張** — `CONTEXT_WINDOW`（既定±5）で±3/±5/±7を動的切替。
+- **高精度マルチタスク学習** — Region/NucPos/AAPos/CodonPos/Synonymous/BaseAfter/AAAfter/Strength を同時予測。
+- **時系列マルチタスクの学習** — Mutation Step に沿った進化遷移の学習。
+- **Co-occurrence Attention の多段階拡張** — `CO_ATTN_DIM`/`CO_ATTN_N_LAYERS`/`USE_FLAT_COATTN` で共起集約の表現力をアブレーション比較。
+- **DuckDB による超高速データベース＆バルク処理** — 数百万レコード規模でもメモリ効率的なストリームバッチ学習。
+- **多角的な評価・出力システム** — 感染規模9区分・系統別 HitRate/エントロピー・`run_summary.json`・R-Precision 等。
+- **メンテナンスフリーな動的ロギング** — `{__package__}` によるバージョン非依存なログ出力。
+- **実験ハーネス・高速化・分析ツール（v260707 拡張）** — マルチシード/Walk-forward/Optuna の3ハーネス、DataLoader並列化（~2.0x）、特徴量重要度・生物学的XAIスイート。
 
-- **追加Usher出力ディレクトリ・追加サンプル一覧CSVの取り込み**
-  - `config.DATA_BASE_DIR`（デフォルト `../usher_output/`）に加え、`config.EXTRA_DATA_BASE_DIRS`（リスト）で同一の `<lineage>/<N>/` 構造を持つ追加のUsher出力ディレクトリを取り込める。`scripts/preprocess/data_format.py` と `preprocess.py` は両方とも自動的に全ディレクトリを横断して処理する（`--base-dir` 指定時は1ディレクトリのみに限定可能）。
-  - 対応する追加サンプル一覧は `config.EXTRA_SEQUENCES_CSV`（リスト）で指定し、`SEQUENCES_CSV` と同一スキーマ前提で結合ロードされる。
-  - 現行設定: `EXTRA_DATA_BASE_DIRS = ['../usher_output2/']` / `EXTRA_SEQUENCES_CSV = ['reference/sequences-241017_2.csv']`。
-
-- **ホスト適応特徴量の統合（24次元）**
-  - `reference/codon/SCV2_host_adaptation_features.csv` に集約された24種類のコドン組成ベース特徴量を数値入力に追加。
-  - ヒト・SCV2 の RSCU・コドン頻度・CAI（相対的適応度）の変異前後の値と差分、コドン最適性フラグ（optimal_to_optimal 等）、トランジション/トランスバージョン、CpG/UpA ジヌクレオチド変化量、宿主距離対数比などを網羅。
-  - `reference/codon/generate_host_adaptation_features.py` で再生成可能。
-
-- **パス内累積変異カウント特徴量の追加**
-  - 入力パスにおけるシノニマス変異・ノンシノニマス変異それぞれの累積カウントを数値特徴量（`cum_syn`/`cum_nonsyn`）として追加。
-  - 各タイムステップ開始前の累積値を渡すため、同一タイムステップ内の共起変異は全て同じ値を参照する。
-
-- **亜系統の流行ダイナミクス特徴（4次元・因果的な適応度代理）**
-  - 各サンプル（亜系統 × 収集日）に、**収集日以前のデータだけ**で計算した4つの成長特徴を数値入力に追加（`USE_LINEAGE_GROWTH_FEATURES`）。適応度は「どの変異が出現・拡大するか」を駆動するため、位置予測の文脈情報になる。
-  - `lineage_log_count_recent`（規模の因果版）/ `lineage_growth_rate`（直近K週の log件数の傾き＝勢い、正=拡大・負=縮小）/ `lineage_rel_growth_adv`（logit シェアの傾き＝共流行系統に対する**相対成長優位＝logistic fitness**）/ `lineage_growth_accel`（加速度＝ピークアウト検知）。
-  - epidemic 件数は系列メタCSV（`Pangolin` × `Collection_Date`）から週次で構築（`db/growth_features.py`）。系統粒度は Pango 上位2階層。「縮小期の件数」等の**未来量は使わずリークを防止**し、位相は `growth_rate` の符号で表現する。
-  - 有効化すると `NUM_CHEM_FEATURES` が 32→36 に増え **DB 再構築が必要**。効果は permutation importance／ablation／walk-forward で検証する（既存 `strength` との冗長性・リークの有無を確認）。
-
-- **前後コンテキスト塩基の窓幅拡張（`CONTEXT_WINDOW` で制御）**
-  - 変異位置の前後塩基を `config.CONTEXT_WINDOW`（デフォルト ±5）で動的に制御。±3/±5/±7 を config の変更だけで切り替え可能。
-  - カテゴリ特徴量 = 9（固定）+ 2×CONTEXT_WINDOW（コンテキスト）。
-  - アブレーションマスクも `MUTATION_CONTEXT_L1`〜`L7` / `R1`〜`R7` で1塩基単位の個別制御に対応。
-
-- **高精度マルチタスク学習**
-  - 変異の発生する「遺伝子領域（37分類）」、「ゲノム位置（~3万分類）」、「アミノ酸位置（~1万分類）」、「コドン内位置（3分類）」、「同義/非同義（2分類）」、「塩基変化先（7分類）」、「アミノ酸変化先（23分類）」、およびその変異株の「流行規模（Strength Score / 回帰）」をマルチタスクで同時に学習・予測。
-
-- **時系列マルチタスクの学習**
-  - 変異の時系列ステップ（Mutation Step）に伴う進化の遷移を学習し、未知の時間の経過に合わせて変異発生時期を高度に予測。
-
-- **Co-occurrence Attention の多段階拡張（Omicron期大規模共起への対応）**
-  - `CO_ATTN_DIM`（内部次元拡大）、`CO_ATTN_N_LAYERS`（変異間 Self-Attention の多段化）、`USE_FLAT_COATTN`（全変異を独立トークンとして Transformer に直接入力）の3フラグで共起集約の表現力をアブレーション比較可能。
-
-- **DuckDB による超高速データベース＆バルク処理**
-  - 数百万レコードに及ぶ大規模な変異パスとゲノムメタデータを DuckDB で管理し、メモリ効率的かつ高速なストリームバッチ学習を実現。
-
-- **多角的な評価・出力システム**
-  - 感染規模9区分（〜100/〜500/〜1K/〜5K/〜10K/〜50K/〜100K/〜500K/>500K）の精度ファイル分割。
-  - 系統（Pango 上位2階層）単位でのHitRate・予測難易度エントロピーを集計した `{prefix}_lineage_metrics.csv` を常時出力。
-  - 実験横断スクリプト比較のための `run_summary.json`（主要指標を軽量JSONで保存）。
-  - `USE_R_PRECISION=True` 時の R-Precision 結果を独立ファイル `{prefix}_r_precision.csv` に保存。
-
-- **メンテナンスフリーな動的ロギング**
-  - バージョンアップに伴う日付コードの置換漏れを防ぐため、エラーログメッセージ内のパッケージ名を `{__package__}` を用いて自動取得するよう動的化。
-
-- **実験ハーネス・高速化・分析ツール（v260707 拡張）**
-  - **マルチシード検証**（mean±std 集計）・**Walk-forward 検証**（半年次7フォールド）・**Optuna ハイパラ探索**（オフライン SQLite・pruning）の3ハーネス。
-  - **DataLoader 並列化**によるデータ律速の解消（実測 ~2.0x）、**プロット出力の個別トグル**、**早期終了の hit-rate 対応**。
-  - **特徴量重要度**（Permutation＝精度寄与 / Gradient×Input＝感度）に加え、**生物学的 XAI スイート**（ゲノムトラック／ホモプラシー整合／コンステレーション復元／Integrated Gradients 局所説明／表現プロービング）を単独スクリプトで提供。`run_all_xai` で一括実行可。
-  - 詳細は「⚙️ 学習設定・実験ハーネス・高速化」節および「🚀 Usage → 6. 特徴量重要度・生物学的 XAI 分析」を参照。
+**→ 各機能の実装詳細は [docs/features.md](docs/features.md) を参照。**
 
 ---
 
@@ -212,33 +171,11 @@ python -m transformer_260707.scripts.eval.optuna_search --n-trials 15 --params l
 > **探索コストの目安**: 1 trial = 1 学習（実測 1 epoch ≈ 40〜70 分）。フル 15 epoch × 多 trial は数日規模になるため、探索は短 epoch・少 trial（＋pruning）で回し、上位構成のみ multi-seed / walk-forward でフル検証する二段構えを推奨。
 
 ### 6. 特徴量重要度・生物学的 XAI 分析
-学習済みチェックポイントに対する後付け分析。すべて単独 CLI（`--checkpoint` 指定、`--force_cpu` 対応）で、共通基盤 `scripts/analysis/_xai_common.py`（config_snapshot 反映・モデル/ローダ・出力保存を集約）の上に載る。
-
+学習済みチェックポイントに対する後付け分析。すべて単独 CLI（`--checkpoint` 指定、`--force_cpu` 対応）で共通基盤上に載る。代表コマンド（新規5本を一括実行、失敗継続）:
 ```bash
-# 特徴量重要度（数値特徴32/36次元）
-python -m transformer_260707.scripts.analysis.feature_importance --checkpoint <best.pth>        # Gradient×Input（感度）＋埋め込みノルム＋Co-Attn重み
-python -m transformer_260707.scripts.analysis.permutation_importance --checkpoint <best.pth> \
-    --metric position_hit_rate --n_batches 50 --n_repeats 2                                      # 精度寄与（再学習不要）
-
-# 生物学的 XAI（位置→遺伝子 annotation・外部データと突き合わせ）
-python -m transformer_260707.scripts.analysis.genome_track --checkpoint <best.pth>               # ①位置/遺伝子別の予測質量 → ゲノム地図
-python -m transformer_260707.scripts.analysis.homoplasy_alignment --checkpoint <best.pth>        # ②重要度 vs homoplasy 相関＋problematic 負コントロール
-python -m transformer_260707.scripts.analysis.cooccurrence_constellation --checkpoint <best.pth> # ③共予測ペア vs 実共起（変異株コンステレーション復元）
-python -m transformer_260707.scripts.analysis.local_explain --checkpoint <best.pth>              # ④Integrated Gradients による1予測の局所説明
-python -m transformer_260707.scripts.analysis.probe_representation --checkpoint <best.pth>       # ⑤内部表現の線形プロービング（gene/Spike/同義 を復元できるか）
-
-# ↑の新規5本を一括実行（出力を xai_all/<ts>/<analysis>/ に集約、失敗継続）
 python -m transformer_260707.scripts.analysis.run_all_xai --checkpoint <best.pth> --split test
-#   --only / --skip で対象選択、--n_batches で共通上書き、--force_cpu、--dry_run（コマンド確認のみ）
 ```
-
-| 分析 | 何を見るか | 主な外部データ |
-|---|---|---|
-| `genome_track` | モデルが Spike/RdRp 等の意味ある領域に注目しているか | `codon_mutation4.csv`（遺伝子annotation） |
-| `homoplasy_alignment` | 重要部位が**正の選択下の収斂部位**と一致するか／アーチファクト部位を回避しているか | `homoplasy/site_recurrence.csv`, `problematic_sites…vcf` |
-| `cooccurrence_constellation` | 既知ハプロタイプ（連鎖・エピスタシス）を再発見しているか | — |
-| `local_explain` | 個々の予測を「どの過去変異・特徴が押し上げたか」に帰属 | — |
-| `probe_representation` | 内部表現に生物概念（遺伝子/Spike/同義）が符号化されているか | — |
+個別スクリプト（feature_importance・permutation_importance・genome_track・homoplasy_alignment・cooccurrence_constellation・local_explain・probe_representation）のコマンド一覧と各分析の内容は **[docs/xai_usage.md](docs/xai_usage.md)** を参照。
 
 ### ユーティリティ
 ```bash
@@ -295,7 +232,7 @@ Omicron 出現期以降の精度低下・ターゲットエントロピー爆発
 
 ## 🔬 Ablation Study（アブレーション実験）
 
-`config.py` 内の以下のフラグで各特徴量やニューラルネットワーク層の有効/無効を切り替え、各コンポーネントが予測性能に与える影響度を精密に測定できます。
+`config.py` 内のフラグで各特徴量やニューラルネットワーク層の有効/無効を切り替え、各コンポーネントが予測性能に与える影響度を測定できます。主要な構造系フラグ:
 
 ```python
 USE_LOCAL_CONV1D = False         # Conv1d局所特徴抽出の切り替え
@@ -309,67 +246,9 @@ USE_FLAT_COATTN  = False        # True: 全変異を独立トークンとして 
 
 # コンテキスト窓幅（再前処理が必要）
 CONTEXT_WINDOW = 5              # 前後各方向の塩基数。3 / 5 / 7 で切り替え
-
-# 数値・カテゴリ特徴量の個別アブレーションマスク（再前処理不要・動的適用）
-ABLATION_MASKS = {
-    # --- 物理化学的特徴量 (num[0..5]) ---
-    'FREQ': False,    # 変異発生頻度
-    'HYDRO': False,   # 疎水性差
-    'CHARGE': False,  # 電荷差
-    'SIZE': False,    # サイズ差
-    'BLSM': False,    # BLOSUM62スコア差
-    'PAM250': False,  # PAM250スコア
-
-    # --- ホスト適応特徴量 (num[6..29]) ---
-    'HOST_LOG_RATIO_DIFF': False,         # 宿主距離対数比差分
-    'HOST_LOG_RATIO_BEFORE': False,       # 変異前宿主距離対数比
-    'HUMAN_RSCU_DIFF': False,             # ヒトRSCU差
-    'SCV2_RSCU_DIFF': False,              # SCV2 RSCU差
-    'OPTIMAL_TO_OPTIMAL': False,          # 最適→最適コドン変化フラグ
-    'NON_OPTIMAL_TO_OPTIMAL': False,      # 非最適→最適コドン変化フラグ
-    'OPTIMAL_TO_NON_OPTIMAL': False,      # 最適→非最適コドン変化フラグ
-    'IS_TRANSITION': False,               # トランジション/トランスバージョン
-    'TRANSITION_HUMAN_RSCU_DIFF': False,  # トランジション×ヒトRSCU差
-    'TRANSITION_SCV2_RSCU_DIFF': False,   # トランジション×SCV2 RSCU差
-    'CPG_DIFF': False,                    # CpGジヌクレオチド変化量
-    'UPA_DIFF': False,                    # UpAジヌクレオチド変化量
-    'HUMAN_RSCU_BEFORE': False,           # 変異前ヒトRSCU
-    'SCV2_RSCU_BEFORE': False,            # 変異前SCV2 RSCU
-    'HUMAN_FREQ_BEFORE': False,           # 変異前ヒトコドン頻度
-    'HUMAN_FREQ_DIFF': False,             # ヒトコドン頻度差分
-    'SCV2_FREQ_BEFORE': False,            # 変異前SCV2コドン頻度
-    'SCV2_FREQ_DIFF': False,              # SCV2コドン頻度差分
-    'HUMAN_CAI_BEFORE': False,            # 変異前ヒトCAI
-    'HUMAN_CAI_DIFF': False,              # ヒトCAI差分
-    'SCV2_CAI_BEFORE': False,             # 変異前SCV2 CAI
-    'SCV2_CAI_DIFF': False,               # SCV2 CAI差分
-    'HOST_RSCU_RATIO_BEFORE': False,      # 変異前宿主RSCU比
-    'HOST_RSCU_RATIO_DIFF': False,        # 宿主RSCU比差分
-
-    # --- 累積変異カウント (num[30..31]) ---
-    'CUM_SYN': False,    # パス内シノニマス変異累積数
-    'CUM_NONSYN': False, # パス内ノンシノニマス変異累積数
-
-    # --- 亜系統の流行ダイナミクス (num[32..35]、USE_LINEAGE_GROWTH_FEATURES=True 時) ---
-    'LINEAGE_LOG_COUNT_RECENT': False,  # 直近K週件数（規模）
-    'LINEAGE_GROWTH_RATE': False,       # log件数の傾き（勢い）
-    'LINEAGE_REL_GROWTH_ADV': False,    # logitシェアの傾き（相対成長優位）
-    'LINEAGE_GROWTH_ACCEL': False,      # growth_rate の加速度
-
-    # --- 前後塩基コンテキスト（CONTEXT_WINDOW 分まで個別制御可）---
-    'MUTATION_CONTEXT': False,     # 全コンテキスト塩基を一括無効化
-    'MUTATION_CONTEXT_L1': False,  # 1文字前 (P-1)
-    'MUTATION_CONTEXT_L2': False,  # 2文字前 (P-2)
-    'MUTATION_CONTEXT_L3': False,  # 3文字前 (P-3)
-    'MUTATION_CONTEXT_L4': False,  # 4文字前 (P-4)
-    'MUTATION_CONTEXT_L5': False,  # 5文字前 (P-5)
-    'MUTATION_CONTEXT_R1': False,  # 1文字後 (P+1)
-    'MUTATION_CONTEXT_R2': False,  # 2文字後 (P+2)
-    'MUTATION_CONTEXT_R3': False,  # 3文字後 (P+3)
-    'MUTATION_CONTEXT_R4': False,  # 4文字後 (P+4)
-    'MUTATION_CONTEXT_R5': False,  # 5文字後 (P+5)
-}
 ```
+
+これに加え、数値・カテゴリ特徴量ごとの個別アブレーションマスク（`ABLATION_MASKS`、物理化学6・ホスト適応24・累積変異2・亜系統成長4・コンテキスト塩基11の計47項目、再前処理不要・動的適用）がある。**全項目一覧は [docs/ablation.md](docs/ablation.md) を参照。**
 
 ---
 
