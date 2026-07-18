@@ -131,16 +131,26 @@ def get_fold_windows():
 
 def discover_fold_checkpoints(walk_forward_dir, folds=None):
     """walk_forward_dir 以下の fold_N/*/models/best_model.pth を探索し {fold_id: path} を返す。"""
+    return discover_fold_files(walk_forward_dir, 'best_model.pth', folds)
+
+
+def discover_fold_files(walk_forward_dir, filename, folds=None):
+    """walk_forward_dir 以下の fold_N/*/**/<filename> を探索し {fold_id: path} を返す。
+
+    checkpoint(models/best_model.pth) に限らず csv/*.csv 等、fold_N 直下に
+    ネストされたどのファイルにも使える汎用版。同名ファイルが1 fold内に複数あれば
+    最後に見つかったものを採用する（walk_forward 出力は fold あたり1タイムスタンプのため通常起きない）。
+    """
     import re
-    fold_ckpts = {}
+    found = {}
     for root, _dirs, files in os.walk(walk_forward_dir):
-        if 'best_model.pth' in files:
+        if filename in files:
             m = re.search(r'fold_(\d+)', root)
             if m:
-                fold_ckpts[int(m.group(1))] = os.path.join(root, 'best_model.pth')
+                found[int(m.group(1))] = os.path.join(root, filename)
     if folds:
-        fold_ckpts = {f: p for f, p in fold_ckpts.items() if f in set(folds)}
-    return fold_ckpts
+        found = {f: p for f, p in found.items() if f in set(folds)}
+    return found
 
 
 def load_fold_model(checkpoint, device):

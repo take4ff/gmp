@@ -19,10 +19,16 @@ Usage:
   python -m transformer_260707.scripts.analysis.xai.local_explain \\
       --checkpoint outputs/.../models/best_model.pth --split test --n_samples 8 --ig_steps 32
 
-  # walk-forward: 特定のVOC期を担当するフォールドを指定して、その期のtestサンプルで
+  # walk-forward（1fold指定）: 特定のVOC期を担当するフォールドを指定して、その期のtestサンプルで
   # ケーススタディを行う（例: fold 3 = Omicron BA.1/BA.2 初期）
   python -m transformer_260707.scripts.analysis.xai.local_explain \\
       --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp> --fold 3 --n_samples 8
+
+  # walk-forward（全fold集約）: --fold を省略すると全foldを個別に説明し(fold_N/に保存)、
+  # 全fold横断で「どの特徴/遺伝子が繰り返し上位寄与に来るか」を頻度・|寄与|合計で集約する
+  # （個々のサンプルのIG値自体は性質上合算できないため、頻度集計という形で全体傾向を出す）
+  python -m transformer_260707.scripts.analysis.xai.local_explain \\
+      --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp> --n_samples 8
 """
 
 import argparse
@@ -30,6 +36,7 @@ import json
 import os
 
 import numpy as np
+import pandas as pd
 import torch
 
 from transformer_260707 import config
@@ -92,58 +99,25 @@ def _integrated_gradients(model, x_cat, x_num, mask, target_pos, steps):
     return (x_num - baseline) * avg_grad
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Local explanation via Integrated Gradients')
-    parser.add_argument('--checkpoint', type=str, default=None)
-    parser.add_argument('--walk_forward_dir', type=str, default=None,
-                         help='walk_forward 結果ディレクトリ（--fold と併用。特定VOC期のフォールドで説明する）')
-    parser.add_argument('--fold', type=int, default=None, help='walk_forward_dir 使用時に対象とするフォールドID')
-    parser.add_argument('--split', type=str, default='test', choices=['train', 'val', 'test'])
-    parser.add_argument('--n_samples', type=int, default=8, help='説明するサンプル数（先頭から）')
-    parser.add_argument('--ig_steps', type=int, default=32)
-    parser.add_argument('--top', type=int, default=5, help='上位いくつを表示するか')
-    parser.add_argument('--force_cpu', action='store_true')
-    parser.add_argument('--output_dir', type=str, default=None)
-    parser.add_argument('--voc_search', action='store_true', default=True,
-                         help='既知VOC変異(D614G, N501Y等)がtop-1予測のサンプルを優先抽出する（既定で有効）')
-    parser.add_argument('--no_voc_search', dest='voc_search', action='store_false')
-    parser.add_argument('--scan_batches', type=int, default=30,
-                         help='VOC変異サンプルを探すために走査する最大バッチ数')
-    args = parser.parse_args()
-
-    if args.walk_forward_dir:
-        if args.fold is None:
-            raise SystemExit("--walk_forward_dir 使用時は --fold の指定が必要です")
-        fold_ckpts = X.discover_fold_checkpoints(args.walk_forward_dir, [args.fold])
-        if args.fold not in fold_ckpts:
-            raise SystemExit(f"[ERROR] fold {args.fold} のチェックポイントが見つかりません: {args.walk_forward_dir}")
-        train_start, split_date, split_end = X.get_fold_windows()[args.fold]
-        from transformer_260707.db.connection import get_db_path
-        X.assign_fold_test_window(get_db_path(), train_start, split_date, split_end)
-        args.checkpoint = fold_ckpts[args.fold]
-        force_print(f"[INFO] Fold {args.fold} (test window [{split_date}, {split_end})) の checkpoint を使用: {args.checkpoint}")
-    elif not args.checkpoint:
-        raise SystemExit("--checkpoint または --walk_forward_dir+--fold のいずれかが必要です")
-
-    out_dir = X.make_output_dir('local_explain', args.output_dir)
-    force_print(f"Output dir: {out_dir}")
-
+def _explain_checkpoint(checkpoint, split, n_samples, ig_steps, top, force_cpu,
+                        voc_search, scan_batches, pos2gene, feat_names, out_dir):
+    """1つのcheckpointに対しIG局所説明を行い、explanationsを保存・returnする
+    （単一checkpoint実行とwalk-forwardのfold毎実行の両方から呼ばれる共通処理）。
+    """
     model, loader, device = X.load_model_and_loader(
-        args.checkpoint, split=args.split, batch_size=max(8, args.n_samples), force_cpu=args.force_cpu)
-    pos2gene = X.load_position_gene_map()
-    feat_names = _NUM_FEATURE_NAMES[:config.NUM_CHEM_FEATURES]
+        checkpoint, split=split, batch_size=max(8, n_samples), force_cpu=force_cpu)
 
     voc_samples = []
-    if args.voc_search:
+    if voc_search:
         voc_samples, fallback_batch = _find_voc_samples(
-            model, loader, device, KNOWN_VOC_POSITIONS, args.n_samples, args.scan_batches)
+            model, loader, device, KNOWN_VOC_POSITIONS, n_samples, scan_batches)
         force_print(f"[INFO] 既知VOC変異が予測されたサンプル: {len(voc_samples)}件"
-                     f"（最大{args.scan_batches}バッチ走査、対象: {list(KNOWN_VOC_POSITIONS.values())}）")
+                     f"（最大{scan_batches}バッチ走査、対象: {list(KNOWN_VOC_POSITIONS.values())}）")
     else:
         fallback_batch = next(iter(loader))[0]
         fallback_batch = tuple(t.to(device) for t in fallback_batch)
 
-    n_fallback = max(0, args.n_samples - len(voc_samples))
+    n_fallback = max(0, n_samples - len(voc_samples))
     fb_x_cat, fb_x_num, fb_mask = fallback_batch
     fb_x_cat, fb_x_num, fb_mask = fb_x_cat[:n_fallback], fb_x_num[:n_fallback], fb_mask[:n_fallback]
 
@@ -164,7 +138,7 @@ def main():
         out = model(x_cat, x_num, src_key_padding_mask=mask)
         pred_pos = torch.argmax(out[1], dim=1)            # [B] top-1 予測位置
 
-    ig = _integrated_gradients(model, x_cat, x_num, mask, pred_pos, args.ig_steps)  # [B,T,C,F]
+    ig = _integrated_gradients(model, x_cat, x_num, mask, pred_pos, ig_steps)  # [B,T,C,F]
     ig_np = ig.detach().cpu().numpy()
     x_cat_np = x_cat.detach().cpu().numpy()
     pred_pos_np = pred_pos.cpu().numpy()
@@ -175,7 +149,7 @@ def main():
         gene = pos2gene.get(p, ('unknown', '0'))[0]
         # 特徴別寄与（|IG| を T,C,B 以外で集約）
         feat_attr = np.abs(ig_np[i]).sum(axis=(0, 1))     # [F]
-        top_feats = np.argsort(feat_attr)[::-1][:args.top]
+        top_feats = np.argsort(feat_attr)[::-1][:top]
         # 入力変異スロット別寄与（|IG| を F で集約）→ そのスロットの位置(x_cat[...,1])
         slot_attr = np.abs(ig_np[i]).sum(axis=2)          # [T, C]
         valid = x_cat_np[i][..., 0] != 0                  # base_before!=0 が有効スロット
@@ -198,7 +172,7 @@ def main():
                  'attribution': float(feat_attr[j])} for j in top_feats],
             'top_input_mutations': [
                 {'timestep': t, 'position': pos, 'gene': pos2gene.get(pos, ('unknown', '0'))[0],
-                 'attribution': a} for a, t, pos in slot_list[:args.top]],
+                 'attribution': a} for a, t, pos in slot_list[:top]],
         })
 
     X.save_json(explanations, out_dir, 'local_explanations.json')
@@ -209,6 +183,142 @@ def main():
         force_print("  寄与の大きい特徴: " + ", ".join(f"{f['feature']}({f['attribution']:.3g})" for f in e['top_features']))
         force_print("  寄与の大きい入力変異: " + ", ".join(
             f"{m['position']}({m['gene']})" for m in e['top_input_mutations']))
+
+    return explanations
+
+
+def _aggregate_pooled(all_explanations, out_dir, meta_extra=None):
+    """全fold横断で、上位寄与に来た特徴/入力変異側の遺伝子を頻度・寄与合計で集計する。
+    個々のサンプル説明(IG値)自体は性質上「合計」できないため、fold個別のjsonは別途
+    fold_N/local_explanations.json に残し、ここでは「何が繰り返し上位に来るか」を集約する。
+    """
+    from collections import defaultdict
+    feat_attr_sum = defaultdict(float)
+    feat_count = defaultdict(int)
+    gene_attr_sum = defaultdict(float)
+    gene_count = defaultdict(int)
+    for e in all_explanations:
+        for f in e['top_features']:
+            feat_attr_sum[f['feature']] += abs(f['attribution'])
+            feat_count[f['feature']] += 1
+        for m in e['top_input_mutations']:
+            gene_attr_sum[m['gene']] += abs(m['attribution'])
+            gene_count[m['gene']] += 1
+
+    feat_rows = sorted(
+        [{'feature': k, 'total_abs_attribution': v, 'appearances_in_top': feat_count[k]}
+         for k, v in feat_attr_sum.items()],
+        key=lambda r: r['total_abs_attribution'], reverse=True)
+    gene_rows = sorted(
+        [{'gene': k, 'total_abs_attribution': v, 'appearances_in_top': gene_count[k]}
+         for k, v in gene_attr_sum.items()],
+        key=lambda r: r['total_abs_attribution'], reverse=True)
+
+    X.save_csv(pd.DataFrame(feat_rows), out_dir, 'pooled_top_features.csv')
+    X.save_csv(pd.DataFrame(gene_rows), out_dir, 'pooled_top_input_genes.csv')
+    meta = {'n_explanations_total': len(all_explanations)}
+    if meta_extra:
+        meta.update(meta_extra)
+    X.save_json(meta, out_dir, 'pooled_meta.json')
+
+    force_print("\n===== 全fold横断: 上位寄与特徴（出現回数・|寄与|合計）=====")
+    for r in feat_rows[:10]:
+        force_print(f"  {r['feature']:20s} appearances={r['appearances_in_top']:3d}  "
+                    f"total_abs_attr={r['total_abs_attribution']:.3g}")
+    force_print("\n===== 全fold横断: 上位寄与入力変異の遺伝子（出現回数・|寄与|合計）=====")
+    for r in gene_rows[:10]:
+        force_print(f"  {r['gene']:14s} appearances={r['appearances_in_top']:3d}  "
+                    f"total_abs_attr={r['total_abs_attribution']:.3g}")
+
+
+def run_walk_forward_all(args, pos2gene, feat_names):
+    """全フォールドを自分の test 期間・自分のcheckpointで個別に説明し、fold個別結果は
+    out_dir/fold_N/ に、全fold横断の上位寄与特徴/遺伝子の集約は out_dir 直下に保存する。
+    """
+    from transformer_260707.db.connection import get_db_path
+
+    fold_windows = X.get_fold_windows()
+    fold_ckpts = X.discover_fold_checkpoints(args.walk_forward_dir, args.folds)
+    if not fold_ckpts:
+        raise SystemExit(f"[ERROR] fold チェックポイントが見つかりません: {args.walk_forward_dir}")
+    force_print(f"[INFO] 発見したフォールド: {sorted(fold_ckpts)}")
+
+    out_dir = X.make_output_dir('local_explain_walk_forward', args.output_dir)
+    force_print(f"Output dir: {out_dir}")
+
+    all_explanations = []
+    used_folds = []
+    for fold_id in sorted(fold_ckpts):
+        if fold_id not in fold_windows:
+            force_print(f"[WARN] fold {fold_id} は FOLDS 定義に無いためスキップ")
+            continue
+        train_start, split_date, split_end = fold_windows[fold_id]
+        force_print(f"\n===== Fold {fold_id}: test window [{split_date}, {split_end}) =====")
+        X.assign_fold_test_window(get_db_path(), train_start, split_date, split_end)
+
+        fold_dir = os.path.join(out_dir, f'fold_{fold_id}')
+        os.makedirs(fold_dir, exist_ok=True)
+        explanations = _explain_checkpoint(
+            fold_ckpts[fold_id], args.split, args.n_samples, args.ig_steps, args.top,
+            args.force_cpu, args.voc_search, args.scan_batches, pos2gene, feat_names, fold_dir)
+        for e in explanations:
+            e['fold'] = fold_id
+        all_explanations.extend(explanations)
+        used_folds.append(fold_id)
+
+    force_print(f"\n[INFO] folds={used_folds}, 説明サンプル総数={len(all_explanations)}")
+    _aggregate_pooled(all_explanations, out_dir,
+                      meta_extra={'folds': used_folds, 'walk_forward_dir': args.walk_forward_dir,
+                                  'n_samples_per_fold': args.n_samples})
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Local explanation via Integrated Gradients')
+    parser.add_argument('--checkpoint', type=str, default=None)
+    parser.add_argument('--walk_forward_dir', type=str, default=None,
+                         help='walk_forward 結果ディレクトリ。--fold 指定時はそのfoldのみ、'
+                              '未指定時は全foldを個別に説明し上位寄与特徴を集約する')
+    parser.add_argument('--fold', type=int, default=None,
+                         help='walk_forward_dir 使用時に対象を1foldに絞る（特定VOC期のケーススタディ用）')
+    parser.add_argument('--folds', type=int, nargs='+', default=None,
+                         help='walk_forward_dir 使用時（--foldなし＝全fold集約モード）に対象を絞る')
+    parser.add_argument('--split', type=str, default='test', choices=['train', 'val', 'test'])
+    parser.add_argument('--n_samples', type=int, default=8, help='説明するサンプル数（先頭から）')
+    parser.add_argument('--ig_steps', type=int, default=32)
+    parser.add_argument('--top', type=int, default=5, help='上位いくつを表示するか')
+    parser.add_argument('--force_cpu', action='store_true')
+    parser.add_argument('--output_dir', type=str, default=None)
+    parser.add_argument('--voc_search', action='store_true', default=True,
+                         help='既知VOC変異(D614G, N501Y等)がtop-1予測のサンプルを優先抽出する（既定で有効）')
+    parser.add_argument('--no_voc_search', dest='voc_search', action='store_false')
+    parser.add_argument('--scan_batches', type=int, default=30,
+                         help='VOC変異サンプルを探すために走査する最大バッチ数')
+    args = parser.parse_args()
+
+    pos2gene = X.load_position_gene_map()
+    feat_names = _NUM_FEATURE_NAMES[:config.NUM_CHEM_FEATURES]
+
+    if args.walk_forward_dir and args.fold is None:
+        run_walk_forward_all(args, pos2gene, feat_names)
+        return
+
+    if args.walk_forward_dir:
+        fold_ckpts = X.discover_fold_checkpoints(args.walk_forward_dir, [args.fold])
+        if args.fold not in fold_ckpts:
+            raise SystemExit(f"[ERROR] fold {args.fold} のチェックポイントが見つかりません: {args.walk_forward_dir}")
+        train_start, split_date, split_end = X.get_fold_windows()[args.fold]
+        from transformer_260707.db.connection import get_db_path
+        X.assign_fold_test_window(get_db_path(), train_start, split_date, split_end)
+        args.checkpoint = fold_ckpts[args.fold]
+        force_print(f"[INFO] Fold {args.fold} (test window [{split_date}, {split_end})) の checkpoint を使用: {args.checkpoint}")
+    elif not args.checkpoint:
+        raise SystemExit("--checkpoint または --walk_forward_dir のいずれかが必要です")
+
+    out_dir = X.make_output_dir('local_explain', args.output_dir)
+    force_print(f"Output dir: {out_dir}")
+
+    _explain_checkpoint(args.checkpoint, args.split, args.n_samples, args.ig_steps, args.top,
+                       args.force_cpu, args.voc_search, args.scan_batches, pos2gene, feat_names, out_dir)
 
 
 if __name__ == '__main__':

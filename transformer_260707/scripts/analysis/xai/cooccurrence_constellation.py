@@ -137,12 +137,17 @@ def run_walk_forward(args):
             max_cooccurrence=config.MAX_CO_OCCURRENCE,
         )
         pred_pairs, tgt_pairs = _accumulate(model, loader, args.n_batches, device, args.top_k)
+        fold_dir = os.path.join(out_dir, f'fold_{fold_id}')
+        os.makedirs(fold_dir, exist_ok=True)
+        _report(pred_pairs, tgt_pairs, fold_dir, pos2gene, args.top_k,
+                meta_extra={'mode': 'single_fold', 'fold': fold_id})
         pred_pairs_total.update(pred_pairs)
         tgt_pairs_total.update(tgt_pairs)
         used_folds.append(fold_id)
         del model
 
     force_print(f"[INFO] folds={used_folds}")
+    force_print("[INFO] 全fold合算（pooled）を集計します...")
     _report(pred_pairs_total, tgt_pairs_total, out_dir, pos2gene, args.top_k,
             meta_extra={'mode': 'walk_forward', 'folds': used_folds,
                         'n_batches_per_fold': args.n_batches, 'walk_forward_dir': args.walk_forward_dir})

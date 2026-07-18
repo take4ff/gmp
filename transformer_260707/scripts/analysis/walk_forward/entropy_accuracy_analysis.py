@@ -1,4 +1,4 @@
-# --- transformer_260707/scripts/analysis/entropy_accuracy_analysis.py ---
+# --- transformer_260707/scripts/analysis/walk_forward/entropy_accuracy_analysis.py ---
 """系統別ターゲットエントロピーと精度の関係を分析し、Fano不等式で理論的達成可能精度を導く。
 
 背景: abstractの「オミクロン株は変異が多様なため塩基配列位置精度が10%に低下」という記述を
@@ -15,7 +15,7 @@
       したがってここで導く精度上限は「これより下がることはない」という安全側（緩め）の値である。
 
 Usage:
-    python -m transformer_260707.scripts.analysis.xai.entropy_accuracy_analysis \\
+    python -m transformer_260707.scripts.analysis.walk_forward.entropy_accuracy_analysis \\
         --walk_forward_dir outputs/transformer_260707/results/walk_forward/<timestamp>
 """
 import argparse

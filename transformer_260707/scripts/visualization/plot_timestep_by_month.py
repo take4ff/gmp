@@ -93,8 +93,16 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, 'timestep_by_month.png')
     plt.savefig(out_path, dpi=150)
-    plt.close()
     print(f"[INFO] Saved: {out_path}")
+
+    from transformer_260707.scripts.visualization._fold_annotate import add_fold_annotations
+    add_fold_annotations(ax, months)
+    ax.set_title(ax.get_title(), pad=30)
+    out_path_fold = os.path.join(output_dir, 'timestep_by_month_by_fold.png')
+    plt.savefig(out_path_fold, dpi=150, bbox_inches='tight')
+    print(f"[INFO] Saved: {out_path_fold}")
+
+    plt.close()
     print(f"[INFO] Months: {len(months)}, Total samples: {sum(r[1] for r in rows):,}")
 
 

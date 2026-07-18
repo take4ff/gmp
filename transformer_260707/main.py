@@ -982,45 +982,271 @@ def _wf_resolve_fold_csv_dir(fold_id, wf_run_dir):
     return csv_dir if os.path.isdir(csv_dir) else None
 
 
-def _wf_plot_monthly_hitrate(monthly, wf_run_dir):
-    """月次 Top-1 hit-rate を walk-forward の連続時系列としてプロットし png 保存する。"""
+def _wf_plot_monthly_hitrate(monthly, wf_run_dir, fold_desc=None):
+    """月次 Top-1 hit-rate を walk-forward の連続時系列としてプロットし png 保存する。
+
+    fold_desc: {fold_id: description} 。scripts/eval/walk_forward.py の FOLDS に定義された
+    優勢系統era名（例: 'Omicron early (BA.1/BA.2)'）をfold区切りラベルに併記する。
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    df = monthly[monthly['yearmonth'] != 'unknown'].sort_values('yearmonth')
+    fold_desc = fold_desc or {}
+    # 'unknown' に加え、collection_date が不正な行（例: '2022/2024' 由来の '2022/20' 等）も除外する。
+    # 既知issue: reference/sequences-241017_2.csv の一部レコード（Zimbabwe/Harare, release_date=
+    # 2025-07-18, 217件）が Collection_Date='2022/2024' という不正値を持ち、文字列比較の split
+    # ロジック（assign_fold_test_window）で偶然 fold4 のテスト窓に混入していた。DB再構築なしでの
+    # 応急対応として、月ラベルが YYYY-MM 形式に一致しない行は表示から除外する。
+    df = monthly[monthly['yearmonth'].astype(str).str.match(r'^\d{4}-\d{2}$')].sort_values('yearmonth')
     if df.empty:
         return
     x = df['yearmonth'].tolist()
     xi = list(range(len(x)))
     fig, ax = plt.subplots(figsize=(max(10, len(x) * 0.28), 5))
     for col, label, color in [
-        ('region_hit_rate',   'Region',        '#4E79A7'),
-        ('position_hit_rate', 'Base Position', '#E15759'),
-        ('aa_pos_hit_rate',   'AA Position',   '#59A14F'),
+        ('region_hit_rate',     'Region',        '#4E79A7'),
+        ('position_hit_rate',   'Base Position', '#E15759'),
+        ('aa_pos_hit_rate',     'AA Position',   '#59A14F'),
+        ('codon_pos_hit_rate',  'Codon Pos',     '#B07AA1'),
+        ('synonymous_hit_rate', 'Synonymous',    '#EDC948'),
     ]:
         if col in df.columns:
             ax.plot(xi, df[col], marker='o', ms=3, lw=1.2, label=label, color=color)
-    # フォールド境界に薄い区切り線を入れる
+    # フォールド境界に薄い区切り線 + fold番号/優勢系統eraラベルを入れる
     if 'fold' in df.columns:
+        folds_list = df['fold'].tolist()
+
+        def _label(fid):
+            desc = fold_desc.get(fid, '')
+            return f'fold{fid}: {desc}' if desc else f'fold{fid}'
+
         prev = None
-        for i, f in enumerate(df['fold'].tolist()):
+        seg_start = 0
+        for i, f in enumerate(folds_list):
             if prev is not None and f != prev:
-                ax.axvline(i - 0.5, color='0.8', ls='--', lw=0.8)
+                ax.axvline(i - 0.5, color='black', ls='--', lw=0.8)
+                mid = (seg_start + i - 1) / 2
+                ax.text(mid, 1.01, _label(prev), transform=ax.get_xaxis_transform(),
+                        ha='center', va='bottom', fontsize=5.5, color='black', rotation=0)
+                seg_start = i
             prev = f
+        if folds_list:
+            mid = (seg_start + len(folds_list) - 1) / 2
+            ax.text(mid, 1.01, _label(prev), transform=ax.get_xaxis_transform(),
+                    ha='center', va='bottom', fontsize=5.5, color='black', rotation=0)
     step = max(1, len(x) // 24)
     ax.set_xticks(xi[::step])
     ax.set_xticklabels(x[::step], rotation=90, fontsize=7)
     ax.set_ylabel('Top-1 Hit Rate (%)')
     ax.set_xlabel('Year-Month (walk-forward test timeline)')
-    ax.set_title('Monthly Top-1 Hit Rate across all folds')
+    ax.set_title('Monthly Top-1 Hit Rate across all folds', pad=32)
     ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.5), fontsize=8)
     fig.tight_layout()
     ppath = os.path.join(wf_run_dir, 'monthly_hitrate_all_folds.png')
     fig.savefig(ppath, dpi=130)
     plt.close(fig)
     force_print(f"[WF-Pool] monthly hitrate plot → {ppath}")
+
+
+def _wf_plot_nll_trend(nll_frames, fold_desc, wf_run_dir):
+    """タスク別 held-out NLL の fold横断トレンド（5小図）を保存する。
+    nll_pooled_all_folds.csv が全fold平均を1値に潰すのに対し、こちらはfold別の値を残し
+    時代（era）による難易度変化を見る。
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    if not nll_frames:
+        return
+    cat = pd.concat(nll_frames, ignore_index=True)
+    folds_sorted = sorted(cat['fold'].unique())
+    xtick_labels = [f"fold{f}\n{fold_desc.get(f, '')}" for f in folds_sorted]
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+
+    fig, axes = plt.subplots(1, len(tasks), figsize=(4 * len(tasks), 5), sharex=True)
+    for ax, task in zip(axes, tasks):
+        sub = cat[cat['task'] == task].set_index('fold').reindex(folds_sorted)
+        ax.plot(range(len(folds_sorted)), sub['nll_nats'], marker='o', color='#c0392b')
+        ax.set_title(task)
+        ax.set_xticks(range(len(folds_sorted)))
+        ax.set_xticklabels(xtick_labels, fontsize=7, rotation=45, ha='right')
+        ax.set_ylabel('NLL (nats)')
+        ax.grid(alpha=0.3)
+    fig.suptitle('Held-out NLL trend across folds (test split)')
+    plt.tight_layout()
+    path = os.path.join(wf_run_dir, 'nll_trend_by_fold.png')
+    fig.savefig(path, dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    force_print(f"[WF-Pool] NLL trend plot → {path}")
+
+
+def _wf_plot_confident_subset_trend(conf_frames, fold_desc, wf_run_dir):
+    """確信度ベース coverage-vs-hit_rate 曲線を fold 別に色分けして重ね描きする（タスク別5小図）。
+    confident_subset_pooled_all_folds.csv が全fold加重平均に潰すのに対し、こちらはfold別の
+    曲線を残し、確信度による絞り込みが時代を跨いで同じように効くかを見る。
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    if not conf_frames:
+        return
+    cat = pd.concat(conf_frames, ignore_index=True)
+    folds_sorted = sorted(cat['fold'].unique())
+    cmap = plt.get_cmap('viridis', max(len(folds_sorted), 2))
+    tasks = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
+
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9), sharex=True)
+    axes = axes.flatten()
+    for ax, task in zip(axes, tasks):
+        for i, fid in enumerate(folds_sorted):
+            sub = cat[(cat['task'] == task) & (cat['fold'] == fid)].sort_values('coverage')
+            ax.plot(sub['coverage'], sub['hit_rate_pct'], marker='o', color=cmap(i),
+                     label=f"fold{fid}: {fold_desc.get(fid, '')}")
+        ax.invert_xaxis()
+        ax.set_title(task)
+        ax.set_xlabel('Coverage (1.0=all, 0.1=top10% confident)')
+        ax.set_ylabel('Hit Rate (%)')
+        ax.grid(alpha=0.3)
+    axes[-1].axis('off')
+    handles, labels = axes[0].get_legend_handles_labels()
+    axes[-1].legend(handles, labels, title='Fold (era)', fontsize=7, loc='center')
+    fig.suptitle('Confidence-based coverage curve across folds (test split)')
+    plt.tight_layout()
+    path = os.path.join(wf_run_dir, 'confident_subset_trend_by_fold.png')
+    fig.savefig(path, dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    force_print(f"[WF-Pool] confident subset trend plot → {path}")
+
+
+def _wf_plot_region_trend(reg_frames, fold_desc, wf_run_dir, top_n=12):
+    """遺伝子(region)別 recall の fold横断トレンドを、サンプル数上位 top_n 遺伝子に絞って描く。
+    region_metrics_pooled_all_folds.csv が全fold合算の1値に潰すのに対し、こちらはfold別の
+    値を残し、どの遺伝子が時代とともに悪化/改善するかを見る。
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    if not reg_frames:
+        return
+    cat = pd.concat(reg_frames, ignore_index=True)
+    folds_sorted = sorted(cat['fold'].unique())
+    xtick_labels = [f"fold{f}\n{fold_desc.get(f, '')}" for f in folds_sorted]
+    top_regions = (cat.groupby('region_name')['sample_count'].sum()
+                   .sort_values(ascending=False).head(top_n).index.tolist())
+    cmap = plt.get_cmap('tab20', max(len(top_regions), 2))
+
+    fig, ax = plt.subplots(figsize=(max(12, len(folds_sorted) * 1.8), 7))
+    for i, region in enumerate(top_regions):
+        sub = cat[cat['region_name'] == region].set_index('fold').reindex(folds_sorted)
+        ax.plot(range(len(folds_sorted)), sub['recall_pct'], marker='o', color=cmap(i), label=region)
+    ax.set_xticks(range(len(folds_sorted)))
+    ax.set_xticklabels(xtick_labels, fontsize=8, rotation=45, ha='right')
+    ax.set_ylabel('Recall (%)')
+    ax.set_title(f'Region-level recall trend across folds (test split)\n'
+                 f'Top {len(top_regions)} genes by total sample count')
+    ax.legend(fontsize=7, ncol=2, loc='best')
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    path = os.path.join(wf_run_dir, 'region_recall_trend_by_fold.png')
+    fig.savefig(path, dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    force_print(f"[WF-Pool] region recall trend plot → {path}")
+
+
+def _wf_plot_strength_trend(strength_frames, fold_desc, wf_run_dir):
+    """流行度カテゴリ(9段階)別精度の fold横断トレンドをタスク別5小図で描く。
+    category_metrics_all_folds.csv は低頻度〜高頻度をlow/medium/highの3段階に潰すのに対し、
+    こちらは test_strength_fine.csv の9段階ビンをそのままfold別トレンドとして残す。
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    if not strength_frames:
+        return
+    cat = pd.concat(strength_frames, ignore_index=True)
+    folds_sorted = sorted(cat['fold'].unique())
+    xtick_labels = [f"fold{f}\n{fold_desc.get(f, '')}" for f in folds_sorted]
+    task_cols = ['region_hit_rate_pct', 'position_hit_rate_pct', 'aa_pos_hit_rate_pct',
+                 'codon_pos_hit_rate_pct', 'synonymous_hit_rate_pct']
+    category_order = ['~100', '~500', '~1K', '~5K', '~10K', '~50K', '~100K', '~500K', '>500K']
+    categories = [c for c in category_order if c in set(cat['strength_category'])]
+    cmap = plt.get_cmap('plasma', max(len(categories), 2))
+
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9), sharex=True)
+    axes = axes.flatten()
+    for ax, col in zip(axes, task_cols):
+        for i, sc in enumerate(categories):
+            sub = cat[cat['strength_category'] == sc].set_index('fold').reindex(folds_sorted)
+            ax.plot(range(len(folds_sorted)), sub[col], marker='o', color=cmap(i), label=sc)
+        ax.set_title(col.replace('_hit_rate_pct', ''))
+        ax.set_xticks(range(len(folds_sorted)))
+        ax.set_xticklabels(xtick_labels, fontsize=7, rotation=45, ha='right')
+        ax.set_ylabel('Hit Rate (%)')
+        ax.grid(alpha=0.3)
+    axes[-1].axis('off')
+    handles, labels = axes[0].get_legend_handles_labels()
+    axes[-1].legend(handles, labels, title='Strength category\n(prevalence, low→high)',
+                     fontsize=8, loc='center')
+    fig.suptitle('Strength-category accuracy trend across folds (test split)')
+    plt.tight_layout()
+    path = os.path.join(wf_run_dir, 'strength_category_trend_by_fold.png')
+    fig.savefig(path, dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    force_print(f"[WF-Pool] strength category trend plot → {path}")
+
+
+def _wf_plot_diversity_trend(diversity_frames, fold_desc, wf_run_dir):
+    """系統粒度の entropy_norm / unique_ratio / simpson vs 位置正解率を、fold別に色分けして
+    3枚重ね描きする（utils/plotting.py の3種散布図を fold 単位の色分けに差し替えた版）。
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    if not diversity_frames:
+        return
+    cat = pd.concat(diversity_frames, ignore_index=True)
+    folds_sorted = sorted(cat['fold'].unique())
+    cmap = plt.get_cmap('viridis', max(len(folds_sorted), 2))
+    metric_specs = [
+        ('entropy_norm', 'Normalized Target-Position Entropy'),
+        ('unique_ratio', 'Unique Target-Position Ratio'),
+        ('simpson',      'Gini-Simpson Diversity'),
+    ]
+    log_n_all = np.log1p(cat['n'])
+
+    for col, label in metric_specs:
+        fig, ax = plt.subplots(figsize=(9, 6))
+        for i, fid in enumerate(folds_sorted):
+            sub = cat[cat['fold'] == fid]
+            log_n = np.log1p(sub['n'])
+            sizes = 20 + (log_n - log_n_all.min()) / (log_n_all.max() - log_n_all.min() + 1e-9) * 400
+            ax.scatter(sub[col], sub['hit_rate'], s=sizes, alpha=0.65, color=cmap(i),
+                       edgecolors='gray', linewidths=0.3,
+                       label=f"fold{fid}: {fold_desc.get(fid, '')}")
+        ax.set_xlabel(label)
+        ax.set_ylabel('Position Hit Rate (%)')
+        ax.set_title(f'{label} vs Position Hit Rate — all folds overlaid\n'
+                     f'(per-lineage, test split, point size ∝ log(n_samples))')
+        ax.legend(fontsize=7, loc='best')
+        ax.grid(linestyle='--', alpha=0.35)
+        plt.tight_layout()
+        path = os.path.join(wf_run_dir, f'diversity_{col}_trend_by_fold.png')
+        fig.savefig(path, dpi=130, bbox_inches='tight')
+        plt.close(fig)
+        force_print(f"[WF-Pool] diversity ({col}) trend plot → {path}")
 
 
 def _wf_pool_test_outputs(folds, wf_run_dir):
@@ -1036,6 +1262,10 @@ def _wf_pool_test_outputs(folds, wf_run_dir):
           各フォールドの test_nll.csv を n_samples 重み付きでプールした held-out NLL。
       - confident_subset_pooled_all_folds.csv（推奨追加・C-4）
           各フォールドの test_confident_subset.csv を (task, coverage) 単位で n 重み付き集計。
+      - nll_trend_by_fold.png / confident_subset_trend_by_fold.png / region_recall_trend_by_fold.png
+        / strength_category_trend_by_fold.png / diversity_{entropy_norm,unique_ratio,simpson}_trend_by_fold.png
+          上記の「全fold集約1値」とは別に、fold別の値を残した時系列トレンド版
+          （scripts/analysis/walk_forward/overlay_*.py と同じ可視化をこの関数内に統合したもの）。
     ソース CSV が無いフォールド/指標はスキップする（部分実行・旧フォールドでも落ちない）。
     """
     import pandas as pd
@@ -1049,6 +1279,7 @@ def _wf_pool_test_outputs(folds, wf_run_dir):
     if not fold_csv:
         force_print("[WF-Pool] フォールドの csv が見つからないため集計をスキップします。")
         return
+    fold_desc = {fid: desc for fid, _ts, _sd, _se, desc in folds}
 
     def _read_all(fname):
         frames = []
@@ -1078,13 +1309,15 @@ def _wf_pool_test_outputs(folds, wf_run_dir):
 
     if monthly_frames:
         monthly = pd.concat(monthly_frames, ignore_index=True)
-        # 収集日不明（'unknown'）は時系列に載らないため除外（260625 と同挙動）
-        monthly = monthly[monthly['yearmonth'] != 'unknown']
+        # 収集日不明（'unknown'）は時系列に載らないため除外（260625 と同挙動）。
+        # 加えて collection_date が不正な行（既知issue: '2022/2024' → yearmonth='2022/20'、
+        # reference/sequences-241017_2.csv のZimbabwe/Harare 217件、詳細は上記コメント参照）も除外する。
+        monthly = monthly[monthly['yearmonth'].astype(str).str.match(r'^\d{4}-\d{2}$')]
         monthly = monthly.sort_values(['yearmonth', 'fold']).reset_index(drop=True)
         mpath = os.path.join(wf_run_dir, 'monthly_metrics_all_folds.csv')
         monthly.to_csv(mpath, index=False)
         force_print(f"[WF-Pool] monthly metrics → {mpath}")
-        _wf_plot_monthly_hitrate(monthly, wf_run_dir)
+        _wf_plot_monthly_hitrate(monthly, wf_run_dir, fold_desc=fold_desc)
 
     # --- 2) entropy_bin プール（num_samples 重み付き）---
     ent_frames = _read_all('test_entropy_bin.csv')
@@ -1125,6 +1358,7 @@ def _wf_pool_test_outputs(folds, wf_run_dir):
             npath = os.path.join(wf_run_dir, 'nll_pooled_all_folds.csv')
             pd.DataFrame(rows).to_csv(npath, index=False)
             force_print(f"[WF-Pool] NLL pooled → {npath}")
+    _wf_plot_nll_trend(nll_frames, fold_desc, wf_run_dir)
 
     # --- 4) confident-subset プール（C-4, n 重み付き）---
     conf_frames = _read_all('test_confident_subset.csv')
@@ -1144,6 +1378,7 @@ def _wf_pool_test_outputs(folds, wf_run_dir):
                .sort_values(['task', 'coverage'], ascending=[True, False])
                .to_csv(cpath, index=False))
             force_print(f"[WF-Pool] confident subset pooled → {cpath}")
+    _wf_plot_confident_subset_trend(conf_frames, fold_desc, wf_run_dir)
 
     # --- 5) Top-K precision プール（フォールドのテストサンプル数で重み付け）---
     # 注: per-fold CSV に tp/total 生カウントが無いため厳密な micro 平均ではなく、
@@ -1226,6 +1461,15 @@ def _wf_pool_test_outputs(folds, wf_run_dir):
         (pd.DataFrame(rows).sort_values('sample_count', ascending=False)
            .to_csv(rgpath, index=False))
         force_print(f"[WF-Pool] region metrics pooled → {rgpath}")
+    _wf_plot_region_trend(reg_frames, fold_desc, wf_run_dir)
+
+    # --- 9) 流行度カテゴリ(9段階)別トレンド（test_strength_fine.csv, fold別に残す）---
+    strength_frames = _read_all('test_strength_fine.csv')
+    _wf_plot_strength_trend(strength_frames, fold_desc, wf_run_dir)
+
+    # --- 10) 系統別多様度(entropy/unique_ratio/simpson) vs 精度トレンド ---
+    diversity_frames = _read_all('test_lineage_diversity.csv')
+    _wf_plot_diversity_trend(diversity_frames, fold_desc, wf_run_dir)
 
 
 def run_walk_forward(folds, wf_run_dir: str):

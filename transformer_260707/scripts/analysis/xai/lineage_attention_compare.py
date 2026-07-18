@@ -37,6 +37,7 @@ def _build_single_sample_batch(db_path, sample_id):
     ds = object.__new__(DBIterableDataset)
     ds.db_path = db_path
     ds.sample_ids = [sample_id]
+    ds.group_members = {sample_id: [sample_id]}
     ds._length = 1
     ds.chunk_size = 1
     ds.shuffle = False

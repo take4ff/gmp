@@ -1,37 +1,53 @@
-# --- transformer_260707/scripts/analysis/plot_position_tolerance_comparison.py ---
-"""提案モデルとPETRA型ベースラインの、位置予測の許容誤差(tolerance)別・月別Hit Rateを比較する。
+# --- transformer_260707/scripts/analysis/walk_forward/plot_position_tolerance_comparison.py ---
+"""提案モデルとPETRA型ベースライン（親グループ・any-of-set版）の、位置予測の許容誤差(tolerance)
+別・月別Hit Rateを比較する。
 
 position_tolerance_monthly.py（提案モデル側）と
-petra.eval.plot_monthly_position_tolerance（PETRA側）の出力CSVを読み込み、
-tolerance ごとに別ファイル（1ファイル=1tolerance、両モデルの月別折れ線を重ねる）で保存する。
+petra.eval.plot_monthly_position_tolerance が出力する「親グループ単位・any-of-set」版
+（本体と同じ分岐+共起グルーピング・hit判定に揃えたPETRA評価、--petra_csv_grouped）を読み込み、
+tolerance ごとに別ファイル（1ファイル=1tolerance）で両モデルの月別折れ線を重ねる。
 PETRA側はnon_leaked（train窓に未出現＝真の汎化性能）の数値を使う（本体は構造的にリークしない
 ため素の数値をそのまま使う。詳細は petra_comparison.md 参照）。
 
+PETRAの「枝ごと・単一ターゲット」版（tail-only、本体とは分母・正解集合の広さが異なり直接比較
+不可）はプロットしない（2026-07-18、ユーザー判断）。
+
 Usage:
-  python -m transformer_260707.scripts.analysis.plot_position_tolerance_comparison \
+  python -m transformer_260707.scripts.analysis.walk_forward.plot_position_tolerance_comparison \
       --main_csv outputs/transformer_260707/scripts/position_tolerance_monthly/<ts>/position_tolerance_monthly.csv \
-      --petra_csv outputs/petra/walk_forward/<ts>/monthly_plot/petra_position_tolerance_monthly.csv \
+      --petra_csv_grouped outputs/petra/walk_forward/<ts>/monthly_plot/petra_position_tolerance_monthly_grouped.csv \
       --tolerances 0 5 10 50
 """
 import argparse
 import os
+import re
 
 import pandas as pd
 import matplotlib.pyplot as plt
 
 plt.rcParams['font.family'] = 'Noto Sans CJK JP'
 
+# 既知issue: reference/sequences-241017_2.csv の一部レコード（Zimbabwe/Harare 217件）が
+# Collection_Date='2022/2024' という不正値を持ち、月ラベルが '2022/20' になる
+# （data_quality_collection_date_bug 参照）。上流のどのCSVに残っていても、最終表示段で除外する。
+_YEARMONTH_RE = re.compile(r'^\d{4}-\d{2}$')
+
+
+def _filter_valid_months(df):
+    return df[df['month'].astype(str).str.match(_YEARMONTH_RE)]
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--main_csv', required=True)
-    ap.add_argument('--petra_csv', required=True)
+    ap.add_argument('--petra_csv_grouped', required=True,
+                    help='本体と同じ分岐+共起グルーピング・any-of-set判定に揃えたPETRA評価CSV')
     ap.add_argument('--tolerances', type=int, nargs='+', default=[0, 5, 10, 50])
     ap.add_argument('--output_dir', default=None)
     args = ap.parse_args()
 
-    main_df = pd.read_csv(args.main_csv)
-    petra_df = pd.read_csv(args.petra_csv)
+    main_df = _filter_valid_months(pd.read_csv(args.main_csv))
+    petra_df = _filter_valid_months(pd.read_csv(args.petra_csv_grouped))
 
     months = sorted(set(main_df['month']) | set(petra_df['month']))
     main_df = main_df.set_index('month').reindex(months)
@@ -41,8 +57,8 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     n_main_col = 'n_samples' if 'n_samples' in main_df.columns else 'n'
-    n_petra_col = ('n_sequences_nonleaked' if 'n_sequences_nonleaked' in petra_df.columns
-                   else 'n_sequences')
+    n_petra_col = ('n_groups_nonleaked' if 'n_groups_nonleaked' in petra_df.columns
+                   else 'n_groups')
 
     saved = []
     for tol in args.tolerances:
@@ -58,15 +74,15 @@ def main():
         label = '完全一致 (tolerance=0)' if tol == 0 else f'許容誤差 ±{tol}塩基以内'
         ax1.plot(months, main_df[main_col], marker='o', color='#2980b9',
                  label=f'提案モデル (position top1, {label})')
-        ax1.plot(months, petra_df[petra_col], marker='s', color='#c0392b', linestyle='--',
-                 label=f'PETRA型ベースライン (tail-only, non_leaked, {label})')
+        ax1.plot(months, petra_df[petra_col], marker='^', color='#27ae60', linestyle='--',
+                 label=f'PETRA型ベースライン (親グループ・any-of-set, 本体と同一評価方式, {label})')
         ax1.set_ylabel('Hit Rate (%)')
         ax1.set_title(f'Monthly Position Hit Rate Comparison (tolerance = ±{tol} nt)')
         ax1.legend()
         ax1.grid(alpha=0.3)
 
         ax2.bar(months, main_df[n_main_col], color='#2980b9', alpha=0.5, label='n (proposed)')
-        ax2.bar(months, petra_df[n_petra_col], color='#c0392b', alpha=0.4, label='n (PETRA non_leaked)')
+        ax2.bar(months, petra_df[n_petra_col], color='#27ae60', alpha=0.4, label='n (PETRA grouped non_leaked)')
         ax2.set_yscale('log')
         ax2.set_ylabel('n\n(log)')
         ax2.legend(fontsize=8)

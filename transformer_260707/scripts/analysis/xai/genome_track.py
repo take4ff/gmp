@@ -119,6 +119,9 @@ def run_walk_forward(args):
             max_cooccurrence=config.MAX_CO_OCCURRENCE,
         )
         pred_mass, target_count, n = X.compute_position_importance(model, loader, args.n_batches, device)
+        fold_dir = os.path.join(out_dir, f'fold_{fold_id}')
+        os.makedirs(fold_dir, exist_ok=True)
+        _aggregate_and_report(pred_mass, target_count, n, fold_dir, pos2gene)
         pred_mass_total += pred_mass
         target_count_total += target_count
         n_samples_total += n
@@ -126,6 +129,7 @@ def run_walk_forward(args):
         del model
 
     force_print(f"[INFO] n_samples_total={n_samples_total} folds={used_folds}")
+    force_print("[INFO] 全fold合算（pooled）を集計します...")
     _aggregate_and_report(pred_mass_total, target_count_total, n_samples_total, out_dir, pos2gene)
     X.save_json({'mode': 'walk_forward', 'folds': used_folds, 'n_samples': n_samples_total,
                  'n_batches_per_fold': args.n_batches, 'walk_forward_dir': args.walk_forward_dir},

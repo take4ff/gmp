@@ -1,4 +1,4 @@
-# --- transformer_260707/scripts/analysis/position_tolerance_monthly.py ---
+# --- transformer_260707/scripts/analysis/walk_forward/position_tolerance_monthly.py ---
 """変異位置予測の許容誤差(tolerance)付きTop-1正解率を月別・全fold stitchで集計する。
 
 完全一致（tolerance=0、既存の position top1 hit_rate と同じ判定基準）に加え、
@@ -9,11 +9,12 @@ petra.eval.plot_monthly_position_tolerance と対になる月別粒度のCSVを�
 plot_position_tolerance_comparison.py で両モデルを重ねてプロットする。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.position_tolerance_monthly \
+  python -m transformer_260707.scripts.analysis.walk_forward.position_tolerance_monthly \
       --walk_forward_dir outputs/transformer_260702/results/walk_forward/<timestamp> \
       --tolerances 0 5 10 50
 """
 import argparse
+import re
 from collections import defaultdict
 
 import numpy as np
@@ -23,6 +24,11 @@ import torch
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
 from transformer_260707.scripts.analysis.xai import _xai_common as X
+
+# 既知issue: reference/sequences-241017_2.csv の一部レコード（Zimbabwe/Harare 217件）が
+# Collection_Date='2022/2024' という不正値を持ち、date[:7] が '2022/20' という異常な月ラベルに
+# なる（data_quality_collection_date_bug 参照）。
+_YEARMONTH_RE = re.compile(r'^\d{4}-\d{2}$')
 
 
 @torch.no_grad()
@@ -49,6 +55,8 @@ def eval_position_tolerance_by_month(model, loader, tolerances, device):
             if not date or len(date) < 7:
                 continue
             ym = date[:7]
+            if not _YEARMONTH_RE.match(ym):
+                continue  # 既知issue: collection_date不正値由来の異常な月ラベルを除外
             pred_pos = top1[i]
             min_dist = min(abs(pred_pos - tp) for tp in t_set)
             for tol in tolerances:
@@ -122,7 +130,7 @@ def main():
         rows.append(row)
     df = pd.DataFrame(rows)
 
-    out_dir = args.output_dir or X.make_output_dir('position_tolerance_monthly')
+    out_dir = X.make_output_dir('position_tolerance_monthly', args.output_dir)
     X.save_csv(df, out_dir, 'position_tolerance_monthly.csv')
     X.save_csv(pd.DataFrame(per_fold_rows), out_dir, 'position_tolerance_monthly_by_fold.csv')
     force_print(f"\n{df.to_string(index=False)}")

@@ -170,12 +170,44 @@ class DBIterableDataset(IterableDataset):
         if getattr(config, 'USE_LINEAGE_GROWTH_FEATURES', False):
             self._num_mask_keys = self._num_mask_keys + _NUM_MASK_KEYS_GROWTH
 
-        # サンプルIDリストを取得
-        self.sample_ids = self._get_sample_ids()
+        # サンプルIDリストを取得し、同一 input_path_str（分岐親履歴）を持つサンプルを
+        # split全体でグローバルにグルーピングする（バッチ局所グルーピングだと、大半の
+        # 分岐兄弟サンプルがバッチ境界を跨いで分断され、any-of-set評価が事実上機能しない
+        # ことが実測で判明したため。詳細は verify_batch_local_grouping.py 参照）。
+        id_path_pairs = self._get_sample_ids()
+        self.sample_ids, self.group_members = self._build_groups(id_path_pairs)
         self._length = len(self.sample_ids)
 
+    def _build_groups(self, id_path_pairs):
+        """(sample_id, raw_path) のリストから、同一input_path_str（raw_pathの最終ステップを
+        除いた履歴）を持つサンプルをグループ化する。
+
+        代表サンプルは各グループの min(sample_id) を決定的に選ぶ（shuffle順に依存しないため）。
+
+        Returns:
+            (representative_ids: List[int]（昇順）, group_members: Dict[int, List[int]])
+        """
+        groups = {}
+        for sid, raw_path in id_path_pairs:
+            parts = raw_path.split('>')
+            input_path_str = '>'.join(parts[:-1]) if len(parts) > 1 else ''
+            groups.setdefault(input_path_str, []).append(sid)
+
+        group_members = {}
+        for members in groups.values():
+            repr_id = min(members)
+            group_members[repr_id] = members
+
+        representative_ids = sorted(group_members.keys())
+        n_raw = len(id_path_pairs)
+        n_groups = len(representative_ids)
+        if n_raw > 0:
+            print(f"[INFO] Grouping by input_path_str: {n_raw:,} raw samples -> "
+                  f"{n_groups:,} groups ({100*n_groups/n_raw:.1f}%)")
+        return representative_ids, group_members
+
     def _get_sample_ids(self):
-        """条件に合うサンプルIDのリストを取得する。"""
+        """条件に合う (sample_id, raw_path) のリストを取得する（sample_id昇順）。"""
         con = connect_db(self.db_path, read_only=True)
 
         query = "SELECT sample_id FROM samples WHERE 1=1"
@@ -358,7 +390,7 @@ class DBIterableDataset(IterableDataset):
         # ランダムソートによる順序シャッフル（後でDataLoader側でも必要に応じてやるが、行を保持しておく）
         df = df.sort_values('sample_id')
 
-        return df['sample_id'].tolist()
+        return list(zip(df['sample_id'].tolist(), df['raw_path'].tolist()))
 
     def __len__(self):
         return self._length
@@ -425,15 +457,32 @@ class DBIterableDataset(IterableDataset):
             ORDER BY sample_id, timestep
         """, sample_ids).fetchall()
 
+        # sample_ids は代表IDのリスト。any-of-set正解集合はグループ全メンバー
+        # （分岐兄弟サンプル）のラベルを合算する必要があるため、代表だけでなく
+        # 全メンバーのラベル（と USE_SUBSTITUTION_HEAD 用の raw_path）を取得する。
+        # getattr: object.__new__(DBIterableDataset) 経由で __init__ を経ずに手動構築された
+        # インスタンス（lineage_attention_compare.py 等）は group_members を持たないため、
+        # 単独サンプル（グループ化なし）として安全にフォールバックする。
+        group_members = getattr(self, 'group_members', {})
+        all_member_ids = []
+        for repr_id in sample_ids:
+            all_member_ids.extend(group_members.get(repr_id, [repr_id]))
+        member_placeholders = ','.join(['?' for _ in all_member_ids])
+
+        member_raw_path_rows = con.execute(f"""
+            SELECT sample_id, raw_path FROM samples WHERE sample_id IN ({member_placeholders})
+        """, all_member_ids).fetchall()
+        member_raw_path_dict = dict(member_raw_path_rows)
+
         label_rows = con.execute(f"""
             SELECT sample_id, targets
             FROM labels
-            WHERE sample_id IN ({placeholders})
-        """, sample_ids).fetchall()
+            WHERE sample_id IN ({member_placeholders})
+        """, all_member_ids).fetchall()
 
         con.close()
 
-        # データを辞書に整理
+        # データを辞書に整理（代表サンプルの行。x_cat/x_numは代表のみで構築する）
         sample_dict = {row[0]: row for row in sample_rows}
 
         # 特徴量をsample_id → timestep別にグループ化（同一タイムステップの共起変異を束ねる）
@@ -475,13 +524,17 @@ class DBIterableDataset(IterableDataset):
                 return pos_to_token
 
         def _maybe_extend_labels(sample_id, base_labels):
-            """USE_SUBSTITUTION_HEAD=True の場合に 5-tuple → 7-tuple へ拡張する。"""
+            """USE_SUBSTITUTION_HEAD=True の場合に 5-tuple → 7-tuple へ拡張する。
+
+            グループ全メンバー（代表以外も含む）に対して呼ぶため、代表限定の sample_dict
+            ではなく全メンバーの raw_path を持つ member_raw_path_dict を参照する。
+            """
             if not _use_sub_head or not base_labels:
                 return base_labels
-            raw = sample_dict.get(sample_id)
-            if raw is None:
+            raw_path = member_raw_path_dict.get(sample_id)
+            if raw_path is None:
                 return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
-            base_map = _parse_target_base_map(raw[1])  # raw[1] = raw_path
+            base_map = _parse_target_base_map(raw_path)
             # 各ターゲット変異を nucpos（t[1]）でマッチングして base_after / aa_after を個別付与
             return [(t[0], t[1], t[2], t[3], t[4],
                      base_map.get(t[1], (0, 0))[0],   # base_after
@@ -493,7 +546,8 @@ class DBIterableDataset(IterableDataset):
             for row in label_rows
         }
 
-        # 結果を構築
+        # 結果を構築（sample_id は代表IDのリスト。x_cat/x_numは代表のみで構築し、
+        # 正解集合はグループ全メンバーのラベルリスト group_targets_list として渡す）
         results = []
         for sample_id in sample_ids:
             if sample_id not in sample_dict:
@@ -507,17 +561,21 @@ class DBIterableDataset(IterableDataset):
                     x.append(features_dict[sample_id][ts])
 
             y_targets = label_dict.get(sample_id, [])
+            member_ids = group_members.get(sample_id, [sample_id])
+            group_targets_list = [label_dict.get(mid, []) for mid in member_ids]
 
             if self.strain_to_strength is not None:
                 strength_score = self.strain_to_strength.get(strain_name, 0.0)
 
-            results.append((x, y_targets, path_length, raw_path, strain_name, strength_score, collection_date))
+            results.append((x, y_targets, path_length, raw_path, strain_name, strength_score,
+                            collection_date, group_targets_list))
 
         return results
 
     def _process_sample(self, sample):
         """サンプルをモデル入力形式（パディング済みテンソル）に変換する。"""
-        sequence, targets, original_len, raw_path, strain, strength_score, collection_date = sample
+        (sequence, targets, original_len, raw_path, strain, strength_score, collection_date,
+         group_targets_list) = sample
 
         target_len = config.TARGET_LEN
 
@@ -602,6 +660,7 @@ class DBIterableDataset(IterableDataset):
             "x_num": torch.tensor(padded_num, dtype=torch.float),
             "mask": torch.tensor(padding_mask, dtype=torch.bool),
             "y": targets,
+            "group_targets_list": group_targets_list,
             "original_len": original_len,
             "raw_path": raw_path,
             "strain": strain,
@@ -747,6 +806,11 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
     use_soft_target = hybrid_alpha > 0  # 0より大きければSoftラベルを生成（Soft/Hybrid共通）
 
     def collate_fn(batch):
+        # データセット側（DBIterableDataset._build_groups）で既に同一input_path_str
+        # （分岐親履歴）を持つサンプルがsplit全体でグローバルにグループ化され、各itemは
+        # 1グループの代表サンプル + group_targets_list（グループ全メンバーのターゲット
+        # タプルリストのリスト）を保持している。そのためバッチ内での再グルーピングは不要で、
+        # batch の各要素をそのままスタック/整形するだけでよい。
         batch_x_cat = torch.stack([item['x_cat'] for item in batch])
         batch_x_num = torch.stack([item['x_num'] for item in batch])
         batch_mask = torch.stack([item['mask'] for item in batch])
@@ -758,103 +822,31 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
         batch_full_paths = [item['full_raw_path'] for item in batch]
         batch_collection_dates = [item.get('collection_date', '') for item in batch]
 
+        # 評価用 Hard Target: グループ全メンバーのターゲットをフラット化（重複除去なし）。
+        # Soft/Hard 両モードで共通（Hard モードも any-of-set 評価が正しく機能するように統一）。
+        raw_y = [
+            [t for member_targets in item['group_targets_list'] for t in member_targets]
+            for item in batch
+        ]
+
         if use_soft_target:
-            # ── Soft Target モード ─────────────────────────────────────────
-            # input_path_str をキーとしてバッチ内サンプルをグループ化し、
-            # グループ単位で確率分配ベクトルを計算する。
-            #
-            # グループ化の結果:
-            #   - 同一 input_path_str を持つ複数サンプル → 1つの Soft Target に統合
-            #   - グループ内の位置がバッチ内で先頭のサンプルの x_cat/x_num/mask を代表として使用
-            #
-            # 出力は "統合後のバッチ" として返すため、バッチサイズが元より小さくなる場合がある。
-
-            # input_path_str → バッチインデックス of グループマップを構築
-            # input_path_str は list[str] or str の場合があるので tuple 化してハッシュ可能にする
-            group_map = {}  # key: tuple(input_path_str) → list of batch indices
-            for idx, item in enumerate(batch):
-                key = tuple(item['input_path_str']) if isinstance(item['input_path_str'], list) \
-                    else (item['input_path_str'],)
-                if key not in group_map:
-                    group_map[key] = []
-                group_map[key].append(idx)
-
-            # グループ順序を保持（最初に出現した順）
-            group_keys = list(group_map.keys())
-
-            # 統合後バッチの各要素を構築
-            merged_x_cat = []
-            merged_x_num = []
-            merged_mask = []
-            merged_soft_targets = []      # list of dict (タスク→FloatTensor)
-            merged_raw_y = []             # 評価用: 代表サンプルの元ターゲット（全ルートをフラット化）
-            merged_lens = []
-            merged_strains = []
-            merged_strength = []
-            merged_input_strs = []
-            merged_target_strs = []
-            merged_full_paths = []
-            merged_collection_dates = []
-
-            for key in group_keys:
-                indices = group_map[key]
-                # 代表サンプル（先頭）の入力特徴量を使用
-                rep_idx = indices[0]
-
-                merged_x_cat.append(batch[rep_idx]['x_cat'])
-                merged_x_num.append(batch[rep_idx]['x_num'])
-                merged_mask.append(batch[rep_idx]['mask'])
-                merged_lens.append(batch[rep_idx]['original_len'])
-                merged_strains.append(batch[rep_idx]['strain'])
-                # strength_score: 代表サンプル（先頭）の値を使用
-                # 入力パスが同じでも strain が異なる場合、max で上方バイアスが生じるため
-                merged_strength.append(batch[rep_idx]['strength_score'])
-                merged_input_strs.append(batch[rep_idx]['input_path_str'])
-                merged_target_strs.append(batch[rep_idx]['target_path_str'])
-                merged_full_paths.append(batch[rep_idx]['full_raw_path'])
-                merged_collection_dates.append(batch[rep_idx].get('collection_date', ''))
-
-                # グループ内の全ルートのターゲットを収集し Soft Target を生成
-                group_y_list = [batch[i]['y'] for i in indices]
-                soft_target = _build_soft_target(group_y_list)
-                merged_soft_targets.append(soft_target)
-
-                # 評価用: グループ内の全ルートのターゲットをフラット化（重複除去なし）
-                all_targets_flat = [t for y in group_y_list for t in y]
-                merged_raw_y.append(all_targets_flat)
-
-            stacked_x_cat = torch.stack(merged_x_cat)
-            stacked_x_num = torch.stack(merged_x_num)
-            stacked_mask = torch.stack(merged_mask)
-
-            return DBBatch(
-                inputs=(stacked_x_cat, stacked_x_num, stacked_mask),
-                y=merged_soft_targets,   # list of dict (Soft Target ベクトル)
-                lens=merged_lens,
-                strains=merged_strains,
-                strength_scores=merged_strength,
-                input_strs=merged_input_strs,
-                target_strs=merged_target_strs,
-                full_paths=merged_full_paths,
-                raw_y=merged_raw_y,      # 評価用 Hard Target（フラット）
-                collection_dates=merged_collection_dates,
-            )
-
+            y_out = [_build_soft_target(item['group_targets_list']) for item in batch]
         else:
-            # ── Hard Target モード（従来互換） ──────────────────────────────
-            batch_y = [item['y'] for item in batch]
-            return DBBatch(
-                inputs=(batch_x_cat, batch_x_num, batch_mask),
-                y=batch_y,
-                lens=batch_lens,
-                strains=batch_strains,
-                strength_scores=batch_strength_scores,
-                input_strs=batch_input_strs,
-                target_strs=batch_target_strs,
-                full_paths=batch_full_paths,
-                raw_y=batch_y,   # raw_y = y（Hard Target モードでは同一）
-                collection_dates=batch_collection_dates,
-            )
+            # ── Hard Target モード（従来互換）: 学習ターゲットは代表サンプル自身の値 ──
+            y_out = [item['y'] for item in batch]
+
+        return DBBatch(
+            inputs=(batch_x_cat, batch_x_num, batch_mask),
+            y=y_out,
+            lens=batch_lens,
+            strains=batch_strains,
+            strength_scores=batch_strength_scores,
+            input_strs=batch_input_strs,
+            target_strs=batch_target_strs,
+            full_paths=batch_full_paths,
+            raw_y=raw_y,
+            collection_dates=batch_collection_dates,
+        )
 
     # DataLoader 並列化（データ律速の学習を GPU 計算とオーバーラップさせて時短する）
     loader_kwargs = dict(batch_size=batch_size, collate_fn=collate_fn)
