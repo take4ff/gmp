@@ -1472,6 +1472,23 @@ def _wf_pool_test_outputs(folds, wf_run_dir):
     _wf_plot_diversity_trend(diversity_frames, fold_desc, wf_run_dir)
 
 
+def _wf_find_prev_fold_checkpoint(fold_id):
+    """fold_id-1 の best_model.pth を既存の walk_forward 結果ディレクトリから自動探索する。
+
+    `--folds 2` や `--folds 2 6` のような部分/非連続fold実行では、fold_id-1がこの
+    実行内で直前に処理されていないため、ループ内の prev_best_model_path が使えない。
+    outputs/.../results/walk_forward/*/fold_{fold_id-1}/*/models/best_model.pth を
+    全て探し、最終更新時刻が最も新しいものを返す（見つからなければ None）。
+    """
+    import glob
+    pattern = os.path.join(config.RESULT_SAVE_DIR, 'walk_forward', '*',
+                           f'fold_{fold_id - 1}', '*', 'models', 'best_model.pth')
+    candidates = glob.glob(pattern)
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
 def run_walk_forward(folds, wf_run_dir: str):
     """Walk-forward 検証：フォールドを順番に学習＋評価して集計する。
 
@@ -1479,6 +1496,13 @@ def run_walk_forward(folds, wf_run_dir: str):
       - Fold 1: 全歴史データ (< split_date) で学習。USE_PRETRAINING=True なら事前学習も実行。
       - Fold N (N>=2): 直前フォールドの best_model.pth を起点に、直近6ヶ月のみで学習 (Method B)。
       - 事前学習は Fold 1 のみ。Fold 2 以降は WF_PREV_FOLD_CHECKPOINT で初期化。
+
+    `--folds` で部分/非連続実行する場合（例: fold_id==1を含まない、またはfold間に
+    抜けがある選択）、直前フォールドのcheckpointはこのループ内に存在しないため、
+    `WF_PREV_CHECKPOINT_OVERRIDE`（明示指定）または`_wf_find_prev_fold_checkpoint`
+    （既存結果からの自動探索）で解決する。見つからなければ、事前学習にフォール
+    バックしてしまう（＝Method Bの重み引き継ぎが行われない）事故を防ぐため
+    RuntimeErrorを送出する。
 
     Args:
         folds     : [(fold_id, train_start, split_date, split_end, desc), ...]
@@ -1496,6 +1520,7 @@ def run_walk_forward(folds, wf_run_dir: str):
         _json.dump(meta, f, indent=2, ensure_ascii=False)
 
     prev_best_model_path = None
+    prev_fold_id = None  # このループ内で直近に完了した fold_id
 
     for idx, (fold_id, train_start, split_date, split_end, desc) in enumerate(folds):
         force_print(f"\n{'='*60}")
@@ -1521,17 +1546,43 @@ def run_walk_forward(folds, wf_run_dir: str):
         assign_wf_splits(_con)
         _con.close()
 
-        # 3. Fold 1 のみ事前学習を実行
-        if idx == 0 and getattr(config, 'USE_PRETRAINING', False):
+        # 3. 直前フォールドの重みを解決する。
+        #    fold_id==1: 直前foldは存在しない（事前学習 or ランダム初期化）。
+        #    このループ内で fold_id-1 を直前に処理済み: そのcheckpointをそのまま使う
+        #    （フル/連続実行時の従来通りの挙動）。
+        #    それ以外（部分/非連続実行でfold_id-1がこの実行内にない）:
+        #    WF_PREV_CHECKPOINT_OVERRIDE か既存結果からの自動探索で解決し、
+        #    見つからなければ誤って事前学習に落ちないようエラーで止める。
+        if fold_id == 1:
+            resolved_prev_ckpt = None
+        elif prev_fold_id == fold_id - 1:
+            resolved_prev_ckpt = prev_best_model_path
+        else:
+            resolved_prev_ckpt = getattr(config, 'WF_PREV_CHECKPOINT_OVERRIDE', None)
+            if resolved_prev_ckpt is None:
+                resolved_prev_ckpt = _wf_find_prev_fold_checkpoint(fold_id)
+            if resolved_prev_ckpt is None:
+                raise RuntimeError(
+                    f"Fold {fold_id} の部分/非連続実行には直前フォールド(fold_{fold_id - 1})の"
+                    f"checkpointが必要ですが、既存の walk_forward 結果からも見つかりませんでした"
+                    f"（{os.path.join(config.RESULT_SAVE_DIR, 'walk_forward', '*', f'fold_{fold_id - 1}', '*', 'models', 'best_model.pth')}）。"
+                    f"--prev_checkpoint で明示的に指定するか、fold_{fold_id - 1}を先に実行してください。"
+                )
+            force_print(f"[INFO] 部分/非連続実行検出: fold_{fold_id - 1}のcheckpointを自動使用: "
+                        f"{resolved_prev_ckpt}")
+
+        # 4. Fold 1 のみ事前学習を実行（fold_idベース。--folds でfold 1以外を単独/先頭
+        #    実行しても誤って事前学習がトリガーされないようにする）
+        if fold_id == 1 and getattr(config, 'USE_PRETRAINING', False):
             force_print(f"[INFO] Walk-forward Fold {fold_id}: 事前学習を開始 (split_type_wf 基準)...")
             from .scripts.train.pretrain import run_pretraining
             run_pretraining()
 
-        # 4. 直前フォールドの重みを設定（Fold 1 = None → USE_PRETRAINING が適用される）
-        config.WF_PREV_FOLD_CHECKPOINT = prev_best_model_path
+        config.WF_PREV_FOLD_CHECKPOINT = resolved_prev_ckpt
 
         # 5. 学習・評価
         prev_best_model_path = main()
+        prev_fold_id = fold_id
 
         force_print(f"[INFO] Fold {fold_id} complete. Best model: {prev_best_model_path}")
 

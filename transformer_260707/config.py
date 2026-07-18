@@ -634,6 +634,11 @@ WALK_FORWARD_TRAIN_START = None
 # Fold 1 = None（事前学習 or ランダム初期化）、Fold N = Fold N-1 の重み
 WF_PREV_FOLD_CHECKPOINT = None
 
+# walk_forward: --folds で部分/非連続実行する際、直前フォールドのcheckpointを
+# 自動探索(_wf_find_prev_fold_checkpoint)せず明示的に使うパス（--prev_checkpoint CLI引数）。
+# None なら自動探索にフォールバックする。
+WF_PREV_CHECKPOINT_OVERRIDE = None
+
 
 # ============================================================
 # 10. 新規拡張実験設定

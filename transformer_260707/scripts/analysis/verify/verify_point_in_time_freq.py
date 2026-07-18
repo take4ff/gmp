@@ -1,4 +1,4 @@
-# --- transformer_260707/scripts/analysis/verify_point_in_time_freq.py ---
+# --- transformer_260707/scripts/analysis/verify/verify_point_in_time_freq.py ---
 """codon_freq (変異頻度特徴量, x_num[...,0]) の時系列リーク検証。
 
 各 walk-forward フォールドについて、そのフォールド専用チェックポイントをロードし、
@@ -16,7 +16,7 @@
         該当ウィンドウに更新する。必ず load_fold_model の「後」に呼ぶこと。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.verify_point_in_time_freq \\
+  python -m transformer_260707.scripts.analysis.verify.verify_point_in_time_freq \\
       --walk_forward_dir outputs/transformer_260702/results/walk_forward/20260706_223816 \\
       --folds 1 2
 """

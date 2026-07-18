@@ -39,6 +39,10 @@ def main():
     parser = argparse.ArgumentParser(description='Semi-annual walk-forward validation')
     parser.add_argument('--folds', nargs='+', type=int, default=None,
                         help='実行するフォールド番号（省略時: config.WALK_FORWARD_FOLDS or 全フォールド）')
+    parser.add_argument('--prev_checkpoint', type=str, default=None,
+                        help='部分/非連続実行(--foldsの先頭foldがfold_id==1でない場合)で直前フォールドの'
+                             '重みとして使うcheckpointパス。省略時は既存のwalk_forward結果ディレクトリから'
+                             '該当fold_id-1のbest_model.pthを自動探索する（見つからなければエラー）。')
     args = parser.parse_args()
 
     from transformer_260707 import config
@@ -47,6 +51,8 @@ def main():
     config.SPLIT_MODE = 'walk_forward'
     if args.folds:
         config.WALK_FORWARD_FOLDS = args.folds
+    if args.prev_checkpoint:
+        config.WF_PREV_CHECKPOINT_OVERRIDE = args.prev_checkpoint
 
     _run_entry()
 

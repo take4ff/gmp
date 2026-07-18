@@ -1,11 +1,15 @@
-# --- transformer_260707/scripts/analysis/verify_batch_local_grouping.py ---
+# --- transformer_260707/scripts/analysis/verify/verify_batch_local_grouping.py ---
 """本体 evaluate.py の any-of-set 判定が、実際のバッチ境界内でどこまで「真の分岐グループ」を
 捕捉できているかを検証する（読み取り専用、DB書き込みなし）。
 
-背景:
+【既知バグは修正済み】本スクリプトが発見した以下の問題（バッチ局所グルーピング）は
+db/dataset.py 側で修正済み（グローバルグルーピングに変更、collate_fn の group_map
+ロジックは削除）。本スクリプトは修正前の挙動の記録・回帰検証用として残している。
+
+背景（修正前の状態）:
   db/dataset.py の collate_fn は同一 input_path_str（分岐親履歴）を持つサンプルを
-  「同一ミニバッチ内でのみ」グループ化し、any-of-set の正解集合（raw_y）を作る
-  （group_map はバッチ単位で構築される）。一方 petra 側の比較用グルーピング
+  「同一ミニバッチ内でのみ」グループ化し、any-of-set の正解集合（raw_y）を作っていた
+  （group_map はバッチ単位で構築されていた）。一方 petra 側の比較用グルーピング
   （petra/eval/plot_monthly_position_tolerance.py の resolve_test_groups_by_daterange）は
   テスト期間全体を1回のSQLでスキャンし、真にグローバルな分岐グループを作る。
 
@@ -24,8 +28,8 @@
   になるかを集計する。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.verify_batch_local_grouping
-  python -m transformer_260707.scripts.analysis.verify_batch_local_grouping --folds 2 6
+  python -m transformer_260707.scripts.analysis.verify.verify_batch_local_grouping
+  python -m transformer_260707.scripts.analysis.verify.verify_batch_local_grouping --folds 2 6
 """
 import argparse
 import random

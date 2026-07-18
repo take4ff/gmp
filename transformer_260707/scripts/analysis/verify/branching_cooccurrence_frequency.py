@@ -1,4 +1,4 @@
-# --- transformer_260707/scripts/analysis/branching_cooccurrence_frequency.py ---
+# --- transformer_260707/scripts/analysis/verify/branching_cooccurrence_frequency.py ---
 """raw_path から「分岐(K)」と「共起(M)」の発生頻度を測る（PETRA比較の評価方式検討用）。
 
 - 共起 M: 1サンプルの target（raw_path 末尾の '>' 区切り最終ステップ）内で ',' 区切りされた
@@ -10,7 +10,7 @@ DB読み取り専用（split_type_wf 等は一切参照・書き込みしない�
 並行実行しても安全。月別（＝fold era別）内訳も出す。
 
 Usage:
-  python -m transformer_260707.scripts.analysis.branching_cooccurrence_frequency
+  python -m transformer_260707.scripts.analysis.verify.branching_cooccurrence_frequency
 """
 import os
 from collections import defaultdict, Counter
