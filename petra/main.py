@@ -112,28 +112,31 @@ def run_training(split_col=None, init_checkpoint=None, out_dir=None,
     tokenizer = build_tokenizer(db_path, force=rebuild_vocab)
 
     # ---- Datasets ----
-    def make_ds(split_type, shuffle):
+    # Train/Valid: グルーピングせず全分岐ルートを独立サンプルとして使う（PETRAは本体のような
+    # ソフトラベル分配ロジックを持たないため）。Test: 本体と同じ分岐グルーピングを行い、
+    # 評価はグループ全体(分岐K個)とのany-of-set判定にする（評価のみグルーピング）。
+    def make_ds(split_type, shuffle, grouped_eval=False):
         return PetraDataset(db_path, tokenizer, split_type=split_type,
                             max_seq_len=config.MAX_SEQ_LEN, shuffle=shuffle,
                             chunk_size=config.CHUNK_SIZE, split_col=split_col,
-                            max_history_steps=config.MAX_HISTORY_STEPS)
+                            max_history_steps=config.MAX_HISTORY_STEPS,
+                            grouped_eval=grouped_eval)
 
     train_ds = make_ds(0, shuffle=True)
     val_ds   = make_ds(1, shuffle=False)
-    test_ds  = make_ds(2, shuffle=False)
+    test_ds  = make_ds(2, shuffle=False, grouped_eval=True)
     print(f'{log_prefix}Train={len(train_ds):,}  Val={len(val_ds):,}  Test={len(test_ds):,}')
 
     loader_kwargs = dict(
-        collate_fn=PetraDataset.collate_fn,
         num_workers=config.NUM_WORKERS,
         pin_memory=(device.type == 'cuda'),
     )
     train_loader = DataLoader(train_ds, batch_size=config.BATCH_SIZE,
-                              **loader_kwargs)
+                              collate_fn=PetraDataset.collate_fn, **loader_kwargs)
     val_loader   = DataLoader(val_ds,   batch_size=config.BATCH_SIZE,
-                              **loader_kwargs)
+                              collate_fn=PetraDataset.collate_fn, **loader_kwargs)
     test_loader  = DataLoader(test_ds,  batch_size=config.BATCH_SIZE,
-                              **loader_kwargs)
+                              collate_fn=PetraDataset.collate_fn_grouped, **loader_kwargs)
 
     # ---- Model ----
     model = PetraDecoder(
@@ -248,9 +251,10 @@ def main():
         test_ds = PetraDataset(db_path, tokenizer, split_type=2,
                                max_seq_len=config.MAX_SEQ_LEN, shuffle=False,
                                chunk_size=config.CHUNK_SIZE, split_col=split_col,
-                               max_history_steps=config.MAX_HISTORY_STEPS)
+                               max_history_steps=config.MAX_HISTORY_STEPS,
+                               grouped_eval=True)
         test_loader = DataLoader(test_ds, batch_size=config.BATCH_SIZE,
-                                 collate_fn=PetraDataset.collate_fn,
+                                 collate_fn=PetraDataset.collate_fn_grouped,
                                  num_workers=config.NUM_WORKERS,
                                  pin_memory=(device.type == 'cuda'))
         model = PetraDecoder(

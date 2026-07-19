@@ -238,6 +238,16 @@ def evaluate_recall_topk(model, loader: DataLoader, tokenizer,
     region_token_ids を渡すと（v2の9フィールド化時のみ有効）、[REGION_xxx]トークン位置に
     限定した region 単位の Recall@K も 'region' キーで追加報告する。
 
+    loader が PetraDataset.collate_fn_grouped で構築されている場合（grouped_eval=True）、
+    各バッチは6要素に加え (n_tail_tokens_list, target_token_ids_list) を含む8要素になる。
+    このとき、代表サンプルの「末尾ステップ最初の変異トークン位置」(divergence position、
+    = 本体の分岐グルーピングで複数分岐ルートに分かれる箇所) のみ、正解を代表サンプル自身の
+    1トークンではなく、グループ全体(分岐K個)の候補集合との any-of-set 判定に置き換える
+    （本体の評価方式と揃えるため）。divergence position以外は元々全分岐で共通の履歴なので
+    単一ターゲットのままで良い。PETRAは共起/分岐のソフトラベル分配ロジックを持たないため
+    （学習時は各分岐ルートを独立サンプルとして学習する、petra/dataset.py参照）、
+    any-of-set化は評価時のみのロジックとして追加する。
+
     Args:
         weights: PetraRepresentativenessWeights インスタンス（None なら Weighted=Average）
 
@@ -267,7 +277,10 @@ def evaluate_recall_topk(model, loader: DataLoader, tokenizer,
     nonleaked_per_seq_recall = {k: [] for k in top_k_list}
     nonleaked_per_seq_weight = []
 
-    for input_ids, target_ids, _mask, countries, dates, is_leaked_flags in loader:
+    for batch in loader:
+        input_ids, target_ids, _mask, countries, dates, is_leaked_flags, *rest = batch
+        n_tail_list, target_set_list = rest if rest else (None, None)
+
         input_ids = input_ids.to(device)
         target_ids_dev = target_ids.to(device)
 
@@ -291,6 +304,20 @@ def evaluate_recall_topk(model, loader: DataLoader, tokenizer,
             n_targets = int(is_valid[b].sum().item())
             if n_targets == 0:
                 continue  # ターゲット無し配列はスキップ（PETRA と同様 nummut>0 のみ集計）
+
+            # any-of-set override: 代表サンプルの末尾ステップ最初のトークン位置(divergence
+            # position)のみ、正解をグループ全体(分岐K個)の候補集合との一致判定に置き換える。
+            if target_set_list is not None and target_set_list[b]:
+                n_tail = n_tail_list[b]
+                valid_positions = torch.nonzero(is_valid[b], as_tuple=True)[0]
+                if n_tail >= 1 and len(valid_positions) >= n_tail:
+                    div_pos = int(valid_positions[-n_tail].item())
+                    target_tensor = torch.tensor(sorted(target_set_list[b]),
+                                                 dtype=torch.long, device=device)
+                    matches = torch.isin(topk_preds[b, div_pos, :max_k], target_tensor)
+                    for k in top_k_list:
+                        correct_at[k][b, div_pos] = bool(matches[:k].any().item())
+
             w = 1.0
             if weights is not None:
                 w = weights.weight_for(countries[b], dates[b])

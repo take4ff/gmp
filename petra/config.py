@@ -17,13 +17,15 @@ SPLIT_MODE = 'date'    # 'timestep' | 'date'
 # --- モデルアーキテクチャ（scale-matched: 本体 HierarchicalTransformer ≈19.5M params に近づける）---
 # 本体は FEATURE_DIM=256/N_LAYERS=4/N_HEADS=4/FFN_RATIO=4 で ~19.46M params
 # （その大半は VOCAB_SIZE_POSITION=30006 の位置埋め込み・出力ヘッド由来）。
-# petra 側は変異トークン語彙（DB からの動的構築、位置より小さい想定）で埋め込みを共有するため、
-# 同じ d_model でも総パラメータ数は語彙サイズ次第で変わる。学習実行時に main.py が
-# 'Parameters: N' を出力するので、そこで実測して必要なら D_MODEL/N_LAYERS/FFN_DIM を調整すること。
-D_MODEL = 320
-N_HEADS = 8
-N_LAYERS = 6
-FFN_DIM = 1280
+# PetraDecoderは埋め込み/出力ヘッドを重み共有(vocab_size×d_model)しており、これがパラメータの
+# 大半(現vocab=92,332なら約80%)を占める。本体と同じN_LAYERS=4/N_HEADS=4/FFN_RATIO=4の形状のまま
+# d_modelだけをvocab_sizeに応じて調整し、総パラメータ数を本体に合わせる
+# （2026-07-19実測: D_MODEL=320では36.9Mと本体の約1.9倍だったため、192に縮小して19.51Mに調整済み。
+# vocab_sizeが変わった場合は再実測して調整すること）。
+D_MODEL = 192
+N_HEADS = 4
+N_LAYERS = 4
+FFN_DIM = 768
 DROPOUT = 0.1
 MAX_SEQ_LEN = 512       # 1サンプルの最大トークン長（超過は末尾切り捨て）
 # 本体(transformer_260707.config.MAX_SEQ_LEN=39)と同じ「直近何タイムステップ(">"区切り)を

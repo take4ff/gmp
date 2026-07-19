@@ -6,17 +6,24 @@ position_tolerance_monthly.py（提案モデル側）と
 petra.eval.plot_monthly_position_tolerance が出力する「親グループ単位・any-of-set」版
 （本体と同じ分岐+共起グルーピング・hit判定に揃えたPETRA評価、--petra_csv_grouped）を読み込み、
 tolerance ごとに別ファイル（1ファイル=1tolerance）で両モデルの月別折れ線を重ねる。
-PETRA側はnon_leaked（train窓に未出現＝真の汎化性能）の数値を使う（本体は構造的にリークしない
-ため素の数値をそのまま使う。詳細は petra_comparison.md 参照）。
 
 PETRAの「枝ごと・単一ターゲット」版（tail-only、本体とは分母・正解集合の広さが異なり直接比較
 不可）はプロットしない（2026-07-18、ユーザー判断）。
+
+--leak_tolerant （2026-07-19追加）:
+  同一raw_pathが採取日の異なる複数サンプル間で完全一致する「リーク」は、train/testが時系列分割
+  である以上、本体・PETRA双方に等しく存在する構造的な性質であり、本体側はこれを層別せず全件
+  プールして評価している。この事実を踏まえ、PETRA側も同じ基準（全件プール、leaked/non_leaked
+  を区別しない）に揃えた比較図を出す場合はこのフラグを付ける（出力ファイル名に `_pooled`
+  サフィックスが付き、既定の出力とは別ファイルになる）。leaked/non_leaked を区別する既定の
+  出力はそのまま残る（リーク層別自体の分析価値はあるため）。層別評価の本格導入は
+  docs/roadmap.md の今後の展望（項目6）を参照。
 
 Usage:
   python -m transformer_260707.scripts.analysis.walk_forward.plot_position_tolerance_comparison \
       --main_csv outputs/transformer_260707/scripts/position_tolerance_monthly/<ts>/position_tolerance_monthly.csv \
       --petra_csv_grouped outputs/petra/walk_forward/<ts>/monthly_plot/petra_position_tolerance_monthly_grouped.csv \
-      --tolerances 0 5 10 50
+      --tolerances 0 5 10 50 [--leak_tolerant]
 """
 import argparse
 import os
@@ -44,6 +51,9 @@ def main():
                     help='本体と同じ分岐+共起グルーピング・any-of-set判定に揃えたPETRA評価CSV')
     ap.add_argument('--tolerances', type=int, nargs='+', default=[0, 5, 10, 50])
     ap.add_argument('--output_dir', default=None)
+    ap.add_argument('--leak_tolerant', action='store_true',
+                    help='PETRA側もleaked/non_leakedを区別せず全件プールした数値を使う'
+                         '（本体と同じ「リーク許容」評価に揃える）。出力ファイル名に_pooledが付く。')
     args = ap.parse_args()
 
     main_df = _filter_valid_months(pd.read_csv(args.main_csv))
@@ -57,15 +67,29 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     n_main_col = 'n_samples' if 'n_samples' in main_df.columns else 'n'
-    n_petra_col = ('n_groups_nonleaked' if 'n_groups_nonleaked' in petra_df.columns
-                   else 'n_groups')
+
+    if args.leak_tolerant:
+        # 本体と同じ「リーク許容（全件プール、leaked/non_leakedを区別しない）」評価に揃える。
+        n_petra_col = 'n_groups'
+        petra_label_suffix = '全件プール, リーク許容'
+        n_petra_legend = 'n (PETRA grouped, 全件)'
+        file_suffix = '_pooled'
+    else:
+        n_petra_col = ('n_groups_nonleaked' if 'n_groups_nonleaked' in petra_df.columns
+                       else 'n_groups')
+        petra_label_suffix = 'train窓非出現(non_leaked)'
+        n_petra_legend = 'n (PETRA grouped non_leaked)'
+        file_suffix = ''
 
     saved = []
     for tol in args.tolerances:
         main_col = f'hit_rate_tol{tol}'
-        petra_col = f'hit_rate_tol{tol}_nonleaked'
-        if petra_col not in petra_df.columns:
-            petra_col = f'hit_rate_tol{tol}'  # non_leaked列が無ければ全体にフォールバック
+        if args.leak_tolerant:
+            petra_col = f'hit_rate_tol{tol}'
+        else:
+            petra_col = f'hit_rate_tol{tol}_nonleaked'
+            if petra_col not in petra_df.columns:
+                petra_col = f'hit_rate_tol{tol}'  # non_leaked列が無ければ全体にフォールバック
 
         fig, (ax1, ax2) = plt.subplots(
             2, 1, figsize=(max(14, len(months) * 0.35), 8),
@@ -75,21 +99,21 @@ def main():
         ax1.plot(months, main_df[main_col], marker='o', color='#2980b9',
                  label=f'提案モデル (position top1, {label})')
         ax1.plot(months, petra_df[petra_col], marker='^', color='#27ae60', linestyle='--',
-                 label=f'PETRA型ベースライン (親グループ・any-of-set, 本体と同一評価方式, {label})')
+                 label=f'PETRA型ベースライン (親グループ・any-of-set, {petra_label_suffix}, {label})')
         ax1.set_ylabel('Hit Rate (%)')
         ax1.set_title(f'Monthly Position Hit Rate Comparison (tolerance = ±{tol} nt)')
         ax1.legend()
         ax1.grid(alpha=0.3)
 
         ax2.bar(months, main_df[n_main_col], color='#2980b9', alpha=0.5, label='n (proposed)')
-        ax2.bar(months, petra_df[n_petra_col], color='#27ae60', alpha=0.4, label='n (PETRA grouped non_leaked)')
+        ax2.bar(months, petra_df[n_petra_col], color='#27ae60', alpha=0.4, label=n_petra_legend)
         ax2.set_yscale('log')
         ax2.set_ylabel('n\n(log)')
         ax2.legend(fontsize=8)
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
 
-        fig_path = os.path.join(out_dir, f'position_tolerance_comparison_tol{tol}.png')
+        fig_path = os.path.join(out_dir, f'position_tolerance_comparison_tol{tol}{file_suffix}.png')
         fig.savefig(fig_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
         saved.append(fig_path)

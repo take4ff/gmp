@@ -175,6 +175,9 @@ class DBIterableDataset(IterableDataset):
         # 分岐兄弟サンプルがバッチ境界を跨いで分断され、any-of-set評価が事実上機能しない
         # ことが実測で判明したため。詳細は verify_batch_local_grouping.py 参照）。
         id_path_pairs = self._get_sample_ids()
+        # グルーピング前の生サンプルID一覧（PETRA比較用: 学習時は分岐グルーピングを行わず
+        # 全分岐ルートを独立サンプルとして使うため、petra/dataset.pyから参照される）。
+        self.raw_id_path_pairs = id_path_pairs
         self.sample_ids, self.group_members = self._build_groups(id_path_pairs)
         self._length = len(self.sample_ids)
 
