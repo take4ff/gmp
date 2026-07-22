@@ -55,6 +55,14 @@ TASKS = {
 def fano_min_error_rate(h_bits: float, vocab_size: int) -> float:
     """Fano不等式 H(X|Y) <= H_b(Pe) + Pe*log2(M-1) を満たす最小のPeを二分探索で求める。
     entropy_accuracy_analysis.py と同一定義（重複はDB非依存スクリプトをtorch非依存に保つため）。
+
+    右辺 f(pe) = H_b(pe) + pe*log2(M-1) は pe*=1-1/M で最大値log2(M)を取り、
+    そこから先は減少に転じる（M=2だとlog2(M-1)=0のため特に顕著）。求めたいのは
+    「達成可能な最小のPe」＝f(0)<h_bits<f(pe*)となる区間内の小さい方の解なので、
+    探索区間は [0, pe*] に限定する（[0, 1]全体だと、M=2等でf(0)とf(1)が両方とも
+    h_bits未満になり得て符号が反転せずbrentqが失敗し、常にpe=1-1/Mへフォール
+    バックしてしまうバグがあった。Synonymous(M=2)タスクでFano上限が実測エントロピー
+    に関わらず常に50%固定になっていたのはこれが原因）。
     """
     M = vocab_size
     if M <= 1 or h_bits <= 0:
@@ -70,8 +78,9 @@ def fano_min_error_rate(h_bits: float, vocab_size: int) -> float:
             hb = -pe * np.log2(pe) - (1 - pe) * np.log2(1 - pe)
         return hb + pe * np.log2(max(M - 1, 1)) - h_bits
 
+    pe_star = 1.0 - 1.0 / M
     try:
-        return brentq(gap, 1e-12, 1 - 1e-9)
+        return brentq(gap, 1e-12, pe_star - 1e-12)
     except ValueError:
         return 1.0 - 1.0 / M
 
@@ -183,8 +192,16 @@ def main():
         if hit_col in monthly.columns:
             ax.plot(xi, monthly[hit_col], marker='o', ms=3, lw=1.2,
                     label=f'{label} (actual)', color=color)
-            ax.fill_between(xi, monthly[hit_col], monthly[f'fano_max_{tk}_accuracy_pct'],
-                             color=color, alpha=0.08)
+            actual = monthly[hit_col].to_numpy()
+            ceiling = monthly[f'fano_max_{tk}_accuracy_pct'].to_numpy()
+            xi_arr = np.array(xi)
+            # 同系色で塗り分け: 実測<=上限（伸びしろ区間）は薄め、実測>上限（上界を超えている区間）は暗め
+            ax.fill_between(xi_arr, actual, ceiling, where=(actual <= ceiling),
+                             color=color, alpha=0.10, interpolate=True,
+                             label='gap (below ceiling)')
+            ax.fill_between(xi_arr, actual, ceiling, where=(actual > ceiling),
+                             color=color, alpha=0.45, interpolate=True,
+                             label='actual exceeds ceiling')
             gap = monthly[f'fano_gap_{tk}_pct'].mean()
             gap_txt = f'  (mean gap={gap:.1f}pt)'
         else:

@@ -19,11 +19,18 @@ PETRAの「枝ごと・単一ターゲット」版（tail-only、本体とは分
   出力はそのまま残る（リーク層別自体の分析価値はあるため）。層別評価の本格導入は
   docs/roadmap.md の今後の展望（項目6）を参照。
 
+--fano_csv （2026-07-21追加）:
+  entropy_fano_by_month.py が出力する entropy_fano_by_month.csv を渡すと、tolerance=0の図に
+  限り Fano理論上限（fano_max_position_accuracy_pct、月別ターゲットエントロピーから導く達成
+  可能な最大位置精度）の折れ線も重ねる。Fano上限は「完全一致」の理論限界であり、tolerance>0の
+  緩和判定には対応しないため、tol=0の図にのみ追加する。
+
 Usage:
   python -m transformer_260707.scripts.analysis.walk_forward.plot_position_tolerance_comparison \
       --main_csv outputs/transformer_260707/scripts/position_tolerance_monthly/<ts>/position_tolerance_monthly.csv \
       --petra_csv_grouped outputs/petra/walk_forward/<ts>/monthly_plot/petra_position_tolerance_monthly_grouped.csv \
-      --tolerances 0 5 10 50 [--leak_tolerant]
+      --tolerances 0 5 10 50 [--leak_tolerant] \
+      [--fano_csv outputs/transformer_260707/scripts/entropy_accuracy/by_month/entropy_fano_by_month.csv]
 """
 import argparse
 import os
@@ -54,14 +61,23 @@ def main():
     ap.add_argument('--leak_tolerant', action='store_true',
                     help='PETRA側もleaked/non_leakedを区別せず全件プールした数値を使う'
                          '（本体と同じ「リーク許容」評価に揃える）。出力ファイル名に_pooledが付く。')
+    ap.add_argument('--fano_csv', default=None,
+                    help='entropy_fano_by_month.csv。指定するとtolerance=0の図にFano理論上限を重ねる')
     args = ap.parse_args()
 
     main_df = _filter_valid_months(pd.read_csv(args.main_csv))
     petra_df = _filter_valid_months(pd.read_csv(args.petra_csv_grouped))
 
+    fano_df = None
+    if args.fano_csv:
+        fano_df = pd.read_csv(args.fano_csv).rename(columns={'yearmonth': 'month'})
+        fano_df = _filter_valid_months(fano_df)
+
     months = sorted(set(main_df['month']) | set(petra_df['month']))
     main_df = main_df.set_index('month').reindex(months)
     petra_df = petra_df.set_index('month').reindex(months)
+    if fano_df is not None:
+        fano_df = fano_df.set_index('month').reindex(months)
 
     out_dir = args.output_dir or os.path.dirname(args.main_csv)
     os.makedirs(out_dir, exist_ok=True)
@@ -100,6 +116,10 @@ def main():
                  label=f'提案モデル (position top1, {label})')
         ax1.plot(months, petra_df[petra_col], marker='^', color='#27ae60', linestyle='--',
                  label=f'PETRA型ベースライン (親グループ・any-of-set, {petra_label_suffix}, {label})')
+        if tol == 0 and fano_df is not None and 'fano_max_position_accuracy_pct' in fano_df.columns:
+            ax1.plot(months, fano_df['fano_max_position_accuracy_pct'], marker='s', ms=4,
+                     color='#c0392b', linestyle=':',
+                     label='Fano理論上限（月別ターゲットエントロピーから導出、緩い上界）')
         ax1.set_ylabel('Hit Rate (%)')
         ax1.set_title(f'Monthly Position Hit Rate Comparison (tolerance = ±{tol} nt)')
         ax1.legend()

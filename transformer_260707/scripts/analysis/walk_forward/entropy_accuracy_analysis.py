@@ -28,6 +28,8 @@ import matplotlib.pyplot as plt
 from scipy.stats import spearmanr
 from scipy.optimize import brentq
 
+plt.rcParams['font.family'] = 'Noto Sans CJK JP'
+
 from transformer_260707 import config
 from transformer_260707.utils.logging import force_print
 from transformer_260707.scripts.analysis.xai import _xai_common as X
@@ -37,7 +39,16 @@ TASK_COLS = ['region_hit_rate_pct', 'position_hit_rate_pct', 'aa_pos_hit_rate_pc
 
 
 def fano_min_error_rate(h_bits: float, vocab_size: int) -> float:
-    """Fano不等式 H(X|Y) <= H_b(Pe) + Pe*log2(M-1) を満たす最小のPeを二分探索で求める。"""
+    """Fano不等式 H(X|Y) <= H_b(Pe) + Pe*log2(M-1) を満たす最小のPeを二分探索で求める。
+
+    右辺 f(pe) = H_b(pe) + pe*log2(M-1) は pe*=1-1/M で最大値log2(M)を取り、
+    そこから先は減少に転じる（M=2だとlog2(M-1)=0のため特に顕著）。求めたいのは
+    「達成可能な最小のPe」＝f(0)<h_bits<f(pe*)となる区間内の小さい方の解なので、
+    探索区間は [0, pe*] に限定する（[0, 1]全体だと、M=2等でf(0)とf(1)が両方とも
+    h_bits未満になり得て符号が反転せずbrentqが失敗し、常にpe=1-1/Mへフォール
+    バックしてしまうバグがあった。Synonymous(M=2)タスクでFano上限が実測エントロピー
+    に関わらず常に50%固定になっていたのはこれが原因）。
+    """
     M = vocab_size
     if M <= 1 or h_bits <= 0:
         return 0.0
@@ -52,8 +63,9 @@ def fano_min_error_rate(h_bits: float, vocab_size: int) -> float:
             hb = -pe * np.log2(pe) - (1 - pe) * np.log2(1 - pe)
         return hb + pe * np.log2(max(M - 1, 1)) - h_bits
 
+    pe_star = 1.0 - 1.0 / M
     try:
-        return brentq(gap, 1e-12, 1 - 1e-9)
+        return brentq(gap, 1e-12, pe_star - 1e-12)
     except ValueError:
         return 1.0 - 1.0 / M
 
