@@ -17,6 +17,26 @@ from .train import train_one_epoch
 from .evaluate import evaluate, evaluate_topk
 from .utils.losses import build_loss_fn
 from .utils.logging import force_print, print_config, print_sample_structure, init_wandb, finish_wandb
+
+
+def _log_rss(tag: str):
+    """[調査用 2026-07-28] walk_forward の fold_3 test評価でのOOM原因切り分けのため、
+    プロセスの現在RSS（/proc/self/status VmRSS）とこれまでの最大RSS（ru_maxrss）を
+    要所でログ出力する。fold境界を跨いで単調にRSSが積み上がるか（同一プロセス内での
+    蓄積仮説）を直接確認するための一時計測。"""
+    try:
+        with open('/proc/self/status') as f:
+            vmrss_kb = None
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    vmrss_kb = int(line.split()[1])
+                    break
+        import resource
+        maxrss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 / 1024
+        cur_gb = (vmrss_kb / 1024 / 1024) if vmrss_kb is not None else float('nan')
+        force_print(f"[MEM] {tag}: current_rss={cur_gb:.2f} GiB, peak_rss={maxrss_gb:.2f} GiB")
+    except Exception as e:
+        force_print(f"[MEM] {tag}: (failed to read RSS: {e})")
 from .utils.io import (
     save_training_log, save_prediction_results, save_strain_info,
     save_config_copy, save_synonymous_distribution_csv,
@@ -28,7 +48,6 @@ from .utils.io import (
     save_strain_metrics_csv,
     save_early_stopping_json,
     save_model_summary_txt,
-    save_topk_precision_csv,
     save_date_metrics_csv,
     save_strength_fine_csv,
     save_lineage_metrics_csv,
@@ -54,7 +73,6 @@ from .utils.plotting import (
     plot_major_mutation_network,
     plot_strength_calibration,
     plot_per_position_recall,
-    plot_topk_precision,
     plot_attention_heatmap,
     plot_metrics_by_date,
     plot_strength_fine,
@@ -120,17 +138,30 @@ def prepare_data():
         if not getattr(config, 'STRENGTH_SCORE_FROM_CSV', True):
             combined_strength = get_combined_sampled_strength(db_path)
 
+        # split_type=0(train)はスループット優先でconfig.NUM_DATALOADER_WORKERSフル、
+        # split_type>=1(val/test、評価用)はrun_final_evaluationでval/testが同時に
+        # 生存し続けるためメモリ負荷優先でconfig.EVAL_NUM_DATALOADER_WORKERSに絞る。
         def _make_loader(split_type, shuffle):
+            num_workers_override = (
+                None if split_type == 0 else getattr(config, 'EVAL_NUM_DATALOADER_WORKERS', None)
+            )
             return create_db_dataloader(
                 db_path=db_path, split_type=split_type,
                 batch_size=config.BATCH_SIZE, shuffle=shuffle,
                 max_cooccurrence=config.MAX_CO_OCCURRENCE,
                 strain_to_strength=combined_strength,
+                num_workers_override=num_workers_override,
             )
 
         train_loader = _make_loader(0, shuffle=True)
         val_loader   = _make_loader(1, shuffle=False)
-        test_loader  = _make_loader(2, shuffle=False)
+        # test_loader はここでは構築しない（遅延構築、下記 make_test_loader 参照）。
+        # testは学習ループ中は一切使われず run_final_evaluation まで不要だが、ここで
+        # 即座に構築すると DBIterableDataset.__init__ が test split 分（実測 fold により
+        # 最大 66万グループ超）のラベルキャッシュを persistent_workers=8 と共に即座に
+        # 確保してしまい、train+valid+testの3キャッシュ×24 workerが学習開始直後から
+        # 数時間常駐してメモリを圧迫する（walk_forward fold_3 OOM実測, 2026-07-25）。
+        test_loader  = None
 
         force_print(
             f"Data loaded: {data_info['train_count']} train, "
@@ -160,10 +191,10 @@ def prepare_data():
                 f"[INFO] After re-assign: {data_info['train_count']} train, "
                 f"{data_info['val_count']} valid, {data_info['test_count']} test"
             )
-            # 再生成した分割に基づいてデータローダーも作り直す
+            # 再生成した分割に基づいてデータローダーも作り直す（testはmake_test_loaderが
+            # 呼ばれた時点でDBから読むため、ここで作り直す必要はない）
             train_loader = _make_loader(0, shuffle=True)
             val_loader   = _make_loader(1, shuffle=False)
-            test_loader  = _make_loader(2, shuffle=False)
 
         # Curriculum Learning 用: 訓練ローダーを再生成するラムダ
         def make_train_loader(max_length=None):
@@ -175,7 +206,20 @@ def prepare_data():
                 strain_to_strength=combined_strength,
             )
 
-        return train_loader, val_loader, test_loader, data_info, None, None, None, make_train_loader
+        # test_loader の遅延構築用ラムダ（run_final_evaluation 直前に呼ぶ）
+        def make_test_loader():
+            return _make_loader(2, shuffle=False)
+
+        # val_loader の再構築用ラムダ（R-Precision評価前にval_loaderを一度破棄し、
+        # 新規（かつEVAL_NUM_DATALOADER_WORKERS採用済みの）workerで作り直すために使う。
+        # walk_forward fold_3 OOM調査（2026-07-28）: evaluate()一巡目の後もval/test
+        # loaderのworkerが生存し続けたまま2巡目(evaluate_topk)に入ることがOOMの一因
+        # だったため、巡目の境界でworkerを一度完全に終了・再生成する。
+        def make_val_loader():
+            return _make_loader(1, shuffle=False)
+
+        return (train_loader, val_loader, test_loader, data_info, None, None, None,
+                make_train_loader, make_test_loader, make_val_loader)
 
     else:
         # 従来の pickle キャッシュ方式
@@ -188,7 +232,16 @@ def prepare_data():
         force_print(
             f"Data loaded: {len(train)} train, {len(valid)} validation, {len(test)} test samples."
         )
-        return train_loader, val_loader, test_loader, data_info, train, valid, test, None
+        # 非DBパスは元々testも即時構築済み（規模が小さく遅延の恩恵が薄いため据え置き）。
+        # make_test_loaderは呼び出し側とのインターフェース統一のためのラップに過ぎない。
+        def make_test_loader():
+            return test_loader
+
+        def make_val_loader():
+            return val_loader
+
+        return (train_loader, val_loader, test_loader, data_info, train, valid, test, None,
+                make_test_loader, make_val_loader)
 
 
 
@@ -528,9 +581,11 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
 
     # Validation
     force_print("Final evaluation on Validation Set...")
+    _log_rss("before evaluate(val_loader)")
     val_loss, val_metrics, val_details, val_cat_metrics, val_metrics_ym, val_calib_bins = evaluate(
         model, val_loader, loss_fn, strength_thresholds
     )
+    _log_rss("after evaluate(val_loader)")
     val_df_ts, val_df_cat = _save_results(val_metrics, val_cat_metrics, val_details, prefix="valid")
     if val_calib_bins:
         save_calibration_csv(val_calib_bins, run_output_dir, prefix="valid")
@@ -544,9 +599,11 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     test_metrics_ym = {}
     if len(test_loader) > 0:
         force_print("Final evaluation on Test Set...")
+        _log_rss("before evaluate(test_loader)")
         test_loss, test_metrics, test_details, test_cat_metrics, test_metrics_ym, test_calib_bins = evaluate(
             model, test_loader, loss_fn, strength_thresholds
         )
+        _log_rss("after evaluate(test_loader)")
         test_df_ts, test_df_cat = _save_results(test_metrics, test_cat_metrics, test_details, prefix="test")
         if test_calib_bins:
             save_calibration_csv(test_calib_bins, run_output_dir, prefix="test")
@@ -572,13 +629,21 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     if _plot_on('metrics_by_date'):
         plot_metrics_by_date(val_metrics_ym, test_metrics_ym, run_output_dir)
 
-    # Top-K 評価 (Validation)
-    eval_ks = getattr(config, "EVAL_TOP_KS", (1, 3, 5))
-    force_print(f"[INFO] Evaluating Top-K precision (k={eval_ks}) on Validation...")
-    val_topk = evaluate_topk(model, val_loader, ks=eval_ks)
-    save_topk_precision_csv(val_topk, run_output_dir, prefix='valid')
-    if _plot_on('topk_precision'):
-        plot_topk_precision(val_topk, run_output_dir, prefix='valid')
+    return val_metrics, test_metrics, val_details, test_details, strength_thresholds, val_loss, test_loss
+
+
+def run_topk_evaluation(model, val_loader, test_loader, run_output_dir,
+                        val_metrics, test_metrics, val_loss, test_loss):
+    """R-Precision（動的K=|target|）評価とrun_summary.jsonの保存を行う。
+
+    val/test_loaderへの追加フルパスとなるため、run_final_evaluationとは分離し、
+    呼び出し側（main()）で学習・per-sample評価用の旧val/test_loaderを一度完全に
+    破棄してから新規（EVAL_NUM_DATALOADER_WORKERS採用）のローダーで呼び出すことを
+    想定する。固定K(1,3,5)のTop-K評価は処理時間・メモリ負荷が大きい割に有用性が
+    低いため除外し、R-Precisionのみ計算する。
+    """
+    force_print("[INFO] Evaluating R-Precision on Validation...")
+    val_topk = evaluate_topk(model, val_loader, ks=())
     if getattr(config, 'USE_R_PRECISION', False):
         save_r_precision_csv(val_topk, run_output_dir, prefix='valid')
         if _plot_on('r_precision'):
@@ -586,11 +651,8 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
 
     test_topk = None
     if len(test_loader) > 0:
-        force_print(f"[INFO] Evaluating Top-K precision (k={eval_ks}) on Test...")
-        test_topk = evaluate_topk(model, test_loader, ks=eval_ks)
-        save_topk_precision_csv(test_topk, run_output_dir, prefix='test')
-        if _plot_on('topk_precision'):
-            plot_topk_precision(test_topk, run_output_dir, prefix='test')
+        force_print("[INFO] Evaluating R-Precision on Test...")
+        test_topk = evaluate_topk(model, test_loader, ks=())
         if getattr(config, 'USE_R_PRECISION', False):
             save_r_precision_csv(test_topk, run_output_dir, prefix='test')
             if _plot_on('r_precision'):
@@ -600,8 +662,6 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
         val_metrics, test_metrics, val_topk, test_topk,
         val_loss, test_loss, run_output_dir,
     )
-
-    return val_metrics, test_metrics, val_details, test_details, strength_thresholds
 
 
 # ──────────────────────────────────────────────
@@ -773,14 +833,19 @@ def main(optuna_trial=None):
     set_seed(config.SEED)
     force_print(f"Using device: {config.DEVICE}")
     print_config()
+    _log_rss("main() start")
 
     wandb = init_wandb()
 
     # 1. データ準備
-    train_loader, val_loader, test_loader, data_info, train, valid, test, make_train_loader = prepare_data()
+    # test_loader は None（DBパスでは遅延構築）で返る。run_final_evaluation 直前に
+    # make_test_loader() で構築する（詳細は prepare_data() 内コメント参照）。
+    (train_loader, val_loader, test_loader, data_info, train, valid, test,
+     make_train_loader, make_test_loader, make_val_loader) = prepare_data()
     force_print(f"Training lengths:   {data_info['train_min_len']} to {data_info['train_max_len']}")
     force_print(f"Validation lengths: {data_info['val_min_len']} to {data_info['val_max_len']}")
     force_print(f"Test lengths:       {data_info['test_min_len']} to {data_info['test_max_len']}")
+    _log_rss("after prepare_data (train+val loaders built)")
 
     if not config.USE_DB and train:
         print_sample_structure(train[0], sample_idx=0)
@@ -844,6 +909,18 @@ def main(optuna_trial=None):
     save_early_stopping_json(training_log, best_model_path, run_output_dir, config.EPOCHS)
     save_model_summary_txt(model, run_output_dir)
 
+    # 学習完了後、train_loader（DATALOADER_PERSISTENT_WORKERS=True の場合はここまで生き続ける
+    # workerプロセス群）をここで明示的に解放する。run_final_evaluationはval_loader/test_loader
+    # しか使わないため、train_loaderを持ち続ける意味は無い一方、trainは全splitの中で最大
+    # （実測900万行超）で、そのworker群がtest評価開始時にもまだ生きていると
+    # train+valid+testの全workerが同時に常駐しメモリを圧迫し、OOM-Killの原因になっていた
+    # （2026-07-24 walk_forward fold_2実測）。
+    _log_rss("before del train_loader")
+    del train_loader, make_train_loader
+    import gc
+    gc.collect()
+    _log_rss("after del train_loader + gc.collect()")
+
     # ベストモデルのロード
     if os.path.exists(best_model_path):
         checkpoint = torch.load(
@@ -854,9 +931,19 @@ def main(optuna_trial=None):
         model.load_state_dict(checkpoint['model_state_dict'])
         force_print(f"Loaded best model from epoch {checkpoint['epoch']+1}")
 
+    # test_loader をここで初めて構築する（train_loader解放後・評価直前）。
+    # DBパスではprepare_data()がtest_loaderをNoneのまま返しているため、train分の
+    # ラベルキャッシュ×workerが完全に解放されてからtest分を確保することで、
+    # train+testの2キャッシュが同時に常駐するピークを避ける。
+    if test_loader is None:
+        test_loader = make_test_loader()
+    _log_rss("after test_loader built (val_loader + test_loader both alive)")
+
     # 4. 最終評価・結果保存
-    run_final_evaluation(model, val_loader, test_loader, loss_fn, run_output_dir, data_info,
-                         strength_thresholds=strength_thresholds)
+    (val_metrics, test_metrics, val_details, test_details, strength_thresholds,
+     val_loss, test_loss) = run_final_evaluation(
+        model, val_loader, test_loader, loss_fn, run_output_dir, data_info,
+        strength_thresholds=strength_thresholds)
 
     # 5. 可視化
     run_visualization(model, run_output_dir, val_loader=val_loader, test_loader=test_loader)
@@ -865,6 +952,22 @@ def main(optuna_trial=None):
     if getattr(config, 'USE_ENSEMBLE', False) and getattr(config, 'ENSEMBLE_CHECKPOINT_PATHS', []):
         force_print("[INFO] Ensemble evaluation starting...")
         ensemble_evaluate(val_loader, test_loader, loss_fn, run_output_dir, strength_thresholds)
+
+    # val_loader/test_loaderはここまでで用済み（run_visualization/ensemble_evaluateが最後の
+    # 利用箇所）。R-Precision評価はval/test_loaderへの追加フルパスであり、学習開始からここ
+    # まで生存し続けたworkerに加えてさらにworkerを常駐させることがOOMの一因だったため
+    # （walk_forward fold_3 OOM調査, 2026-07-28）、一旦完全に破棄してから
+    # EVAL_NUM_DATALOADER_WORKERS採用の新規ローダーを作り直す。
+    _log_rss("before discarding val/test loaders for R-Precision pass")
+    del val_loader, test_loader
+    gc.collect()
+    _log_rss("after discarding val/test loaders")
+    val_loader = make_val_loader()
+    test_loader = make_test_loader()
+    _log_rss("after rebuilding val/test loaders (EVAL_NUM_DATALOADER_WORKERS) for R-Precision pass")
+
+    run_topk_evaluation(model, val_loader, test_loader, run_output_dir,
+                        val_metrics, test_metrics, val_loss, test_loss)
 
     force_print(f"[INFO] Process completed. Results saved to {run_output_dir}")
     finish_wandb(wandb)
@@ -1523,6 +1626,7 @@ def run_walk_forward(folds, wf_run_dir: str):
     prev_fold_id = None  # このループ内で直近に完了した fold_id
 
     for idx, (fold_id, train_start, split_date, split_end, desc) in enumerate(folds):
+        _log_rss(f"run_walk_forward: before fold_{fold_id}")
         force_print(f"\n{'='*60}")
         force_print(f"  Walk-forward Fold {fold_id}: {desc}")
         if train_start:
@@ -1583,6 +1687,16 @@ def run_walk_forward(folds, wf_run_dir: str):
         # 5. 学習・評価
         prev_best_model_path = main()
         prev_fold_id = fold_id
+
+        # fold境界での明示的な解放。main()内のtrain/val/test loader（persistent_workers=True
+        # の場合、各8 workerプロセスと_group_label_cacheを抱える）はmain()のローカル変数
+        # なのでリターン時に参照は切れるが、workerプロセスの終了(SIGTERM送信・join)には
+        # 実時間がかかる。ここでgc.collect()を挟まずに次foldのprepare_data()が新規に
+        # 24 workerを立ち上げると、前foldの旧workerがまだ完全終了しきっていない状態と
+        # 一時的に重なり、メモリを圧迫しうる（walk_forward fold_3 OOM調査より、2026-07-27）。
+        import gc
+        gc.collect()
+        _log_rss(f"run_walk_forward: after fold_{fold_id} + gc.collect()")
 
         force_print(f"[INFO] Fold {fold_id} complete. Best model: {prev_best_model_path}")
 

@@ -14,6 +14,14 @@ CO_ATTN_N_LAYERS = 1            # 2以上で変異間 Self-Attention を多段�
 CO_ATTN_DIM      = 256          # 内部次元
 USE_FLAT_COATTN  = False        # True: 全変異を独立トークンとして Transformer に渡す
 
+# Broadcast-back Cross-Attention（transformer_260723、2026-07-29追加）
+# Co-occurrence Attentionでタイムステップ内の共起変異を1本のベクトルへ集約すると、
+# 個々の変異と他タイムステップの変異間の個別粒度のAttentionが構造的に失われる。
+# 集約前の変異embeddingを時系列Encoder適用後の代表ベクトル列へCross-Attentionさせ、
+# 再集約した結果を学習可能ゲート（0初期化）付き残差として加算することでこれを補う。
+USE_BROADCAST_BACK_ATTENTION = False
+BROADCAST_BACK_ATTENTION_HEADS = None  # Noneの場合 N_HEADS を使用
+
 # コンテキスト窓幅（再前処理が必要）
 CONTEXT_WINDOW = 5              # 前後各方向の塩基数。3 / 5 / 7 で切り替え
 

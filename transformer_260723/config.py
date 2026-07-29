@@ -327,6 +327,19 @@ USE_FLAT_COATTN = False
 #   True : 1D PE（正弦波・通し番号）← 共起情報を持たない純粋な時系列扱い = PETra相当
 FLAT_COATTN_1D_PE = False
 
+# --- Broadcast-back Cross-Attention（USE_FLAT_COATTN=False時のみ意味を持つ） ---
+# Co-occurrence Attentionでタイムステップ内の共起変異集合を1本のベクトルへ集約した後、
+# 時系列Transformer Encoderは代表ベクトル同士でしかAttentionを取らないため、「ある共起
+# 変異群の1つの変異」と「他タイムステップの変異」間の個別粒度でのAttentionが構造的に
+# 取れない（集約後は代表ベクトルしか残らないため）。この対策として、時系列Transformer
+# Encoder適用後の各タイムステップ代表ベクトル r'_t を Key/Value、集約前の個々の変異
+# embeddingをQueryとするCross-Attentionを追加し、その出力をCoOccurrenceAttentionで
+# 再集約した r''_t を、既存の latest_context への残差として学習可能ゲート付きで加算する。
+# USE_FLAT_COATTN=True時は全変異が最初から相互Attentionを取れるため無関係（no-op）。
+# 既定Offのため無効時の挙動は完全に同一。
+USE_BROADCAST_BACK_ATTENTION = False
+BROADCAST_BACK_ATTENTION_HEADS = None  # Noneの場合 N_HEADS を使用
+
 # --- 訓練設定 ---
 BATCH_SIZE = 512
 LEARNING_RATE = 1e-4
@@ -339,6 +352,11 @@ TOP_K_EVAL = 1 # Top-5でのRecallなども見たい場合はここを変更
 # メモリ増は「ワーカー数 × (sample_ids のスライス + prefetch バッファ + DuckDB 接続)」程度で、
 # データ総量には比例しない。0 にすると従来のメインプロセス同期読み込みに戻る。
 NUM_DATALOADER_WORKERS        = 8      # 0=同期（従来）。実測で 8 が ~2.0x（4 は ~1.3x, 28コア環境）。CPU/メモリと要相談
+# val/test（評価用）ローダーは学習用ほどスループットが律速要因にならない一方、
+# run_final_evaluation で val_loader・test_loader が同時に生存し続けるため、
+# worker数はそのままメモリ負荷に直結する。walk_forward fold_3 OOM調査（2026-07-28）を
+# 受け、評価用ローダーは学習用の半分のworker数に絞る。
+EVAL_NUM_DATALOADER_WORKERS   = max(1, NUM_DATALOADER_WORKERS // 2)
 DATALOADER_PREFETCH_FACTOR    = 2      # 各ワーカーが先読みするバッチ数（num_workers>0 時のみ有効）
 DATALOADER_PERSISTENT_WORKERS = True   # エポック間でワーカーを再利用（num_workers>0 時のみ有効）
 DATALOADER_PIN_MEMORY         = True   # host→GPU 転送を高速化（CUDA 時のみ効果）
@@ -760,7 +778,9 @@ HOMOPLASY_PRIOR_SCALE = 1.0     # 学習可能スケール係数の初期値
 # HOMOPLASY_CSV（上記と共用）の再発回数が高い変異ほど、Cross-Attentionスコアへ学習可能
 # スケール付きの負バイアスを加算し、系統非依存の"定番"変異への注目を抑制する。
 # USE_HOMOPLASY_PRIOR（position headへの正バイアス）と対称的な設計。既定Offで挙動不変。
-USE_COATTN_FREQUENCY_PENALTY = False
+# 2026-07-23: walk_forward全7fold本実行のためTrueに設定（transformer_260707のbaseline
+# walk_forward(20260719_001947)とはこのフラグのみが差分、他のconfigは完全一致させている）。
+USE_COATTN_FREQUENCY_PENALTY = True
 COATTN_FREQUENCY_PENALTY_SCALE = 1.0   # 学習可能スケール係数の初期値
 
 # --- 提案11: 分子時計（枝長）補助タスク ---

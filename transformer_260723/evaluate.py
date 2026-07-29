@@ -1,7 +1,23 @@
 # --- evaluate.py ---
 import torch
 from collections import defaultdict
-from .utils.logging import calculate_metrics, calculate_weighted_macro_recall
+from .utils.logging import calculate_metrics, calculate_weighted_macro_recall, force_print
+
+
+def _log_rss_eval(tag: str):
+    """[調査用 2026-07-28] evaluate()バッチループ中のRSS推移を追跡し、OOMが
+    どのバッチ付近で起きているかを切り分けるための一時計測。"""
+    try:
+        with open('/proc/self/status') as f:
+            vmrss_kb = None
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    vmrss_kb = int(line.split()[1])
+                    break
+        cur_gb = (vmrss_kb / 1024 / 1024) if vmrss_kb is not None else float('nan')
+        force_print(f"[MEM] {tag}: current_rss={cur_gb:.2f} GiB")
+    except Exception as e:
+        force_print(f"[MEM] {tag}: (failed to read RSS: {e})")
 from .utils.losses import compute_task_losses
 from . import config
 
@@ -158,7 +174,9 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
     example_printed = False
 
     with torch.no_grad():
-        for (x_cat, x_num, mask), y_batch, batch_lens, batch_strains, batch_strength_scores, batch_input_strs, batch_target_strs, batch_full_paths, raw_y_batch, batch_collection_dates in dataloader:
+        for _eval_batch_idx, ((x_cat, x_num, mask), y_batch, batch_lens, batch_strains, batch_strength_scores, batch_input_strs, batch_target_strs, batch_full_paths, raw_y_batch, batch_collection_dates) in enumerate(dataloader):
+            if _eval_batch_idx == 0 or _eval_batch_idx % 200 == 0:
+                _log_rss_eval(f"evaluate() batch {_eval_batch_idx}")
 
             x_cat = x_cat.to(config.DEVICE)
             x_num = x_num.to(config.DEVICE)
@@ -699,7 +717,7 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5), position_tolerances=None):
                         n_t = len(set(t[target_idx[task]] for t in targets_tuples))
                         if n_t > max_r_k:
                             max_r_k = n_t
-            need_k = max(max(ks), max_r_k, 1)
+            need_k = max((max(ks) if ks else 0), max_r_k, 1)
 
             # 各タスクの topk を「バッチ×1回」だけ計算して CPU list 化する。
             # 旧実装は for i / for k の内側で毎回バッチ全体の topk を取り直していた。

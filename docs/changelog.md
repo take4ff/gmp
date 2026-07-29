@@ -66,3 +66,51 @@ if self.out_proj is not None:
 # 全PADタイムステップ（kpm 行が全 True）の集約は不定値になりうるため 0 で埋める。
 output = torch.nan_to_num(output, nan=0.0)
 ```
+
+---
+
+### `walk_forward` の R-Precision 評価フェーズでの OOM（修正済み・2026-07-29、transformer_260723）
+
+**症状**: `walk_forward` 実行時、fold_1・fold_2 は完走するが、より重い fold（例: fold_3）で `run_final_evaluation` 内の R-Precision 評価（`evaluate_topk`）の途中で DataLoader worker が Tracebook なしに消え、プロセスごと OOM-Kill される。単独 fold で再実行しても、Test評価自体は通過するのに直後の R-Precision フェーズで同様に落ちることを確認（=fold間の蓄積ではなく、この設計自体の問題と判明）。
+
+**原因**: `run_final_evaluation` は Validation/Test 各1回の `evaluate()` の後、**同じ** val_loader・test_loader（学習開始以降 `persistent_workers=True` で生存し続けている）をそのまま使って `evaluate_topk` をもう1周走らせていた。評価用ローダーは学習用と同じ `NUM_DATALOADER_WORKERS`（既定8）を使うため、val+test 合計で最大16 workerが、学習相当の長時間にわたり同時生存し続ける設計になっていた。
+
+**修正内容**:
+1. `config.EVAL_NUM_DATALOADER_WORKERS`（既定 `NUM_DATALOADER_WORKERS` の半分）を新設し、val/test（評価用）ローダーはこちらを使うよう `db/dataset.py:create_db_dataloader` に `num_workers_override` を追加。
+2. `run_final_evaluation` から R-Precision（`evaluate_topk`）部分を `run_topk_evaluation` として分離。`main()` は可視化・Ensemble評価で val/test_loader を使い終えた後、明示的に `del val_loader, test_loader; gc.collect()` してから `make_val_loader()`/`make_test_loader()` で新規（かつ半減された worker 数の）ローダーを作り直し、R-Precision 用に渡す。
+
+```python
+# main.py
+del val_loader, test_loader
+gc.collect()
+val_loader = make_val_loader()
+test_loader = make_test_loader()
+run_topk_evaluation(model, val_loader, test_loader, run_output_dir,
+                    val_metrics, test_metrics, val_loss, test_loss)
+```
+fold_3 を単独プロセスで再検証し、修正前に OOM していた R-Precision フェーズを完走することを確認済み。
+
+---
+
+### `save_config_copy()` が実行時オーバーライドを反映しない問題（修正済み・2026-07-29、transformer_260723）
+
+**症状**: `walk_forward`（`_wf_patch_config()` が `USE_POINT_IN_TIME_FREQ=True` を実行時に強制）で学習したチェックポイントの `config_snapshot.py` を読み込むと、`USE_POINT_IN_TIME_FREQ` が既定値の `False` に戻っている。`evaluate_only.py` や XAI/分析スクリプト（`_xai_common.load_config_snapshot`）がこのスナップショットを再読込すると、学習時とは異なる設定で動いてしまう。
+
+**原因**: `utils/io.py:save_config_copy()` が `config.py` ファイルそのものを `shutil.copy2` していただけで、実行時に上書きされた値（`_wf_patch_config()` や `ABLATION_MASKS` 相当の動的オーバーライド）を一切反映していなかった。
+
+**修正内容**: `config` モジュールのランタイム属性値を走査し、モジュール・関数などシリアライズ不可能な値を除いて `NAME = repr(value)` 形式で書き出す方式に変更（再読込側は既存通り `hasattr(config, name)` でフォールバック）。
+
+---
+
+### walk-forward 分析スクリプトでの `USE_POINT_IN_TIME_FREQ` 揮発によるリーク再混入（修正済み・2026-07-29、transformer_260723・260707）
+
+**症状**: `feature_importance.py` で walk-forward チェックポイント（例: fold_3, Omicron early BA.1/BA.2）を分析すると、`codon_freq`（現 `mutation_recurrence_freq`、`x_num[...,0]`）の重要度が他特徴量を2桁近く上回る。
+
+**原因**: 上記 `save_config_copy()` のバグにより、学習時は `USE_POINT_IN_TIME_FREQ=True`（fold の `split_date` 時点までの変異頻度のみ使用）で正しくリーク対策されていたにもかかわらず、`feature_importance.py` は checkpoint 同梱の `config_snapshot.py` を再読込するだけで `_xai_common.assign_fold_test_window()` を呼んでいなかった（同関数を呼ぶ他の XAI スクリプト群は `TEMPORAL_SPLIT_DATE` 等は補正していたが `USE_POINT_IN_TIME_FREQ` は補正対象に含めていなかった）。結果、分析時は静的 `FREQ_CSV`（データセット全期間で1回だけ計算、test窓より未来の頻度情報を含む）由来の値に揮発し、時系列リークが分析時に再混入していた。
+
+**修正内容**:
+1. `_xai_common.py:assign_fold_test_window()` に `config.USE_POINT_IN_TIME_FREQ = True` の強制設定を追加（この関数を呼ぶ全 walk-forward 分析スクリプトに波及）。
+2. `feature_importance.py` に `--checkpoint` パスから `fold_N` を自動検出し `assign_fold_test_window()` を呼ぶロジックを追加（従来はこの自動検出・呼び出し自体が無かった）。
+3. `codon_freq` は「コドン使用頻度」ではなく塩基位置×置換パターン単位の変異再発頻度であるため、表示名を `mutation_recurrence_freq` に変更（`utils/codon_freq.py` という無関係な別モジュールと同名だった点も解消）。
+
+fold_3 で再実行した結果、重要度は 0.000946→0.000212（約4.5倍減）に低下したが、依然として1位（2位比 2.4倍→2.0倍）。リークを除いても一定の正当な予測シグナル（ホモプラシー変異の再発しやすさ）が残ることを示唆。

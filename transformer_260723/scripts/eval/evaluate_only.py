@@ -77,7 +77,9 @@ def main():
     save_config_copy(run_output_dir)
 
     # データ準備（test_loader のみ使用）
-    _, val_loader, test_loader, data_info, _, _, _, _ = prepare_data()
+    _, val_loader, test_loader, data_info, _, _, _, _, make_test_loader, _ = prepare_data()
+    if test_loader is None:
+        test_loader = make_test_loader()
 
     # strength_thresholds
     use_dynamic = getattr(config, 'DYNAMIC_STRENGTH_CATEGORY', False)

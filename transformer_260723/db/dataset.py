@@ -181,6 +181,106 @@ class DBIterableDataset(IterableDataset):
         self.sample_ids, self.group_members = self._build_groups(id_path_pairs)
         self._length = len(self.sample_ids)
 
+        # 代表サンプルID -> (y_targets_repr, group_targets_list) を、DataLoaderがworkerを
+        # fork するより前（＝ここ、メインプロセス内）で全representative分まとめて構築する。
+        # forkはcopy-on-writeのため、ここで完成させておけば全workerはこの辞書を読むだけで
+        # 済み、物理メモリ上は1コピーとしてforkプロセス間で共有される。
+        # 以前はworker内で遅延構築していたが、その場合は各workerが自分の担当分を独自に
+        # DBから取得してキャッシュに書き込むためCOWのwrite-triggerが働き、結局train/valid/
+        # testの全workerプロセス分（最大24プロセス）だけ同じデータが重複保持されてしまい、
+        # 巨大共起グループ（実測最大117,925メンバー）を抱えるsplitでOOM-Killされた
+        # （2026-07-23 fold_2実測）。
+        self._group_label_cache = self._build_group_label_cache()
+
+    def _build_group_label_cache(self):
+        """全representativeのグループラベルキャッシュを一括構築する（__init__専用）。"""
+        all_member_ids = []
+        for repr_id in self.sample_ids:
+            all_member_ids.extend(self.group_members.get(repr_id, [repr_id]))
+
+        label_dict = {}
+        if all_member_ids:
+            con = connect_db(self.db_path, read_only=True)
+            batch_size = 20000
+            for i in range(0, len(all_member_ids), batch_size):
+                batch_ids = all_member_ids[i:i + batch_size]
+                label_dict.update(self._fetch_labels_for_members(con, batch_ids))
+            con.close()
+
+        cache = {}
+        for repr_id in self.sample_ids:
+            member_ids = self.group_members.get(repr_id, [repr_id])
+            cache[repr_id] = (
+                label_dict.get(repr_id, []),
+                [label_dict.get(mid, []) for mid in member_ids],
+            )
+        return cache
+
+    def _fetch_labels_for_members(self, con, member_ids):
+        """member_ids（生サンプルID）のラベルを {sample_id: labels} で返す。
+
+        USE_SUBSTITUTION_HEAD=True の場合、ラベルタプルを 5 要素から 7 要素に拡張する
+        （拡張分: base_after_token, aa_after_token）。raw_path の最終セグメント（T+1 の
+        各変異）を nucpos でマッチングして付与する。aa_after は codon_mutation4.csv の
+        置換後コドン → DNA2Protein → AA_VOCABS で算出する。
+        """
+        if not member_ids:
+            return {}
+
+        placeholders = ','.join(['?' for _ in member_ids])
+        _use_sub_head = getattr(config, 'USE_SUBSTITUTION_HEAD', False)
+
+        last_step_dict = {}
+        if _use_sub_head:
+            # base_after/aa_afterはraw_pathの最終セグメントのみ参照するため、全履歴文字列
+            # ではなく最終セグメントのみをSQL側で切り出して取得しメモリ・転送量を削減する。
+            last_step_rows = con.execute(f"""
+                SELECT sample_id, string_split(raw_path, '>')[-1] AS last_step
+                FROM samples WHERE sample_id IN ({placeholders})
+            """, member_ids).fetchall()
+            last_step_dict = dict(last_step_rows)
+
+        label_rows = con.execute(f"""
+            SELECT sample_id, targets
+            FROM labels
+            WHERE sample_id IN ({placeholders})
+        """, member_ids).fetchall()
+
+        if not _use_sub_head:
+            return {row[0]: pickle.loads(row[1]) for row in label_rows}
+
+        import re as _re
+        _MUT_NUC_RE = _re.compile(r'[A-Za-z](\d+)([A-Za-z])')
+        _aa_after_lut = _get_aa_after_lut()
+        _aa_n_token = config.AA_VOCABS.get('n', 0)
+
+        def _parse_target_base_map(last_step):
+            """raw_path の最終セグメントから {nucpos: (base_after_token, aa_after_token)} を返す。"""
+            pos_to_token = {}
+            for mut in last_step.split(','):
+                m = _MUT_NUC_RE.search(mut.strip())
+                if m:
+                    nucpos = int(m.group(1))
+                    new_base = m.group(2)
+                    base_token = config.BASE_VOCABS.get(new_base, config.BASE_VOCABS.get('n', 0))
+                    aa_token = _aa_after_lut.get((nucpos, new_base.upper()), _aa_n_token)
+                    pos_to_token[nucpos] = (base_token, aa_token)
+            return pos_to_token
+
+        def _extend(sample_id, base_labels):
+            if not base_labels:
+                return base_labels
+            last_step = last_step_dict.get(sample_id)
+            if last_step is None:
+                return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
+            base_map = _parse_target_base_map(last_step)
+            return [(t[0], t[1], t[2], t[3], t[4],
+                     base_map.get(t[1], (0, 0))[0],   # base_after
+                     base_map.get(t[1], (0, 0))[1])   # aa_after
+                    for t in base_labels]
+
+        return {row[0]: _extend(row[0], pickle.loads(row[1])) for row in label_rows}
+
     def _build_groups(self, id_path_pairs):
         """(sample_id, raw_path) のリストから、同一input_path_str（raw_pathの最終ステップを
         除いた履歴）を持つサンプルをグループ化する。
@@ -462,26 +562,26 @@ class DBIterableDataset(IterableDataset):
 
         # sample_ids は代表IDのリスト。any-of-set正解集合はグループ全メンバー
         # （分岐兄弟サンプル）のラベルを合算する必要があるため、代表だけでなく
-        # 全メンバーのラベル（と USE_SUBSTITUTION_HEAD 用の raw_path）を取得する。
+        # 全メンバーのラベルを参照する。__init__ で全representative分を事前構築済みの
+        # _group_label_cache から引くだけなので、ここでのDBアクセスは不要。
+        #
         # getattr: object.__new__(DBIterableDataset) 経由で __init__ を経ずに手動構築された
-        # インスタンス（lineage_attention_compare.py 等）は group_members を持たないため、
-        # 単独サンプル（グループ化なし）として安全にフォールバックする。
-        group_members = getattr(self, 'group_members', {})
-        all_member_ids = []
-        for repr_id in sample_ids:
-            all_member_ids.extend(group_members.get(repr_id, [repr_id]))
-        member_placeholders = ','.join(['?' for _ in all_member_ids])
-
-        member_raw_path_rows = con.execute(f"""
-            SELECT sample_id, raw_path FROM samples WHERE sample_id IN ({member_placeholders})
-        """, all_member_ids).fetchall()
-        member_raw_path_dict = dict(member_raw_path_rows)
-
-        label_rows = con.execute(f"""
-            SELECT sample_id, targets
-            FROM labels
-            WHERE sample_id IN ({member_placeholders})
-        """, all_member_ids).fetchall()
+        # インスタンス（lineage_attention_compare.py 等）は _group_label_cache を持たないため、
+        # このchunk分だけその場でフェッチする単発フォールバックを使う。
+        cache = getattr(self, '_group_label_cache', None)
+        if cache is None:
+            group_members = getattr(self, 'group_members', {})
+            all_member_ids = []
+            for repr_id in sample_ids:
+                all_member_ids.extend(group_members.get(repr_id, [repr_id]))
+            label_dict = self._fetch_labels_for_members(con, all_member_ids)
+            cache = {
+                repr_id: (
+                    label_dict.get(repr_id, []),
+                    [label_dict.get(mid, []) for mid in group_members.get(repr_id, [repr_id])],
+                )
+                for repr_id in sample_ids
+            }
 
         con.close()
 
@@ -499,56 +599,6 @@ class DBIterableDataset(IterableDataset):
             num_feat = pickle.loads(num_blob)
             features_dict[sample_id][timestep].append((cat_feat, num_feat))
 
-        # ラベルを辞書化
-        # USE_SUBSTITUTION_HEAD=True の場合、ラベルタプルを 5 要素から 7 要素に拡張する
-        # 拡張分: (base_after_token, aa_after_token)
-        # raw_path の最終セグメント（T+1 の各変異）を nucpos でマッチングして付与する
-        # aa_after は codon_mutation4.csv の置換後コドン → DNA2Protein → AA_VOCABS で算出する
-        _use_sub_head = getattr(config, 'USE_SUBSTITUTION_HEAD', False)
-
-        if _use_sub_head:
-            import re as _re
-            _MUT_NUC_RE = _re.compile(r'[A-Za-z](\d+)([A-Za-z])')
-            _aa_after_lut = _get_aa_after_lut()
-            _aa_n_token = config.AA_VOCABS.get('n', 0)
-
-            def _parse_target_base_map(raw_path):
-                """raw_path の最終セグメントから {nucpos: (base_after_token, aa_after_token)} を返す。"""
-                last_step = raw_path.split('>')[-1]
-                pos_to_token = {}
-                for mut in last_step.split(','):
-                    m = _MUT_NUC_RE.search(mut.strip())
-                    if m:
-                        nucpos = int(m.group(1))
-                        new_base = m.group(2)
-                        base_token = config.BASE_VOCABS.get(new_base, config.BASE_VOCABS.get('n', 0))
-                        aa_token = _aa_after_lut.get((nucpos, new_base.upper()), _aa_n_token)
-                        pos_to_token[nucpos] = (base_token, aa_token)
-                return pos_to_token
-
-        def _maybe_extend_labels(sample_id, base_labels):
-            """USE_SUBSTITUTION_HEAD=True の場合に 5-tuple → 7-tuple へ拡張する。
-
-            グループ全メンバー（代表以外も含む）に対して呼ぶため、代表限定の sample_dict
-            ではなく全メンバーの raw_path を持つ member_raw_path_dict を参照する。
-            """
-            if not _use_sub_head or not base_labels:
-                return base_labels
-            raw_path = member_raw_path_dict.get(sample_id)
-            if raw_path is None:
-                return [(t[0], t[1], t[2], t[3], t[4], 0, 0) for t in base_labels]
-            base_map = _parse_target_base_map(raw_path)
-            # 各ターゲット変異を nucpos（t[1]）でマッチングして base_after / aa_after を個別付与
-            return [(t[0], t[1], t[2], t[3], t[4],
-                     base_map.get(t[1], (0, 0))[0],   # base_after
-                     base_map.get(t[1], (0, 0))[1])   # aa_after
-                    for t in base_labels]
-
-        label_dict = {
-            row[0]: _maybe_extend_labels(row[0], pickle.loads(row[1]))
-            for row in label_rows
-        }
-
         # 結果を構築（sample_id は代表IDのリスト。x_cat/x_numは代表のみで構築し、
         # 正解集合はグループ全メンバーのラベルリスト group_targets_list として渡す）
         results = []
@@ -563,9 +613,7 @@ class DBIterableDataset(IterableDataset):
                 for ts in sorted(features_dict[sample_id].keys()):
                     x.append(features_dict[sample_id][ts])
 
-            y_targets = label_dict.get(sample_id, [])
-            member_ids = group_members.get(sample_id, [sample_id])
-            group_targets_list = [label_dict.get(mid, []) for mid in member_ids]
+            y_targets, group_targets_list = cache.get(sample_id, ([], [[]]))
 
             if self.strain_to_strength is not None:
                 strength_score = self.strain_to_strength.get(strain_name, 0.0)
@@ -776,7 +824,8 @@ def _build_soft_target(group_items, temperature=None, route_weights=None):
 
 def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
                          max_cooccurrence=None, min_length=None, max_length=None,
-                         chunk_size=1000, strain_to_strength=None, split_col_override=None):
+                         chunk_size=1000, strain_to_strength=None, split_col_override=None,
+                         num_workers_override=None):
     """DBからデータを読み込むDataLoaderを作成する。
 
     Args:
@@ -789,6 +838,8 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
         chunk_size: DBから一度に読み込むサンプル数
         strain_to_strength: サンプリング後株出現数の動的流行度辞書
         split_col_override: 参照カラムを強制指定（Noneなら get_split_col() に従う）
+        num_workers_override: Noneの場合 config.NUM_DATALOADER_WORKERS を使用。
+            val/test評価用ローダーは呼び出し側から config.EVAL_NUM_DATALOADER_WORKERS を渡す。
 
     Returns:
         DataLoader
@@ -853,7 +904,10 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
 
     # DataLoader 並列化（データ律速の学習を GPU 計算とオーバーラップさせて時短する）
     loader_kwargs = dict(batch_size=batch_size, collate_fn=collate_fn)
-    num_workers = int(getattr(config, 'NUM_DATALOADER_WORKERS', 0) or 0)
+    if num_workers_override is not None:
+        num_workers = int(num_workers_override)
+    else:
+        num_workers = int(getattr(config, 'NUM_DATALOADER_WORKERS', 0) or 0)
     if num_workers > 0:
         loader_kwargs['num_workers'] = num_workers
         # prefetch_factor / persistent_workers は num_workers>0 のときのみ指定可

@@ -4,7 +4,6 @@
 import os
 import pickle
 import hashlib
-import shutil
 import pandas as pd
 from . import logging as _log
 from .. import config
@@ -193,11 +192,43 @@ def save_strain_info(strains, output_dir, prefix="train"):
 
 
 def save_config_copy(output_dir):
-    """config.pyのコピーを保存する（再現性のため）。"""
-    config_src = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.py')
+    """configのランタイム値（実行時に上書きされた値を含む）をスナップショットとして保存する。
+
+    以前は config.py ファイルをそのまま shutil.copy2 していたが、これでは walk_forward の
+    fold境界での _wf_patch_config()（main.py）や XAI スクリプトの assign_fold_test_window()
+    （_xai_common.py）等によるランタイム上書き（USE_POINT_IN_TIME_FREQ, TEMPORAL_SPLIT_DATE等）
+    が反映されず、静的な config.py 自体のデフォルト値がそのまま保存されてしまっていた。
+    このスナップショットを後で再読み込みする側（evaluate_only.py, _xai_common.load_config_snapshot
+    等）はそれを「実際に使われた設定」と誤認するため、例えば codon_freq 特徴量の walk-forward
+    時系列リーク対策（USE_POINT_IN_TIME_FREQ=True）が feature_importance.py 等の事後分析では
+    silently False に戻ってしまう、という食い違いが発生していた（2026-07-29 調査より）。
+    モジュールや関数などシリアライズ不可能な値は書き出さない。再読み込み側は
+    hasattr(config, name) 分岐でそれらのみ config.py 自体のデフォルトにフォールバックする。
+    """
+    import types
+    import ast as _ast
     config_dst = _get_save_path(output_dir, 'config_snapshot.py')
     try:
-        shutil.copy2(config_src, config_dst)
+        lines = [
+            '# --- config_snapshot.py ---',
+            '# save_config_copy() によるランタイム値スナップショット（config.pyの静的コピーではない）。',
+            '# 実行時に上書きされた値（walk_forwardのfold設定等）を反映した値を保存する。',
+            '',
+        ]
+        for name in dir(config):
+            if name.startswith('_'):
+                continue
+            value = getattr(config, name)
+            if isinstance(value, types.ModuleType) or callable(value):
+                continue
+            value_repr = repr(value)
+            try:
+                _ast.literal_eval(value_repr)
+            except Exception:
+                continue
+            lines.append(f'{name} = {value_repr}')
+        with open(config_dst, 'w') as f:
+            f.write('\n'.join(lines) + '\n')
         _log.force_print(f"[INFO] Config snapshot saved to {config_dst}")
     except Exception as e:
         _log.force_print(f"[WARNING] Failed to save config snapshot: {e}")

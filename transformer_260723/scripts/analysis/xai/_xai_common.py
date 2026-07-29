@@ -179,6 +179,15 @@ def assign_fold_test_window(db_path, train_start, split_date, split_end):
     config.TEMPORAL_SPLIT_TEST_END = split_end
     config.USE_UNIQUE_FILTER = False
     config.USE_TRAIN_ENTROPY_FILTER = False
+    # config_snapshot.py は実行時に上書きされた値ではなく静的な config.py そのものの
+    # コピーであるため（save_config_copy()参照）、USE_POINT_IN_TIME_FREQ=Trueで学習された
+    # walk_forwardチェックポイントでも、config_snapshot再読み込み後はFalse（既定値）に
+    # 戻ってしまう。ここで明示的にTrueへ強制し、このfoldのsplit_date時点の
+    # point-in-time頻度（reference/point_in_time_freq/{split_date}.csv）を使わせることで、
+    # 静的FREQ_CSV由来の未来リーク（codon_freq, x_num[...,0]）を分析時にも防ぐ
+    # （feature_importance.py のcodon_freq高重要度がこのリークの再混入によるものだった
+    # 問題の調査より、2026-07-29）。
+    config.USE_POINT_IN_TIME_FREQ = True
     con = connect_db(db_path, read_only=False)
     cols = [r[1] for r in con.execute("PRAGMA table_info('samples')").fetchall()]
     if 'split_type_wf' not in cols:

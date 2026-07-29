@@ -40,7 +40,9 @@ from transformer_260707.scripts.analysis.xai import _xai_common as X
 
 # x_num の各次元名（feature.py の num_feat 構造と一致）
 _NUM_FEATURE_NAMES = [
-    'codon_freq',            # 0  コドン使用頻度
+    'mutation_recurrence_freq',  # 0  塩基位置×置換パターン単位の変異再発頻度（reference/table_set.csv由来。
+                                 #    「コドン使用頻度」ではない。walk-forward分析時はfold検出により
+                                 #    point-in-time版に強制される。utils/codon_freq.pyとは無関係）
     'hydrophobicity',        # 1  疎水性差 (Eisenberg-Weiss)
     'charge',                # 2  電荷差
     'aa_size',               # 3  アミノ酸サイズ差
@@ -337,11 +339,42 @@ def main():
     parser.add_argument('--force_cpu', action='store_true', help='GPU が埋まっている場合に CPU で実行')
     args = parser.parse_args()
 
+    # walk_forwardのcheckpoint（.../fold_N/.../models/best_model.pth）を渡された場合、
+    # そのfoldの正しいtest期間・point-in-time設定を強制する。config_snapshot.pyは
+    # 実行時オーバーライドを反映しない静的コピーのため、何もしないとTEMPORAL_SPLIT_DATE/
+    # USE_POINT_IN_TIME_FREQが学習時と食い違い、静的FREQ_CSV由来の未来リークが
+    # codon_freq(x_num[...,0])に再混入する（2026-07-29 codon_freq高重要度の原因調査より）。
+    import re as _re
+    _fold_match = _re.search(r'fold_(\d+)', args.checkpoint)
+    fold_id = int(_fold_match.group(1)) if _fold_match else None
+    fold_window = None
+    if fold_id is not None:
+        fold_windows = X.get_fold_windows()
+        fold_window = fold_windows.get(fold_id)
+        if fold_window is None:
+            force_print(f"[WARN] fold_{fold_id} が FOLDS 定義に無いため walk-forward 補正をスキップ")
+
     # 共通ローダで config_snapshot 反映・モデル・DataLoader を用意（_xai_common に集約）
     out_dir = X.make_output_dir('feature_importance', args.output_dir)
     force_print(f"Output dir: {out_dir}")
+
+    db_path = None
+    if fold_window is not None:
+        from transformer_260707.db.connection import get_db_path
+        db_path = get_db_path()
+        train_start, split_date, split_end = fold_window
+        force_print(f"[INFO] walk-forward fold_{fold_id} 検出: test window [{split_date}, {split_end})")
+        X.assign_fold_test_window(db_path, train_start, split_date, split_end)
+
     model, loader, device = X.load_model_and_loader(
         args.checkpoint, split=args.split, force_cpu=args.force_cpu)
+
+    if fold_window is not None:
+        # load_model_and_loader内部のload_config_snapshot()がTEMPORAL_SPLIT_DATE/
+        # USE_POINT_IN_TIME_FREQ を静的スナップショット値へ戻してしまうため、
+        # ここで再度フォールドの正しい値へ上書きする（DBのsplit_type_wf割り当て自体は
+        # 上のloader構築時点で既に正しく反映済みなのでUPDATEは冪等な再適用）。
+        X.assign_fold_test_window(db_path, train_start, split_date, split_end)
 
     target_idx = 1 if args.target == 'position' else 0
     n_feats    = config.NUM_CHEM_FEATURES

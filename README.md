@@ -238,6 +238,7 @@ CO_ATTN_N_HEADS  = 4            # 共起 Attention のヘッド数
 CO_ATTN_N_LAYERS = 1            # 2以上で変異間 Self-Attention を多段化
 CO_ATTN_DIM      = 256          # 内部次元
 USE_FLAT_COATTN  = False        # True: 全変異を独立トークンとして Transformer に渡す
+USE_BROADCAST_BACK_ATTENTION = False  # 集約前の変異embeddingを他タイムステップの代表ベクトルへCross-Attention
 
 # コンテキスト窓幅（再前処理が必要）
 CONTEXT_WINDOW = 5              # 前後各方向の塩基数。3 / 5 / 7 で切り替え

@@ -317,6 +317,55 @@ class OriginAttention(nn.Module):
         return self.norm(self.dropout(attn_out))
 
 
+class BroadcastBackAttention(nn.Module):
+    """USE_BROADCAST_BACK_ATTENTION=True 時、集約前の個々の変異embeddingが、時系列
+    Transformer Encoder適用後の他タイムステップの代表ベクトル群に直接Cross-Attentionする。
+
+    CoOccurrenceAttentionは各タイムステップの共起変異集合を1本のベクトルへ潰すため、
+    その後の時系列Transformer Encoderは代表ベクトル同士でしかAttentionを取れず、
+    「ある共起変異群の1つの変異」と「他タイムステップの変異」間の個別粒度での
+    Attentionが構造的に失われる。本モジュールはその是正として、個々の変異embedding
+    （Query）が時系列文脈化済みの代表ベクトル列 r'_1..r'_T（Key/Value）へ直接
+    Cross-Attentionすることで、個別粒度の情報を一度取り戻す（出力は呼び出し側で
+    CoOccurrenceAttentionにより再集約される想定）。
+    """
+    def __init__(self):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(
+            embed_dim=config.FEATURE_DIM,
+            num_heads=getattr(config, 'BROADCAST_BACK_ATTENTION_HEADS', None) or config.N_HEADS,
+            dropout=config.DROPOUT,
+            batch_first=True,
+        )
+        self.norm = nn.LayerNorm(config.FEATURE_DIM)
+        self.dropout = nn.Dropout(config.DROPOUT)
+
+    def forward(self, x_mutations, r_context, context_key_padding_mask=None):
+        """
+        x_mutations: [B, T, C, F] 集約前の個々の変異embedding（Query）
+        r_context:   [B, T', F]   時系列Transformer Encoder適用後の代表ベクトル列（Key/Value）
+                     （T'はTEMPORAL_POOLING='cls'でCLSトークンを含む場合 T+1）
+        context_key_padding_mask: [B, T'] bool, True=PAD（r_context側のPADタイムステップ）
+
+        Returns:
+            [B, T, C, F] 個々の変異ごとに他タイムステップの文脈を取り込んだembedding
+        """
+        B, T, C, F = x_mutations.shape
+        Tc = r_context.size(1)
+        q_flat = x_mutations.reshape(B * T, C, F)
+
+        # r_context [B, Tc, F] を、B*T個の各クエリグループが同一batch内の同じキー系列を
+        # 参照できるよう [B*T, Tc, F] に展開する（クエリ側のtに依らずbが同じなら同じ系列）。
+        kv = r_context.unsqueeze(1).expand(B, T, Tc, F).reshape(B * T, Tc, F)
+        kpm = None
+        if context_key_padding_mask is not None:
+            kpm = context_key_padding_mask.unsqueeze(1).expand(B, T, Tc).reshape(B * T, Tc)
+
+        attn_out, _ = self.attn(q_flat, kv, kv, key_padding_mask=kpm, need_weights=False)
+        attn_out = self.norm(self.dropout(attn_out))
+        return attn_out.reshape(B, T, C, F)
+
+
 class MixturePositionHead(nn.Module):
     """提案8: 多峰対応の Position 出力ヘッド（Mixture of Softmax Experts）。
 
@@ -397,6 +446,18 @@ class HierarchicalTransformer(nn.Module):
         else:
             self.origin_attn = None
             self.origin_embedding = None
+
+        # Broadcast-back Cross-Attention（Ablation Study用に切り替え可能）
+        self.use_broadcast_back = getattr(config, 'USE_BROADCAST_BACK_ATTENTION', False)
+        if self.use_broadcast_back:
+            self.broadcast_back_attn = BroadcastBackAttention()
+            # 学習可能ゲート（0初期化）: 新規パスが既存の latest_context を初手から
+            # 乱さないよう、tanh(gate)=0 スタートから寄与を徐々に学習させる
+            # （Flamingoのgated cross-attention等と同様の安定化トリック）。
+            self.broadcast_back_gate = nn.Parameter(torch.zeros(1))
+        else:
+            self.broadcast_back_attn = None
+            self.broadcast_back_gate = None
 
         # [CLS] トークン（BERT方式）- TEMPORAL_POOLING='cls' の場合に使用
         # シーケンス先頭に追加し、Self-Attention を通じてシーケンス全体の情報を集約する
@@ -709,6 +770,9 @@ class HierarchicalTransformer(nn.Module):
             # 2. 共起集約 (ベース情報)
             # base_before==0 は PAD トークン（BASE_VOCABS['PAD']=0）
             co_occur_mask = (x_cat[..., 0] == 0)  # [B, T, C] True=PAD
+            # Broadcast-back Cross-Attention用に集約前の個々の変異embeddingを保持しておく
+            # （下の x_agg = self.co_attn(x, ...) 以降、変数名 x は上書きされていくため）
+            x_mutations = x  # [B, T, C, F]
 
             # 提案: 頻度ペナルティ無効時は引数を一切追加せず既存呼び出しのまま
             # （USE_FLAT_COATTN分岐と対称に、co_attn.forwardのシグネチャ互換性を壊さないため）
@@ -781,6 +845,36 @@ class HierarchicalTransformer(nn.Module):
                 latest_context = x[:, 0, :]
             else:  # 'last'
                 latest_context = x[:, -1, :]
+
+            # Broadcast-back Cross-Attention: 個々の変異embedding（Query）が時系列
+            # Transformer Encoder適用後の代表ベクトル列 r'_1..r'_T（Key/Value）へ
+            # 直接Cross-Attentionし、CoOccurrenceAttentionで再集約した r''_t を
+            # 学習可能ゲート付き残差として latest_context に加算する。
+            if self.use_broadcast_back and self.broadcast_back_attn is not None:
+                if pooling == 'cls':
+                    # CLSトークンは変異timestepではないためbroadcast-back先から除く
+                    r_context = x[:, 1:, :]
+                    ctx_kpm = key_padding_mask[:, 1:] if key_padding_mask is not None else None
+                else:
+                    r_context = x
+                    ctx_kpm = key_padding_mask
+
+                h = self.broadcast_back_attn(x_mutations, r_context, context_key_padding_mask=ctx_kpm)
+                x_refined_agg = self.co_attn(h, co_occur_mask=co_occur_mask, **co_attn_kwargs)  # [B, T, F]
+
+                if pooling == 'mean':
+                    if ctx_kpm is not None:
+                        mask_float = (~ctx_kpm).float().unsqueeze(-1)
+                        refined_context = (x_refined_agg * mask_float).sum(dim=1) / mask_float.sum(dim=1).clamp(min=1)
+                    else:
+                        refined_context = x_refined_agg.mean(dim=1)
+                elif pooling == 'cls':
+                    # CLS自体には対応するタイムステップが無いため全タイムステップの平均を側注として加算
+                    refined_context = x_refined_agg.mean(dim=1)
+                else:  # 'last'
+                    refined_context = x_refined_agg[:, -1, :]
+
+                latest_context = latest_context + torch.tanh(self.broadcast_back_gate) * refined_context
 
         # 提案4: 主要系統クレード埋め込みを pooled 表現へ加算（分布シフト対策）
         # clade_ids [B] が渡され USE_CLADE_EMBEDDING=True のときのみ作用する。

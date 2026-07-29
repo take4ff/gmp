@@ -41,6 +41,11 @@
 - **Co-occurrence Attention の多段階拡張（Omicron期大規模共起への対応）**
   - `CO_ATTN_DIM`（内部次元拡大）、`CO_ATTN_N_LAYERS`（変異間 Self-Attention の多段化）、`USE_FLAT_COATTN`（全変異を独立トークンとして Transformer に直接入力）の3フラグで共起集約の表現力をアブレーション比較可能。
 
+- **Broadcast-back Cross-Attention（`USE_BROADCAST_BACK_ATTENTION`、transformer_260723・2026-07-29追加）**
+  - Co-occurrence Attention はタイムステップ内の共起変異集合を1本の代表ベクトルへ集約するため、以降の時系列 Transformer Encoder は代表ベクトル同士でしか Attention を取れず、「ある共起変異群の1つの変異」と「他タイムステップの変異」間の個別粒度の Attention が構造的に失われる。
+  - 対策として、集約前の個々の変異 embedding（Query）が時系列 Transformer Encoder 適用後の代表ベクトル列 `r'_1..r'_T`（Key/Value）へ Cross-Attention し、その出力を `CoOccurrenceAttention` で再集約したベクトルを、学習可能ゲート（`tanh`、0初期化）付き残差として `latest_context` に加算する（`model.py:BroadcastBackAttention`）。
+  - ゲートが0初期化のため有効化直後は既存挙動に対して数学的に完全な no-op であり、学習の進行に伴い寄与を自ら獲得する（Flamingo の gated cross-attention と同様の安定化トリック）。`TEMPORAL_POOLING` の `last`/`mean`/`cls` いずれにも対応。既定 Off。
+
 - **DuckDB による超高速データベース＆バルク処理**
   - 数百万レコードに及ぶ大規模な変異パスとゲノムメタデータを DuckDB で管理し、メモリ効率的かつ高速なストリームバッチ学習を実現。
 
