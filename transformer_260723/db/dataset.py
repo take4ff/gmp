@@ -192,11 +192,34 @@ class DBIterableDataset(IterableDataset):
         # （2026-07-23 fold_2実測）。
         self._group_label_cache = self._build_group_label_cache()
 
+    def _capped_member_ids(self, repr_id, member_ids):
+        """MAX_GROUP_MEMBERS_FOR_CACHE を超える巨大グループのメンバーを間引く。
+
+        代表サンプル自身は常に残し、それ以外を repr_id をseedにした決定的な乱数で
+        サブサンプリングする（同一グループは何度呼んでも同じ間引き結果になる）。
+        巨大グループ（Omicron期の大規模クローン展開等）を無間引きでキャッシュすると
+        学習用DataLoaderのpersistent workerでCopy-on-Write共有が長時間かけて崩れ、
+        worker数分メモリが重複してOOMするため（2026-07-31実測）。
+        """
+        cap = getattr(config, 'MAX_GROUP_MEMBERS_FOR_CACHE', None)
+        if cap is None or len(member_ids) <= cap:
+            return member_ids
+        import random as _random
+        rng = _random.Random(repr_id)
+        others = [m for m in member_ids if m != repr_id]
+        sampled = rng.sample(others, max(0, cap - 1))
+        return [repr_id] + sampled
+
     def _build_group_label_cache(self):
         """全representativeのグループラベルキャッシュを一括構築する（__init__専用）。"""
+        capped_members = {
+            repr_id: self._capped_member_ids(repr_id, self.group_members.get(repr_id, [repr_id]))
+            for repr_id in self.sample_ids
+        }
+
         all_member_ids = []
         for repr_id in self.sample_ids:
-            all_member_ids.extend(self.group_members.get(repr_id, [repr_id]))
+            all_member_ids.extend(capped_members[repr_id])
 
         label_dict = {}
         if all_member_ids:
@@ -209,7 +232,7 @@ class DBIterableDataset(IterableDataset):
 
         cache = {}
         for repr_id in self.sample_ids:
-            member_ids = self.group_members.get(repr_id, [repr_id])
+            member_ids = capped_members[repr_id]
             cache[repr_id] = (
                 label_dict.get(repr_id, []),
                 [label_dict.get(mid, []) for mid in member_ids],
@@ -571,14 +594,18 @@ class DBIterableDataset(IterableDataset):
         cache = getattr(self, '_group_label_cache', None)
         if cache is None:
             group_members = getattr(self, 'group_members', {})
+            capped_members = {
+                repr_id: self._capped_member_ids(repr_id, group_members.get(repr_id, [repr_id]))
+                for repr_id in sample_ids
+            }
             all_member_ids = []
             for repr_id in sample_ids:
-                all_member_ids.extend(group_members.get(repr_id, [repr_id]))
+                all_member_ids.extend(capped_members[repr_id])
             label_dict = self._fetch_labels_for_members(con, all_member_ids)
             cache = {
                 repr_id: (
                     label_dict.get(repr_id, []),
-                    [label_dict.get(mid, []) for mid in group_members.get(repr_id, [repr_id])],
+                    [label_dict.get(mid, []) for mid in capped_members[repr_id]],
                 )
                 for repr_id in sample_ids
             }

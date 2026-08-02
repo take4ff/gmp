@@ -199,6 +199,16 @@ TRAIN_MAX = 40 # TS:1-40を学習に利用(TRAIN_MAX > MAX_SEQ_LEN + TARGET_LEN)
 VALID_NUM = 3
 MAX_CO_OCCURRENCE = 20  # 最大共起数上限（Omicron等に対応するため5から20へ緩和）
 EVAL_MAX_Y_CO_OCCURRENCE = 5  # 評価時に過剰な情報漏洩を防ぐためのターゲット共起上限
+# MAX_CO_OCCURRENCEが「1サンプル内で同時発生した変異数」の上限なのに対し、こちらは
+# 「同一input_path_str（分岐親履歴）を共有し1グループとしてany-of-set統合されるサンプル数」
+# の上限。Omicron期は1つの祖先枝に大量のサンプルがぶら下がる巨大グループが生じ
+# （fold_3 test最大14,684、fold_4 train最大13,871人実測、2026-07-30/31）、
+# db/dataset.py:_build_group_label_cache がこの全メンバー分のラベルをキャッシュするため、
+# 学習用DataLoaderのpersistent workerで長時間かけてCopy-on-Write共有が崩れ実質的に
+# worker数分重複し、OOMの一因となった。これを超えるグループはメンバーを決定的に
+# （代表サンプルIDをseedに）ランダムサブサンプリングしてキャッシュ・Soft Target分配・
+# any-of-set評価の対象から間引く（代表サンプル自身は常に残す）。Noneで無効化。
+MAX_GROUP_MEMBERS_FOR_CACHE = 4000
 RAW_PATH_TRUNCATE_LEN = None  # samples.raw_path 保存時の文字数上限。None=切り詰めなし（完全な履歴文字列を保存、正確性優先）
 VALID_RATIO = 0.2
 
@@ -357,6 +367,15 @@ NUM_DATALOADER_WORKERS        = 8      # 0=同期（従来）。実測で 8 が 
 # worker数はそのままメモリ負荷に直結する。walk_forward fold_3 OOM調査（2026-07-28）を
 # 受け、評価用ローダーは学習用の半分のworker数に絞る。
 EVAL_NUM_DATALOADER_WORKERS   = max(1, NUM_DATALOADER_WORKERS // 2)
+# 学習用ローダーは DATALOADER_PERSISTENT_WORKERS=True で同一worker群が全epoch（15epoch×
+# 数百〜千バッチ）にわたり生存し続ける。_group_label_cache はfork前にメインプロセスで
+# 1回だけ構築しCopy-on-Writeで全workerに共有される設計だが、CPythonは「読むだけ」でも
+# オブジェクトの参照カウント書き込みが発生するため、バッチを処理するたびに少しずつ
+# ページがコピーされ、長時間かけて実質的に全worker分重複してしまう。巨大共起グループ
+# （fold_4のtrainで最大13,871人実測）を含むsplitでは、1 workerあたり約6GBまで肥大化し
+# 8 worker合計・評価用待機workerとの合算でOOMした（2026-07-31実測）。MAX_GROUP_MEMBERS_
+# FOR_CACHEでキャッシュ自体を縮小しつつ、worker数も絞って複製の総量を抑える。
+TRAIN_NUM_DATALOADER_WORKERS  = max(1, NUM_DATALOADER_WORKERS // 2)
 DATALOADER_PREFETCH_FACTOR    = 2      # 各ワーカーが先読みするバッチ数（num_workers>0 時のみ有効）
 DATALOADER_PERSISTENT_WORKERS = True   # エポック間でワーカーを再利用（num_workers>0 時のみ有効）
 DATALOADER_PIN_MEMORY         = True   # host→GPU 転送を高速化（CUDA 時のみ効果）
@@ -695,6 +714,18 @@ LOSS_WEIGHT_AA_AFTER   = 0.05   # aa_after 損失の重み
 # evaluate_topk() で K=len(target_set) の動的 K を使った R-Precision を計算する
 # True の場合: 固定 K 結果と並列に 'r_precision' キーで結果が追加される
 USE_R_PRECISION = True
+
+# R-Precisionの動的Kはバッチ内の最大target_set長（max_r_k）を全サンプル共通のneed_kとして
+# 使うため、バッチ中にたった1サンプルでも巨大な共起グループ（any-of-set評価で全メンバーの
+# ターゲットを合算するため、グループサイズがそのままtarget_set長になる）が混入すると、
+# そのバッチの全サンプルに対してtorch.topk(..., k=need_k)とCPU化(.tolist())が走り、
+# k×batch_size相当のテンソル/Pythonリストを瞬間的に確保してOOMする
+# （walk_forward fold_3、Omicron早期BA.1/BA.2で共起グループ最大14,684人を実測、2026-07-30）。
+# fold別のグループ内ユニークラベル数（position, group_label_count_histogram.py実測、
+# 2026-07-30）: fold_3のみ突出（最大12,751）、他fold（1,2,4,5,6,7）は最大でも3,510
+# （fold_2）。3,510は旧cap無し実装でも実際にOOMせず動作した実測値のため、4000に設定すれば
+# fold_3以外は打ち切りなしで厳密なR-Precisionを維持しつつ、fold_3の外れ値のみ打ち切れる。
+MAX_R_PRECISION_K = 4000
 
 # --- Item 8: ESM-2 外部タンパク質言語モデル特徴量 ---【未実装スタブ】
 # 【未実装】config フラグと model.py の esm2_projection スタブのみ存在。

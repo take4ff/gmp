@@ -5,6 +5,25 @@ from . import config
 from .utils.losses import compute_task_losses
 
 
+def _log_rss_train(tag: str):
+    """[調査用 2026-07-31] train_one_epoch()バッチループ中のRSS推移を追跡し、
+    fold_4学習中クラッシュ(persistent train workerでの共有group_label_cacheの
+    COW+refcountタッチによる緩やかな重複増加の疑い)を切り分けるための一時計測。"""
+    try:
+        with open('/proc/self/status') as f:
+            vmrss_kb = None
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    vmrss_kb = int(line.split()[1])
+                    break
+        cur_gb = (vmrss_kb / 1024 / 1024) if vmrss_kb is not None else float('nan')
+        from .utils.logging import force_print
+        force_print(f"[MEM] {tag}: current_rss={cur_gb:.2f} GiB")
+    except Exception as e:
+        from .utils.logging import force_print
+        force_print(f"[MEM] {tag}: (failed to read RSS: {e})")
+
+
 def train_one_epoch(model, dataloader, optimizer, loss_fn, loss_wrapper=None):
     """1エポック分の学習を実行する。
 
@@ -33,7 +52,9 @@ def train_one_epoch(model, dataloader, optimizer, loss_fn, loss_wrapper=None):
     # collate_fn の戻り値に raw_y が追加
     # Soft Target モード: y_batch = list of dict (Soft Target ベクトル)
     # Hard Target モード: y_batch = list of list of tuples
-    for (x_cat, x_num, mask), y_batch, _, batch_strains, batch_strength_scores, _, _, _, _raw_y, *extra in tqdm(dataloader, desc="Training"):
+    for _train_batch_idx, ((x_cat, x_num, mask), y_batch, _, batch_strains, batch_strength_scores, _, _, _, _raw_y, *extra) in enumerate(tqdm(dataloader, desc="Training")):
+        if _train_batch_idx == 0 or _train_batch_idx % 300 == 0:
+            _log_rss_train(f"train_one_epoch() batch {_train_batch_idx}")
 
         x_cat = x_cat.to(config.DEVICE)
         x_num = x_num.to(config.DEVICE)

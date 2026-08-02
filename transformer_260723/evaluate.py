@@ -708,6 +708,12 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5), position_tolerances=None):
             target_idx = {'region': 0, 'position': 1, 'aa_pos': 2, 'codon_pos': 3, 'synonymous': 4}
 
             # 必要な最大 k（標準 ks と R-Precision の動的 k を包含）を先に決める。
+            # any-of-set評価ではtarget_set長がグループの全メンバー数に比例するため、
+            # バッチ中にたった1サンプルでも巨大な共起グループ（walk_forward fold_3実測で
+            # 最大14,684人）が混入すると、そのバッチ全体でtorch.topk(k=need_k)と
+            # .cpu().tolist()がk×batch_size分のメモリを瞬間確保しOOMする
+            # （2026-07-30実測）。MAX_R_PRECISION_Kで上限を設けて打ち切る。
+            max_r_precision_k = getattr(config, 'MAX_R_PRECISION_K', 2000)
             max_r_k = 0
             if use_r_precision:
                 for targets_tuples in raw_y_batch:
@@ -716,7 +722,7 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5), position_tolerances=None):
                     for task in tasks:
                         n_t = len(set(t[target_idx[task]] for t in targets_tuples))
                         if n_t > max_r_k:
-                            max_r_k = n_t
+                            max_r_k = min(n_t, max_r_precision_k)
             need_k = max((max(ks) if ks else 0), max_r_k, 1)
 
             # 各タスクの topk を「バッチ×1回」だけ計算して CPU list 化する。
@@ -740,8 +746,11 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5), position_tolerances=None):
                         stats[task][k]['n']             += 1
 
                     # R-Precision: K = len(target_set) を動的に決定（同じ row をスライス）
+                    # target_set が MAX_R_PRECISION_K を超える極端な巨大共起グループの場合、
+                    # row 自体が need_k（<=MAX_R_PRECISION_K）長で打ち切られているため、
+                    # そのサンプルのR-Precisionは本来より小さいK相当で評価される（安全側）。
                     if use_r_precision:
-                        r_k = max(1, len(t_set))
+                        r_k = min(max(1, len(t_set)), len(row))
                         pred_set_r = set(row[:r_k])
                         tp_r = len(pred_set_r & t_set)
                         rp_stats[task]['tp']            += tp_r

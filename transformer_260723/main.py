@@ -138,12 +138,17 @@ def prepare_data():
         if not getattr(config, 'STRENGTH_SCORE_FROM_CSV', True):
             combined_strength = get_combined_sampled_strength(db_path)
 
-        # split_type=0(train)はスループット優先でconfig.NUM_DATALOADER_WORKERSフル、
-        # split_type>=1(val/test、評価用)はrun_final_evaluationでval/testが同時に
-        # 生存し続けるためメモリ負荷優先でconfig.EVAL_NUM_DATALOADER_WORKERSに絞る。
+        # split_type=0(train)はconfig.TRAIN_NUM_DATALOADER_WORKERS、
+        # split_type>=1(val/test、評価用)はconfig.EVAL_NUM_DATALOADER_WORKERSを使う。
+        # trainはpersistent_workers=Trueで全epochにわたり同一workerが生存するため、
+        # _group_label_cacheのCopy-on-Write共有がバッチを重ねるごとに崩れてworker数分
+        # 重複し、巨大共起グループを含むfoldでOOMした（walk_forward fold_4実測,
+        # 2026-07-31）。worker数を絞ってこの重複の総量を抑える
+        # （MAX_GROUP_MEMBERS_FOR_CACHEによるキャッシュ自体の縮小と併用）。
         def _make_loader(split_type, shuffle):
             num_workers_override = (
-                None if split_type == 0 else getattr(config, 'EVAL_NUM_DATALOADER_WORKERS', None)
+                getattr(config, 'TRAIN_NUM_DATALOADER_WORKERS', None) if split_type == 0
+                else getattr(config, 'EVAL_NUM_DATALOADER_WORKERS', None)
             )
             return create_db_dataloader(
                 db_path=db_path, split_type=split_type,
@@ -204,6 +209,7 @@ def prepare_data():
                 max_cooccurrence=config.MAX_CO_OCCURRENCE,
                 max_length=max_length,
                 strain_to_strength=combined_strength,
+                num_workers_override=getattr(config, 'TRAIN_NUM_DATALOADER_WORKERS', None),
             )
 
         # test_loader の遅延構築用ラムダ（run_final_evaluation 直前に呼ぶ）
