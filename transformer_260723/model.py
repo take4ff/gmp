@@ -689,6 +689,22 @@ class HierarchicalTransformer(nn.Module):
                     torch.tensor(float(getattr(config, 'COATTN_FREQUENCY_PENALTY_SCALE', 1.0)))
                 )
 
+        # --- 学習時 Region 条件付き Position 予測 ---
+        # region_headの予測確率をposition→region写像で引き当てたlog確率を、学習可能
+        # スケール付きでposition_headの出力へ加算する（USE_HOMOPLASY_PRIORと同型のバイアス
+        # 機構）。evaluate.pyのUSE_HIERARCHICAL_PREDICTION（推論時の事後マスキング）を
+        # 学習時からモデル自体に組み込む版。flag=False時はstate_dictにキーが増えず
+        # 既存挙動と完全同一。
+        self.region_hier_scale = None
+        if getattr(config, 'USE_REGION_CONDITIONED_POSITION', False):
+            from .db.queries import get_position_region_map
+            self.register_buffer('pos_region_map', get_position_region_map())
+            self.region_hier_scale = nn.Parameter(
+                torch.tensor(float(getattr(config, 'REGION_HIER_SCALE', 1.0)))
+            )
+        else:
+            self.pos_region_map = None
+
         # --- Items 8/9/10: 外部特徴量スタブ ---
         # ESM-2: preprocess.py で抽出した埋め込みを受け取り、FEATURE_DIM 互換の64次元に射影する
         # 実際の特徴量は forward() の esm2_features 引数 (Optional Tensor [B, T, ESM2_EMBED_DIM]) で渡す予定
@@ -920,6 +936,18 @@ class HierarchicalTransformer(nn.Module):
         # 提案10: ホモプラシー事前分布を Position ロジットへ加算（後続 softmax/CE で再正規化）
         if self.homoplasy_bias is not None and self.homoplasy_scale is not None:
             output_position = output_position + self.homoplasy_scale * self.homoplasy_bias
+        # 学習時 Region 条件付き Position 予測: region_headの予測確率をposition→region
+        # 写像で引き当てたlog確率を、学習可能スケール付きでPosition ロジットへ加算する
+        # （evaluate.pyのUSE_HIERARCHICAL_PREDICTIONの学習時版）。region_probsはdetachし、
+        # position損失からregion_headへ逆流して予測が歪まないようにする（region→position
+        # の一方向の情報の流れのみを意図した設計）。
+        if self.pos_region_map is not None and self.region_hier_scale is not None:
+            region_probs = torch.softmax(output_region, dim=-1).detach()  # [B, NUM_REGIONS]
+            B_rh = region_probs.size(0)
+            pos_region_probs = region_probs.gather(
+                1, self.pos_region_map.unsqueeze(0).expand(B_rh, -1)
+            )  # [B, VOCAB_SIZE_POSITION]
+            output_position = output_position + self.region_hier_scale * torch.log(pos_region_probs + 1e-8)
         output_aa_pos    = self.aa_pos_head(ctx_aa_pos)
         output_strength  = self.strength_head(ctx_strength).squeeze(-1)  # [B, 1] -> [B]
         output_codon_pos = self.codon_pos_head(ctx_codon_pos)

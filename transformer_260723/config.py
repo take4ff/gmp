@@ -347,6 +347,14 @@ FLAT_COATTN_1D_PE = False
 # 再集約した r''_t を、既存の latest_context への残差として学習可能ゲート付きで加算する。
 # USE_FLAT_COATTN=True時は全変異が最初から相互Attentionを取れるため無関係（no-op）。
 # 既定Offのため無効時の挙動は完全に同一。
+# 2026-08-04: walk_forward全7fold本実行で効果検証のためTrueに設定（USE_COATTN_FREQUENCY_
+# PENALTY=Trueのwalk_forward 20260802_082112とはこのフラグのみが差分の比較用run）。
+# 2026-08-06: 上記A/B比較（20260802_082112 vs 20260805_034330）の結果、R-Precision全体で
+# position -0.015pt（実質無変化）、region -0.367pt/codon_pos -0.165pt/synonymous -0.544pt
+# とむしろ悪化。fold_3（Omicron early、本来この機構で改善したかった巨大共起グループの
+# 期間）でもposition 4.76%→4.30%と悪化しており、狙った効果は確認できなかったため
+# 既定をFalseに戻す。ゲート（0初期化）が15epoch×foldの学習量では有効な信号を
+# 獲得しきれなかった可能性がある。
 USE_BROADCAST_BACK_ATTENTION = False
 BROADCAST_BACK_ATTENTION_HEADS = None  # Noneの場合 N_HEADS を使用
 
@@ -802,6 +810,18 @@ USE_HOMOPLASY_PRIOR   = False
 HOMOPLASY_CSV         = 'reference/homoplasy/site_recurrence.csv'
 HOMOPLASY_PRIOR_SCALE = 1.0     # 学習可能スケール係数の初期値
 
+# --- 学習時 Region 条件付き Position 予測 ---
+# evaluate.py の USE_HIERARCHICAL_PREDICTION（推論時の事後マスキング。予測Region上位K個に
+# 属さないposition候補のロジットを除外する）は、fold_3のcheckpointで再学習なしに
+# position_hit_rate +0.309pt・全fold平均+0.105ptの改善を実測済み（2026-08-08、
+# hierarchical_prediction_check.py）。一方モデル自体（region_head・position_head）は
+# 完全に独立に学習されており「regionが分かればpositionが絞れる」構造を学習時には
+# 教わっていない。position_headの出力に、region_headの予測確率をposition→region写像
+# （db/queries.py:get_position_region_map、事前分布としてUSE_HOMOPLASY_PRIORと同型）で
+# 引き当てた log確率を学習可能スケール付きで加算し、この構造を学習時から組み込む。
+USE_REGION_CONDITIONED_POSITION = True
+REGION_HIER_SCALE = 1.0   # 学習可能スケール係数の初期値（HOMOPLASY_PRIOR等と同じ1.0初期化）
+
 # --- 提案: Co-occurrence Attentionへの頻度ペナルティ ---
 # 大きな共起グループ(オミクロン系統等)で、ほぼ全系統に共通する創始変異(nsp12:P323L等)に
 # Attentionが機械的に収束する現象への対策（verify_coattn_frequency_confound.py で確認、
@@ -811,7 +831,18 @@ HOMOPLASY_PRIOR_SCALE = 1.0     # 学習可能スケール係数の初期値
 # USE_HOMOPLASY_PRIOR（position headへの正バイアス）と対称的な設計。既定Offで挙動不変。
 # 2026-07-23: walk_forward全7fold本実行のためTrueに設定（transformer_260707のbaseline
 # walk_forward(20260719_001947)とはこのフラグのみが差分、他のconfigは完全一致させている）。
-USE_COATTN_FREQUENCY_PENALTY = True
+# 2026-08-03: True版walk_forward（20260802_082112、一連のOOM修正・MAX_GROUP_MEMBERS_FOR_CACHE
+# 適用済み）とのクリーンなA/B比較のため、同一コード・同一修正状態でFalseに戻して新規学習
+# （walk_forward 20260803_115144として完了）。260707 baseline(20260719_001947)はOOM修正等を
+# 含まずフラグ以外の条件も揃っていないため比較対象から外す。
+# 2026-08-04: 上記A/B比較の結果、R-Precision全体でposition -0.637pt/aa_pos -0.537pt
+# （fold_3等Omicron期を含むほぼ全foldでTrueが劣る）、一方region +0.531pt/codon_pos +0.167pt/
+# synonymous +0.375ptとTrueが有利な逆のトレードオフを確認。本プロジェクトが重視するposition
+# 予測でむしろ悪化し、「巨大共起グループでの創始変異へのAttention収束がposition精度を
+# 下げる」という導入時の仮説を裏付ける効果は確認できなかったため、既定をFalseに戻す
+# （task別に出し分ける案も検討したが、共有パイプライン全体の二重計算が必要でコストに
+# 見合わないと判断し見送り）。
+USE_COATTN_FREQUENCY_PENALTY = False
 COATTN_FREQUENCY_PENALTY_SCALE = 1.0   # 学習可能スケール係数の初期値
 
 # --- 提案11: 分子時計（枝長）補助タスク ---

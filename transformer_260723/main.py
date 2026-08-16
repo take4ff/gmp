@@ -638,15 +638,17 @@ def run_final_evaluation(model, val_loader, test_loader, loss_fn,
     return val_metrics, test_metrics, val_details, test_details, strength_thresholds, val_loss, test_loss
 
 
-def run_topk_evaluation(model, val_loader, test_loader, run_output_dir,
-                        val_metrics, test_metrics, val_loss, test_loss):
-    """R-Precision（動的K=|target|）評価とrun_summary.jsonの保存を行う。
+def run_topk_evaluation_val(model, val_loader, run_output_dir, val_metrics, val_loss):
+    """R-Precision（動的K=|target|）評価をValidationに対してのみ行う。
 
-    val/test_loaderへの追加フルパスとなるため、run_final_evaluationとは分離し、
-    呼び出し側（main()）で学習・per-sample評価用の旧val/test_loaderを一度完全に
-    破棄してから新規（EVAL_NUM_DATALOADER_WORKERS採用）のローダーで呼び出すことを
-    想定する。固定K(1,3,5)のTop-K評価は処理時間・メモリ負荷が大きい割に有用性が
-    低いため除外し、R-Precisionのみ計算する。
+    val/test_loaderへの追加フルパスであり、run_final_evaluationとは分離している。
+    test側（run_topk_evaluation_test）と別関数にしているのは、呼び出し元（main()）が
+    このval評価の完了後に自身のフレーム上でval_loaderへの参照を明示的に破棄できる
+    ようにするため。単一の関数内でval→test評価を続けて行うと、val評価用の
+    ローダー・workerへの参照が呼び出し元(main())のローカル変数として関数呼び出しの
+    間ずっと生き続け、test評価が最も重いタイミングでval用の待機workerまで同時に
+    メモリへ乗ったままになる（walk_forward fold_3 region-conditioned検証runでの
+    R-Precision OOM調査, 2026-08-17）。
     """
     force_print("[INFO] Evaluating R-Precision on Validation...")
     val_topk = evaluate_topk(model, val_loader, ks=())
@@ -654,7 +656,17 @@ def run_topk_evaluation(model, val_loader, test_loader, run_output_dir,
         save_r_precision_csv(val_topk, run_output_dir, prefix='valid')
         if _plot_on('r_precision'):
             plot_r_precision(val_topk, run_output_dir, prefix='valid')
+    return val_topk
 
+
+def run_topk_evaluation_test(model, test_loader, run_output_dir, test_metrics, test_loss):
+    """R-Precision（動的K=|target|）評価をTestに対してのみ行う。
+
+    呼び出し元（main()）がrun_topk_evaluation_val完了後にval_loaderを破棄してから
+    このtest評価を呼ぶことを想定する（run_topk_evaluation_valのdocstring参照）。
+    固定K(1,3,5)のTop-K評価は処理時間・メモリ負荷が大きい割に有用性が低いため除外し、
+    R-Precisionのみ計算する。
+    """
     test_topk = None
     if len(test_loader) > 0:
         force_print("[INFO] Evaluating R-Precision on Test...")
@@ -663,11 +675,7 @@ def run_topk_evaluation(model, val_loader, test_loader, run_output_dir,
             save_r_precision_csv(test_topk, run_output_dir, prefix='test')
             if _plot_on('r_precision'):
                 plot_r_precision(test_topk, run_output_dir, prefix='test')
-
-    save_run_summary_json(
-        val_metrics, test_metrics, val_topk, test_topk,
-        val_loss, test_loss, run_output_dir,
-    )
+    return test_topk
 
 
 # ──────────────────────────────────────────────
@@ -972,8 +980,25 @@ def main(optuna_trial=None):
     test_loader = make_test_loader()
     _log_rss("after rebuilding val/test loaders (EVAL_NUM_DATALOADER_WORKERS) for R-Precision pass")
 
-    run_topk_evaluation(model, val_loader, test_loader, run_output_dir,
-                        val_metrics, test_metrics, val_loss, test_loss)
+    val_topk = run_topk_evaluation_val(model, val_loader, run_output_dir, val_metrics, val_loss)
+
+    # test評価が最も重い（巨大共起グループを含みうる）フェーズのため、val評価用の
+    # ローダー・workerをここで完全に解放してから臨む。del だけでは呼び出し先
+    # （run_topk_evaluation_val）のローカル参照が既に消えていても、このmain()自身の
+    # フレームのval_loaderがまだ生きていれば参照が残りworkerは終了しない。ここで
+    # main()自身のval_loaderを明示的に破棄することで初めて参照カウントが0になり
+    # workerプロセスが実際に終了する。
+    _log_rss("before discarding val_loader for test R-Precision pass")
+    del val_loader
+    gc.collect()
+    _log_rss("after discarding val_loader")
+
+    test_topk = run_topk_evaluation_test(model, test_loader, run_output_dir, test_metrics, test_loss)
+
+    save_run_summary_json(
+        val_metrics, test_metrics, val_topk, test_topk,
+        val_loss, test_loss, run_output_dir,
+    )
 
     force_print(f"[INFO] Process completed. Results saved to {run_output_dir}")
     finish_wandb(wandb)

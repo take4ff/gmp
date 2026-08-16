@@ -684,7 +684,9 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5), position_tolerances=None):
         return torch.topk(tensor, actual_k, dim=1).indices
 
     with torch.no_grad():
-        for (x_cat, x_num, mask), _y_batch, _, _, _, _, _, _, raw_y_batch, *extra in dataloader:
+        for _topk_batch_idx, ((x_cat, x_num, mask), _y_batch, _, _, _, _, _, _, raw_y_batch, *extra) in enumerate(dataloader):
+            if _topk_batch_idx == 0 or _topk_batch_idx % 200 == 0:
+                _log_rss_eval(f"evaluate_topk() batch {_topk_batch_idx}")
             x_cat = x_cat.to(config.DEVICE)
             x_num = x_num.to(config.DEVICE)
             mask  = mask.to(config.DEVICE)
@@ -724,6 +726,9 @@ def evaluate_topk(model, dataloader, ks=(1, 3, 5), position_tolerances=None):
                         if n_t > max_r_k:
                             max_r_k = min(n_t, max_r_precision_k)
             need_k = max((max(ks) if ks else 0), max_r_k, 1)
+            if _topk_batch_idx == 0 or _topk_batch_idx % 200 == 0:
+                force_print(f"[MEM] evaluate_topk() batch {_topk_batch_idx}: "
+                            f"need_k={need_k} (cap={max_r_precision_k}, batch_size={len(raw_y_batch)})")
 
             # 各タスクの topk を「バッチ×1回」だけ計算して CPU list 化する。
             # 旧実装は for i / for k の内側で毎回バッチ全体の topk を取り直していた。
