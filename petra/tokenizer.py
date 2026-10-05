@@ -165,7 +165,7 @@ class MutationTokenizer:
         """pos/region/region_pos/nuc_mut/region_mut トークンを codon_mutation4.csv から
         直接列挙して追加する（DBスキャン不要、位置の全域をカバーできる）。
         """
-        from transformer_260707.db.feature import DNA2Protein
+        from transformer_260817.db.feature import DNA2Protein
         self._dna2protein = DNA2Protein
         self._ann = load_codon_annotation(codon_csv)
         print(f'  codon annotation loaded: {len(self._ann):,} positions')
@@ -266,7 +266,7 @@ class MutationTokenizer:
         use_region_fields=True の場合、各 mut は [mut,pos,nuc_mut,region,region_pos,region_mut]
         の6トークンに展開される。
 
-        max_history_steps: 本体(transformer_260707.db.dataset)の
+        max_history_steps: 本体(transformer_260817.db.dataset)の
         `raw_path.split('>')[-MAX_SEQ_LEN:]` と同じ切り出し方で、直近何タイムステップ
         （'>'区切り、各タイムステップ内の共起変異はそのまま維持）のみを使うか。
         None なら系統樹の根からの全履歴を使う（従来動作）。
@@ -365,8 +365,8 @@ class MutationTokenizer:
         tok.token2id = data['token2id']
         tok.id2token = data['id2token']
         if tok.use_region_fields:
-            from transformer_260707 import config as main_config
+            from transformer_260817 import config as main_config
             tok._dna2protein = __import__(
-                'transformer_260707.db.feature', fromlist=['DNA2Protein']).DNA2Protein
+                'transformer_260817.db.feature', fromlist=['DNA2Protein']).DNA2Protein
             tok._ann = load_codon_annotation(main_config.CODON_CSV)
         return tok

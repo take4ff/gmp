@@ -109,9 +109,9 @@ def get_strain_country_map(db_path, split_type):
     samples.country が無い（未再構築の古い DB）場合は空 dict を返し、呼び出し側は
     重み=1.0（Average と同一）にフォールバックする。
     """
-    from transformer_260707.db.connection import connect_db
-    from transformer_260707.db.queries import get_split_col
-    from transformer_260707 import config
+    from transformer_260817.db.connection import connect_db
+    from transformer_260817.db.queries import get_split_col
+    from transformer_260817 import config
 
     con = connect_db(db_path, read_only=True)
     try:

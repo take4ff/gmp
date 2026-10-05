@@ -20,7 +20,7 @@ import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
-from transformer_260707.scripts.eval.walk_forward import FOLDS
+from transformer_260817.scripts.eval.walk_forward import FOLDS
 from petra import config as petra_config
 from petra.dataset import PetraDataset
 from petra.eval.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
@@ -89,7 +89,7 @@ def main():
     device = torch.device('cpu' if args.force_cpu or not torch.cuda.is_available()
                           else petra_config.DEVICE)
 
-    from transformer_260707.db.connection import get_db_path
+    from transformer_260817.db.connection import get_db_path
     db_path = get_db_path()
     tokenizer = MutationTokenizer.load(resolve_vocab_cache_path())
     print(f'Vocab size: {tokenizer.vocab_size}, device={device}')
