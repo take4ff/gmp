@@ -29,6 +29,13 @@
   （`20260809_194502`はfold_3のみ）。#2の全fold平均、#3の公平な評価、#1の重み確認は
   この全fold学習をもって一括で行うのが効率的。
 
+- **#5・#6の配線テストと残タスク（2026-10-08）**: `USE_CLADE_EMBEDDING`・`USE_TRAIN_ENTROPY_FILTER`は
+  実装済みだがテストが無かったため、`tests/test_clade_and_entropy_filter.py`（28件、変異テスト7種で検出力確認）を追加した。
+  **残り: `getattr(config, 'USE_CLADE_EMBEDDING', False)`等を`config.X`直読みへ書き換える**（CLAUDE.mdルール4。
+  対象: `train.py`・`evaluate.py`・`model.py`の`USE_CLADE_EMBEDDING`、`db/dataset.py`の`USE_TRAIN_ENTROPY_FILTER`・`TRAIN_ENTROPY_MAX`）。
+  DB構築・学習の実行中は`transformer/`を書き換えない（ルール9）ため、完了後に実施する。
+  なお`clade_embed`はON時のみstate_dictにキーが増える（`_OFF_IF_ABSENT_FROM_SNAPSHOT`への登録は、既定をONにする場合に必要）。
+
 ## 月例報告項目「理論上限に届かないデータからの精度向上」との対応（2026-10-07）
 
 Fano上限と達成率の分析（`fano_gap_*`・`lineage_accuracy_drivers`、7/21）は実施済み。未着手は
