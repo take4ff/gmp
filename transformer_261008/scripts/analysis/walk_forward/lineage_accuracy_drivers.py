@@ -44,6 +44,7 @@ from scipy import stats
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
+from transformer_261008.db.queries import valid_date_sql
 from transformer_261008 import config
 from transformer_261008.utils.logging import force_print
 from transformer_261008.db.connection import get_db_path, connect_db
@@ -70,7 +71,7 @@ FACTOR_LABELS = {
 def _train_lineages_for_fold(con, train_start, split_date):
     """このfoldのtrain窓（[train_start, split_date)）で観測された系統集合を返す。"""
     where = f"st.{STRAIN_COL} IS NOT NULL AND st.{STRAIN_COL} != 'unclassifiable' "
-    where += "AND s.collection_date IS NOT NULL AND s.collection_date != '' "
+    where += "AND s.collection_date IS NOT NULL AND s.collection_date != '' AND " + valid_date_sql('s.collection_date') + " "
     params = []
     if train_start is not None:
         where += "AND RPAD(s.collection_date, 10, '-01-01') >= ? "
@@ -95,7 +96,7 @@ def _test_window_rows(con, split_date, split_end):
     呼び出し側で pickle.loads(targets_blob) の長さを見て行う（db/dataset.py::_get_sample_ids と同じロジック）。
     """
     where = f"st.{STRAIN_COL} IS NOT NULL AND st.{STRAIN_COL} != 'unclassifiable' "
-    where += "AND s.collection_date IS NOT NULL AND s.collection_date != '' "
+    where += "AND s.collection_date IS NOT NULL AND s.collection_date != '' AND " + valid_date_sql('s.collection_date') + " "
     where += "AND RPAD(s.collection_date, 10, '-01-01') >= ? "
     params = [split_date]
     if split_end is not None:

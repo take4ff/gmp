@@ -28,6 +28,7 @@ import torch
 import matplotlib.pyplot as plt
 
 from transformer_261008 import config
+from transformer_261008.db.queries import valid_date_sql
 from transformer_261008.utils.logging import force_print
 from transformer_261008.scripts.analysis.xai import _xai_common as X
 
@@ -319,7 +320,7 @@ def run_walk_forward(args):
             con.execute("ALTER TABLE samples ADD COLUMN split_type_wf INTEGER DEFAULT -1")
         con.execute("UPDATE samples SET split_type_wf = -1")
         base = ("UPDATE samples SET split_type_wf = 2 WHERE collection_date IS NOT NULL "
-                "AND collection_date != '' AND RPAD(collection_date, 10, '-01-01') >= ?")
+                "AND collection_date != '' AND " + valid_date_sql() + " AND RPAD(collection_date, 10, '-01-01') >= ?")
         if split_end is None:
             con.execute(base, [split_date])
         else:

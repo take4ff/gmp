@@ -30,6 +30,7 @@ from collections import defaultdict
 import duckdb
 import pandas as pd
 
+from transformer_261008.db.queries import valid_date_sql
 from transformer_261008.db.connection import get_db_path
 from transformer_261008.scripts.eval.walk_forward import FOLDS
 
@@ -58,7 +59,7 @@ def compute_point_in_time_freq(db_path, cutoff_date, max_position=29903):
     Returns: dict[(base_before, position, base_after)] -> count（ユニークraw_pathの数）
     """
     con = duckdb.connect(db_path, read_only=True)
-    where = "collection_date IS NOT NULL AND collection_date != '' "
+    where = "collection_date IS NOT NULL AND collection_date != '' AND " + valid_date_sql() + " "
     params = []
     if cutoff_date:
         where += "AND RPAD(collection_date, 10, '-01-01') < ? "

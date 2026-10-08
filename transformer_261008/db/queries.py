@@ -7,6 +7,19 @@ from .connection import connect_db, get_db_path
 from .. import config
 
 
+# collection_date の有効な形式（'YYYY' / 'YYYY-MM' / 'YYYY-MM-DD'）。split割当は
+# RPAD(collection_date,10,'-01-01') の文字列比較で行うため、'2022/2024' のような不正形式は
+# '/'(0x2F) > '-'(0x2D) の文字コード差で日付範囲に偶然入ってしまう（2026-07の既知問題、
+# sequences-241017_2.csv 内217件）。不正形式の行はsplit割当の対象から外す。
+# split/期間条件を作るSQLは必ず valid_date_sql() を AND すること（tests/test_assign_wf_splits.py）。
+VALID_DATE_REGEX = r'^\d{4}(-\d{2}(-\d{2})?)?$'
+
+
+def valid_date_sql(col='collection_date'):
+    """col が有効な日付形式であるSQL述語（NULL/空文字は偽になる）。"""
+    return f"regexp_matches({col}, '{VALID_DATE_REGEX}')"
+
+
 def get_split_col():
     """現在設定されている SPLIT_MODE に応じて参照すべき DB のカラム名を返す。"""
     mode = getattr(config, 'SPLIT_MODE', 'timestep').lower()
@@ -273,6 +286,12 @@ def assign_date_splits(con):
 
     # まず全サンプルを train (0) にリセット
     con.execute("UPDATE samples SET split_type_date = 0")
+    # 不正な日付形式（'2022/2024' 等）は割当対象外(-1)にする。NULL/空文字は従来通り train 扱い
+    con.execute(f"""
+        UPDATE samples SET split_type_date = -1
+        WHERE collection_date IS NOT NULL AND collection_date != ''
+          AND NOT {valid_date_sql()}
+    """)
 
     # テスト窓を設定。RPAD で YYYY や YYYY-MM 形式を補完して文字列比較
     if split_end is None:
@@ -283,6 +302,7 @@ def assign_date_splits(con):
             WHERE RPAD(collection_date, 10, '-01-01') >= '{split_date}'
               AND collection_date IS NOT NULL
               AND collection_date != ''
+              AND {valid_date_sql()}
         """)
     else:
         # Walk-forward: [split_date, split_end) → test、split_end 以降 → 除外
@@ -293,6 +313,7 @@ def assign_date_splits(con):
               AND RPAD(collection_date, 10, '-01-01') <  '{split_end}'
               AND collection_date IS NOT NULL
               AND collection_date != ''
+              AND {valid_date_sql()}
         """)
         con.execute(f"""
             UPDATE samples
@@ -300,6 +321,7 @@ def assign_date_splits(con):
             WHERE RPAD(collection_date, 10, '-01-01') >= '{split_end}'
               AND collection_date IS NOT NULL
               AND collection_date != ''
+              AND {valid_date_sql()}
         """)
 
     # 基準日前 (NULL / 空文字も含む、split_type_date = 0) の sample_id を取得して valid を確率的に割り当て
@@ -380,13 +402,15 @@ def assign_wf_splits(con):
         con.execute(f"""
             UPDATE samples SET split_type_wf = 0
             WHERE collection_date IS NULL OR collection_date = ''
-               OR RPAD(collection_date, 10, '-01-01') < '{split_date}'
+               OR ({valid_date_sql()}
+                   AND RPAD(collection_date, 10, '-01-01') < '{split_date}')
         """)
     else:
         # Fold N: [train_start, split_date) のみ
         con.execute(f"""
             UPDATE samples SET split_type_wf = 0
             WHERE collection_date IS NOT NULL AND collection_date != ''
+              AND {valid_date_sql()}
               AND RPAD(collection_date, 10, '-01-01') >= '{train_start}'
               AND RPAD(collection_date, 10, '-01-01') <  '{split_date}'
         """)
@@ -396,12 +420,14 @@ def assign_wf_splits(con):
         con.execute(f"""
             UPDATE samples SET split_type_wf = 2
             WHERE collection_date IS NOT NULL AND collection_date != ''
+              AND {valid_date_sql()}
               AND RPAD(collection_date, 10, '-01-01') >= '{split_date}'
         """)
     else:
         con.execute(f"""
             UPDATE samples SET split_type_wf = 2
             WHERE collection_date IS NOT NULL AND collection_date != ''
+              AND {valid_date_sql()}
               AND RPAD(collection_date, 10, '-01-01') >= '{split_date}'
               AND RPAD(collection_date, 10, '-01-01') <  '{split_end}'
         """)

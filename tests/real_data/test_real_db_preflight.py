@@ -7,6 +7,7 @@ import pytest
 
 from transformer_261008 import config
 from transformer_261008.db.connection import connect_db, get_db_path
+from transformer_261008.db.queries import valid_date_sql
 from transformer_261008.scripts.inspect import preflight_check as pf
 
 pytestmark = pytest.mark.slow
@@ -36,11 +37,15 @@ def test_real_labels_and_features_complete(real_con):
     assert r['status'] == 'pass', r
 
 
-@pytest.mark.xfail(strict=True, reason="既知のデータ品質問題: collection_date='2022/2024' が217件残っている"
-                   "（data_quality_collection_date_bug）。DB側を修正/除外したらこのxfailを外すこと。")
-def test_real_collection_dates_are_wellformed(real_con):
+def test_real_malformed_dates_exist_but_are_excluded_from_splits(real_con):
+    """実DBには不正形式（'2022/2024' 217件）が残るが、割当側のガード(valid_date_sql)で除外される。
+    データ自体は未修正のためwarn。割当に使われる述語で拾われる行が0であることを確認する。"""
     r = pf.check_collection_dates(real_con)
-    assert r['status'] == 'pass', r
+    assert r['status'] in ('pass', 'warn'), r
+    n_guarded = real_con.execute(
+        f"SELECT COUNT(*) FROM samples WHERE collection_date IS NOT NULL AND collection_date != '' "
+        f"AND NOT {valid_date_sql()}").fetchone()[0]
+    assert n_guarded == r['malformed']
 
 
 def test_real_cross_split_duplicates_evaluable_after_assignment(real_con):

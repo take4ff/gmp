@@ -15,6 +15,7 @@ from collections import Counter
 
 import pandas as pd
 
+from transformer_261008.db.queries import valid_date_sql
 from transformer_261008 import config
 from transformer_261008.db.connection import get_db_path, connect_db
 from transformer_261008.utils.logging import force_print
@@ -27,7 +28,7 @@ def _target_counts(con, date_lo, date_hi):
     (region_counter, position_counter, n_targets, n_samples) を返す。
     date_lo=None は下限なし、date_hi=None は上限なし。
     """
-    where = "collection_date IS NOT NULL AND collection_date != ''"
+    where = "collection_date IS NOT NULL AND collection_date != '' AND " + valid_date_sql()
     params = []
     if date_lo is not None:
         where += " AND RPAD(collection_date, 10, '-01-01') >= ?"

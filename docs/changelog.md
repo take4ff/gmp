@@ -151,3 +151,23 @@ gc.freeze()  # _group_label_cache構築済み・worker fork前
 ```
 
 **未検証**: 実際のwalk_forward実行（特にfold_3）でのRSS推移の改善効果は、既存の `_log_rss()` ロギング（main.py）を使った before/after 比較がまだ未実施。次の実行で確認する。
+
+---
+
+### 不正な `collection_date`（`'2022/2024'` 217件）が fold4 の test・fold5 の train に混入（修正済み・2026-10-08、transformer_261008）
+
+**症状**: `reference/sequences-241017_2.csv` 由来の217件（29株、ジンバブエ・Harare、release_date=2025-07-18、元データの入力ミス）が、walk_forward の fold4 の test と fold5 の train に混入していた。表示側（月別集計）で YYYY-MM 形式でない行を除外する応急対応のみで、DB の割当は未修正だった（2026-07-17）。
+
+**原因**: split 割当は `RPAD(collection_date,10,'-01-01')` の**文字列比較**。`'/'`(0x2F) が `'-'`(0x2D) より大きいため、`'2022/2024'` が `2022-07-01 <= x < 2023-01-01` の範囲に偶然入る。
+
+**修正内容**（案A: 割当SQLにガード。DBのデータは書き換えない・再前処理不要）:
+1. `db/queries.py` に `VALID_DATE_REGEX`（`YYYY` / `YYYY-MM` / `YYYY-MM-DD`）と `valid_date_sql()` を追加し、`assign_wf_splits`（Fold1の train 含む全UPDATE）・`assign_date_splits`（不正形式は -1）の述語に AND。
+2. 同じ述語を使う全箇所に適用: `_xai_common.assign_fold_test_window`、`attention_by_month.py`、`majority_baseline.py`、`lineage_accuracy_drivers.py`、`verify_batch_local_grouping.py`、`generate_point_in_time_freq.py`（割当側だけ直すと分析側の test が学習時とずれるため）。
+3. `preflight_check.py` の参照実装 `expected_wf_split` を更新（不正形式は常に -1）。不正形式の検知は fail → warn（割当から除外済み）。
+
+**実DBでの影響（読み取り専用で確認）**: fold4 の test（917,905→917,688）と fold5 の train（同）から**ちょうど217件**が除外。他の fold は不変。fold4 の test に占める割合は約0.04%で、数値への影響は小さい。過去の run（fold4・fold5）は再実行しない。
+
+**テスト**: `tests/test_assign_wf_splits.py` に、不正形式8種×4つのfold設定、dateモード、軽量割当と全割当の一致、`valid_date_sql` の形式判定を追加（既知問題の `xfail(strict)` は解消）。ガード削除・正規表現緩和・Fold1側の削除などの変異テストで検出を確認。
+
+**未対応（別件）**: `collection_date` が空文字の710件は従来仕様（Fold1 は train、Fold N は除外）のまま。
+

@@ -36,6 +36,7 @@ import random
 import re
 from collections import defaultdict
 
+from transformer_261008.db.queries import valid_date_sql
 from transformer_261008 import config
 from transformer_261008.db.connection import get_db_path, connect_db
 from transformer_261008.scripts.eval.walk_forward import FOLDS
@@ -59,7 +60,7 @@ def fetch_test_rows(con, split_date, split_end):
     EVAL_MAX_Y_CO_OCCURRENCE)・同じ ORDER BY sample_id で、日付範囲直接指定によりテスト行を取得する
     （split_type_wf 列には一切触れない・書き込まない。他プロセスと並行実行安全）。
     """
-    where = "collection_date IS NOT NULL AND collection_date != '' "
+    where = "collection_date IS NOT NULL AND collection_date != '' AND " + valid_date_sql() + " "
     where += "AND RPAD(collection_date, 10, '-01-01') >= ? "
     params = [split_date]
     if split_end:
@@ -99,10 +100,10 @@ def fetch_train_rows(con, train_start, split_date):
     train split には適用されないため）で訓練データを取得する。"""
     if train_start is None:
         where = ("(collection_date IS NULL OR collection_date = '' "
-                 "OR RPAD(collection_date, 10, '-01-01') < ?)")
+                 "OR (" + valid_date_sql() + " AND RPAD(collection_date, 10, '-01-01') < ?))")
         params = [split_date]
     else:
-        where = ("collection_date IS NOT NULL AND collection_date != '' "
+        where = ("collection_date IS NOT NULL AND collection_date != '' AND " + valid_date_sql() + " "
                  "AND RPAD(collection_date, 10, '-01-01') >= ? "
                  "AND RPAD(collection_date, 10, '-01-01') < ?")
         params = [train_start, split_date]

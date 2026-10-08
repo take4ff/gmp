@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 from transformer_261008 import config
+from transformer_261008.db.queries import valid_date_sql
 from transformer_261008.model import HierarchicalTransformer
 from transformer_261008.utils.logging import force_print
 
@@ -209,7 +210,7 @@ def assign_fold_test_window(db_path, train_start, split_date, split_end):
         con.execute("ALTER TABLE samples ADD COLUMN split_type_wf INTEGER DEFAULT -1")
     con.execute("UPDATE samples SET split_type_wf = -1")
     base = ("UPDATE samples SET split_type_wf = 2 WHERE collection_date IS NOT NULL "
-            "AND collection_date != '' AND RPAD(collection_date, 10, '-01-01') >= ?")
+            "AND collection_date != '' AND " + valid_date_sql() + " AND RPAD(collection_date, 10, '-01-01') >= ?")
     if split_end is None:
         con.execute(base, [split_date])
     else:

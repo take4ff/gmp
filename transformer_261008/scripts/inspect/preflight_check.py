@@ -16,8 +16,9 @@ import argparse
 import json
 import re
 
-# 日付は 'YYYY' / 'YYYY-MM' / 'YYYY-MM-DD' のいずれか（assign_wf_splits は RPAD で '-01-01' 補完する前提）
-_DATE_RE = r'^\d{4}(-\d{2}(-\d{2})?)?$'
+# 日付は 'YYYY' / 'YYYY-MM' / 'YYYY-MM-DD' のいずれか（assign_wf_splits は RPAD で '-01-01' 補完する前提）。
+# 判定は split割当と同一の db/queries.py::VALID_DATE_REGEX を使う（ずれると検査が意味を失う）。
+from transformer_261008.db.queries import VALID_DATE_REGEX as _DATE_RE
 PASS, WARN, FAIL = 'pass', 'warn', 'fail'
 
 
@@ -31,9 +32,12 @@ def expected_wf_split(collection_date, train_start, split_date, split_end):
 
     戻り値: 0(train or valid) / 2(test) / -1(除外)。valid(1)は0の部分集合として扱う。
     NULL/空日付は Fold1(train_start=None)のみ train、Fold N は除外。
+    不正な日付形式（'2022/2024' 等）はどのfoldでも除外(-1)。
     """
     if collection_date is None or collection_date == '':
         return 0 if train_start is None else -1
+    if not re.match(_DATE_RE, collection_date):
+        return -1
     d = rpad_date(collection_date)
     if d >= split_date and (split_end is None or d < split_end):
         return 2
@@ -43,7 +47,9 @@ def expected_wf_split(collection_date, train_start, split_date, split_end):
 
 
 def check_collection_dates(con):
-    """collection_date の NULL/空/不正形式の件数（'2022/2024' 型の混入検知。data_quality_collection_date_bug）。"""
+    """collection_date の NULL/空/不正形式の件数（'2022/2024' 型。data_quality_collection_date_bug）。
+
+    不正形式はsplit割当から除外される（db/queries.py::valid_date_sql）。データ自体の存在を知らせるwarn。"""
     total, n_null, n_bad = con.execute(f"""
         SELECT COUNT(*),
                SUM(CASE WHEN collection_date IS NULL OR collection_date = '' THEN 1 ELSE 0 END),
@@ -55,8 +61,11 @@ def check_collection_dates(con):
         SELECT DISTINCT collection_date FROM samples
         WHERE collection_date IS NOT NULL AND collection_date != ''
           AND NOT regexp_matches(collection_date, '{_DATE_RE}') LIMIT 5""").fetchall()]
-    return {'status': FAIL if n_bad else PASS, 'total': total, 'null_or_empty': n_null,
-            'malformed': n_bad, 'malformed_examples': examples}
+    # 不正形式の行は assign_wf_splits 等のsplit割当から除外される（valid_date_sql）ため warn。
+    # 割当側のガードが外れていないかは check_wf_assignment が検知する。
+    return {'status': WARN if n_bad else PASS, 'total': total, 'null_or_empty': n_null,
+            'malformed': n_bad, 'malformed_examples': examples,
+            'note': 'split割当からは除外済み' if n_bad else ''}
 
 
 def check_wf_assignment(con, train_start, split_date, split_end):

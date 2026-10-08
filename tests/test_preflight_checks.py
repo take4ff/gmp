@@ -39,7 +39,7 @@ def test_collection_date_check_flags_malformed(tmp_path):
                (4, 1, 'A4T>C2G>T3A', None, 0, [(1, 1, 1, 1, 0)])]
     build_synthetic_db(path, samples)
     r = pf.check_collection_dates(duckdb.connect(path))
-    assert r['status'] == 'fail' and r['malformed'] == 1 and r['null_or_empty'] == 1
+    assert r['status'] == 'warn' and r['malformed'] == 1 and r['null_or_empty'] == 1   # 割当側で除外済みのためwarn
     assert r['malformed_examples'] == ['2022/2024']
 
 
@@ -92,3 +92,10 @@ def test_cross_split_duplicates_not_evaluable_when_a_split_is_empty(con):
     con.execute("UPDATE samples SET split_type_wf = -1 WHERE split_type_wf IN (0, 1)")
     r = pf.check_cross_split_duplicates(con)
     assert r['status'] == 'warn' and r['n_train'] == 0 and 'note' in r
+
+
+def test_expected_wf_split_excludes_malformed_in_every_fold():
+    f = pf.expected_wf_split
+    for fold in [(None, '2021-07-01', '2022-01-01'), ('2022-07-01', '2023-01-01', '2023-07-01'),
+                 ('2022-01-01', '2022-07-01', '2023-01-01')]:
+        assert f('2022/2024', *fold) == -1
