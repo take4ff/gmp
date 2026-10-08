@@ -357,7 +357,7 @@ gmp/
 │       ├── walk_forward.py        # 本体と同一フォールドでのwalk-forward学習
 │       ├── plot_monthly_hitrate.py            # 月別tail-only Hit Rateプロット
 │       └── plot_monthly_position_tolerance.py # 月別・許容誤差付き位置Hit Rateプロット
-├── thesis/                   # 修士論文(LaTeX)。.gitignore対象の独立した非公開gitリポジトリ（親リポジトリにコミットしない）
+├── thesis/                   # 修士論文(LaTeX)。親の.gitignore対象。リモート（非公開リポジトリ）は作らない方針（ローカルのgit履歴のみ。親にコミットしない）
 ├── tests/                    # pytest（conftest.py: cfg/_restore_config/synthetic_db。real_data/は実DB・slow）
 ├── pytest.ini                # pythonpath=. ／ slowマーカーは既定除外
 ├── PLAN_accuracy_improvement.md       # 精度向上の検証キュー
