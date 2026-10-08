@@ -6,9 +6,9 @@ train/test非重複、valid比率、参照実装(expected_wf_split)との全件�
 import duckdb
 import pytest
 
-from transformer_260817 import config
-from transformer_260817.db.queries import assign_wf_splits
-from transformer_260817.scripts.inspect.preflight_check import expected_wf_split, check_wf_assignment
+from transformer_261008 import config
+from transformer_261008.db.queries import assign_wf_splits
+from transformer_261008.scripts.inspect.preflight_check import expected_wf_split, check_wf_assignment
 from conftest import build_synthetic_db
 
 DATES = ['2020-12-31', '2021-01-01', '2021-06-30', '2021-07-01', '2021-12-31', '2022-01-01',

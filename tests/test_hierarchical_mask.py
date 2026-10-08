@@ -6,7 +6,7 @@ evaluate()内のインライン処理を切り出した関数。元のインラ�
 import pytest
 import torch
 
-from transformer_260817.evaluate import build_allowed_position_mask
+from transformer_261008.evaluate import build_allowed_position_mask
 
 
 def _inline_original(pred_pos, pred_region, pos_region_map, hier_topk_regions):

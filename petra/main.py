@@ -30,8 +30,8 @@ def get_db_path() -> str:
     if config.DB_FILE:
         return config.DB_FILE
     try:
-        # 正典版 transformer_260817 と同一 DB を参照する（PETRA比較で train/test を完全一致させるため）
-        from transformer_260817.db.connection import get_db_path as _get
+        # 正典版 transformer_261008 と同一 DB を参照する（PETRA比較で train/test を完全一致させるため）
+        from transformer_261008.db.connection import get_db_path as _get
         return _get()
     except Exception:
         import glob

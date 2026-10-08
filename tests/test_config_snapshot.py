@@ -2,8 +2,8 @@
 過去バグ: config.py をそのままコピーしており、walk_forward等の実行時上書きが消えていた（2026-07-29）。"""
 import os
 
-from transformer_260817 import config
-from transformer_260817.utils.io import save_config_copy
+from transformer_261008 import config
+from transformer_261008.utils.io import save_config_copy
 
 
 def _load(path):

@@ -3,7 +3,7 @@
 import os
 import time
 
-from transformer_260817.main import _wf_find_prev_fold_checkpoint
+from transformer_261008.main import _wf_find_prev_fold_checkpoint
 
 
 def _make(root, run, fold, mtime):

@@ -2,8 +2,8 @@
 import pytest
 import torch
 
-from transformer_260817 import config
-from transformer_260817.db.dataset import _build_soft_target
+from transformer_261008 import config
+from transformer_261008.db.dataset import _build_soft_target
 
 TASKS = ['region', 'position', 'aa_pos', 'codon_pos', 'synonymous']
 

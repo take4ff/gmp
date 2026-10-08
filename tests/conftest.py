@@ -6,8 +6,8 @@ import pickle
 import duckdb
 import pytest
 
-from transformer_260817 import config
-from transformer_260817.db.connection import init_db
+from transformer_261008 import config
+from transformer_261008.db.connection import init_db
 
 
 @pytest.fixture(autouse=True)

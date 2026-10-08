@@ -1,6 +1,6 @@
 # petra/eval/walk_forward.py — PETRA比較モデルの半年次walk-forward学習
 #
-# transformer_260817/scripts/eval/walk_forward.py と全く同じ FOLDS 定義・同じ
+# transformer_261008/scripts/eval/walk_forward.py と全く同じ FOLDS 定義・同じ
 # split_type_wf 列・同じ assign_wf_splits() を使い、本体の walk_forward と直接
 # 対応するフォールドごとの Recall@K を得る。
 #
@@ -20,10 +20,10 @@ import json
 import os
 import time
 
-from transformer_260817 import config as main_config
-from transformer_260817.db.connection import connect_db, get_db_path
-from transformer_260817.db.queries import assign_wf_splits
-from transformer_260817.scripts.eval.walk_forward import FOLDS
+from transformer_261008 import config as main_config
+from transformer_261008.db.connection import connect_db, get_db_path
+from transformer_261008.db.queries import assign_wf_splits
+from transformer_261008.scripts.eval.walk_forward import FOLDS
 
 from .. import main as petra_main
 

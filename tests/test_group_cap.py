@@ -1,5 +1,5 @@
 """A2: MAX_GROUP_MEMBERS_FOR_CACHE による巨大グループの間引き（OOM対策、2026-08-03）。"""
-from transformer_260817.db.dataset import DBIterableDataset
+from transformer_261008.db.dataset import DBIterableDataset
 
 
 def _cap(repr_id, members):

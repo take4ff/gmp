@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 import torch
 
-from transformer_260817 import config
-from transformer_260817.utils import knn_output as ko
-from transformer_260817.utils.knn_output import KNNOutput, build_datastore, labels_to_sparse
+from transformer_261008 import config
+from transformer_261008.utils import knn_output as ko
+from transformer_261008.utils.knn_output import KNNOutput, build_datastore, labels_to_sparse
 
 V = 10
 

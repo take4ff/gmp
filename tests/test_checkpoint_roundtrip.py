@@ -6,11 +6,11 @@ import os
 
 import torch
 
-from transformer_260817 import config
-from transformer_260817.db.dataset import create_db_dataloader
-from transformer_260817.model import HierarchicalTransformer
-from transformer_260817.scripts.analysis.xai import _xai_common as X
-from transformer_260817.utils.io import save_config_copy
+from transformer_261008 import config
+from transformer_261008.db.dataset import create_db_dataloader
+from transformer_261008.model import HierarchicalTransformer
+from transformer_261008.scripts.analysis.xai import _xai_common as X
+from transformer_261008.utils.io import save_config_copy
 
 
 def _save(tmp_path, model):

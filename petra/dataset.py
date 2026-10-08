@@ -38,7 +38,7 @@ class PetraDataset(IterableDataset):
         self.max_history_steps = max_history_steps
         self.grouped_eval = grouped_eval
         # 「同一データでの厳密比較」を保証するため、独自にフィルタを再実装するのではなく
-        # 本体(transformer_260817/db/dataset.py)の DBIterableDataset が実際に解決する
+        # 本体(transformer_261008/db/dataset.py)の DBIterableDataset が実際に解決する
         # sample_id 集合をそのまま再利用する。これにより USE_UNIQUE_FILTER（重複排除）だけでなく
         # MAX_CO_OCCURRENCE（共起数上限）・EVAL_MAX_Y_CO_OCCURRENCE（評価時ターゲット共起上限）・
         # USE_TRAIN_ENTROPY_FILTER 等、本体の全フィルタリングロジックと完全に一致する。
@@ -46,8 +46,8 @@ class PetraDataset(IterableDataset):
         self._length = len(self._ids)
 
     def _resolve_ids_from_main_model(self) -> tuple[list[int], dict]:
-        from transformer_260817 import config as main_config
-        from transformer_260817.db.dataset import DBIterableDataset
+        from transformer_261008 import config as main_config
+        from transformer_261008.db.dataset import DBIterableDataset
 
         main_ds = DBIterableDataset(
             db_path=self.db_path,

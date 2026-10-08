@@ -5,9 +5,9 @@
 import duckdb
 import pytest
 
-from transformer_260817 import config
-from transformer_260817.db.connection import connect_db, get_db_path
-from transformer_260817.scripts.inspect import preflight_check as pf
+from transformer_261008 import config
+from transformer_261008.db.connection import connect_db, get_db_path
+from transformer_261008.scripts.inspect import preflight_check as pf
 
 pytestmark = pytest.mark.slow
 

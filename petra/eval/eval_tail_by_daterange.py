@@ -20,7 +20,7 @@ import duckdb
 import torch
 from torch.utils.data import DataLoader, IterableDataset
 
-from transformer_260817 import config as main_config
+from transformer_261008 import config as main_config
 from petra import config as petra_config
 from petra.dataset import PetraDataset
 from petra.eval.evaluate import evaluate_recall_topk, evaluate_recall_topk_tail_only, PetraRepresentativenessWeights
@@ -159,7 +159,7 @@ def main():
     else:
         device = torch.device(petra_config.DEVICE)
 
-    from transformer_260817.db.connection import get_db_path
+    from transformer_261008.db.connection import get_db_path
     db_path = get_db_path()
 
     tokenizer = MutationTokenizer.load(resolve_vocab_cache_path())
