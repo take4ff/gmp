@@ -47,4 +47,4 @@ Fano上限と達成率の分析（`fano_gap_*`・`lineage_accuracy_drivers`、7/
 ## 関連
 
 - 詳細な修正履歴: [docs/changelog.md](docs/changelog.md)
-- 別プラン（未着手が大半）: [PLAN_pipeline_self_verification.md](PLAN_pipeline_self_verification.md)
+- テスト・プリフライト検査（導入済み）: CLAUDE.md の「主要コマンド」（`python -m pytest -q`、`preflight_check`）

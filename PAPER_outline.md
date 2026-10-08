@@ -165,7 +165,7 @@
 6. **fold_3の打ち切り影響の確認**（論点10）。
 7. **計算コスト比較**（C2）: 全長入力モデルとのパラメータ数・入力長・学習時間。
 8. **数値の再抽出**: CSV（n>1000の月）から直接取り直す。
-9. テスト整備・設定スナップショット保存（[PLAN_pipeline_self_verification.md](PLAN_pipeline_self_verification.md)）。
+9. テスト整備・設定スナップショット保存（✅導入済み: `tests/`・`preflight_check.py`、CLAUDE.md参照）。
 
 ### 6.5 おまけ（任意・余力があれば。上記の必須作業が終わってから）
 
@@ -199,5 +199,4 @@
 
 - 要旨の経緯・Phase記録: [docs/PLAN_abstract_strengthening.md](docs/PLAN_abstract_strengthening.md)
 - 精度向上の検証キュー: [PLAN_accuracy_improvement.md](PLAN_accuracy_improvement.md)
-- テスト整備プラン: [PLAN_pipeline_self_verification.md](PLAN_pipeline_self_verification.md)
 - 修正履歴・既知のバグ: [docs/changelog.md](docs/changelog.md)

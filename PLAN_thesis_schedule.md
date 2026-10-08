@@ -1,7 +1,7 @@
 # 修論発表までのスケジュールと報告内容の計画
 
 作成日: 2026-10-06 / 関連: [PAPER_outline.md](PAPER_outline.md)（構成・論点）、
-[PLAN_accuracy_improvement.md](PLAN_accuracy_improvement.md)、[PLAN_pipeline_self_verification.md](PLAN_pipeline_self_verification.md)
+[PLAN_accuracy_improvement.md](PLAN_accuracy_improvement.md)
 
 ## 確定しているスケジュール
 
