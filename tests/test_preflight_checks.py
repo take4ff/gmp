@@ -4,7 +4,7 @@ import json
 import duckdb
 import pytest
 
-from transformer_261008.scripts.inspect import preflight_check as pf
+from transformer.scripts.inspect import preflight_check as pf
 from conftest import SYNTH_SAMPLES, build_synthetic_db
 
 

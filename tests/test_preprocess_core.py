@@ -8,9 +8,9 @@ import os
 
 import pytest
 
-from transformer_261008 import config, preprocess
-from transformer_261008.db import feature as F
-from transformer_261008.utils.io import load_batch_cache  # noqa: F401  (importできること)
+from transformer import config, preprocess
+from transformer.db import feature as F
+from transformer.utils.io import load_batch_cache  # noqa: F401  (importできること)
 from test_feature_golden import DISSIM, FREQ, PAM, make_state
 
 NSP1 = config.PROTEIN_VOCABS['nsp1']

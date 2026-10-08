@@ -2,7 +2,7 @@
 import duckdb
 import pytest
 
-from transformer_261008.scripts.inspect import preflight_check as pf
+from transformer.scripts.inspect import preflight_check as pf
 
 
 def test_evaluate_gate_passes_on_warn_and_raises_on_fail():
@@ -39,6 +39,6 @@ def test_gate_fails_when_tests_fail(tmp_path):
 
 def test_walk_forward_entry_has_skip_gate_option_and_calls_gate():
     import inspect
-    from transformer_261008.scripts.eval import walk_forward as wf
+    from transformer.scripts.eval import walk_forward as wf
     src = inspect.getsource(wf.main)
     assert '--skip_gate' in src and 'run_gate(' in src

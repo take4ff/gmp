@@ -11,11 +11,11 @@ import os
 import pytest
 import torch
 
-from transformer_261008 import config
-from transformer_261008.db.dataset import create_db_dataloader
-from transformer_261008.model import HierarchicalTransformer, MultiTaskLoss
-from transformer_261008.train import train_one_epoch
-from transformer_261008.utils.losses import build_loss_fn
+from transformer import config
+from transformer.db.dataset import create_db_dataloader
+from transformer.model import HierarchicalTransformer, MultiTaskLoss
+from transformer.train import train_one_epoch
+from transformer.utils.losses import build_loss_fn
 
 GOLDEN = os.path.join(os.path.dirname(__file__), 'golden', 'numerics.json')
 HEADS = ['region', 'position', 'aa_pos', 'strength', 'codon_pos', 'synonymous']

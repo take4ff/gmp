@@ -6,8 +6,8 @@
 import pytest
 import torch
 
-from transformer_261008 import config
-from transformer_261008.model import HierarchicalTransformer
+from transformer import config
+from transformer.model import HierarchicalTransformer
 
 B, ACTIVE = 3, (6, 7, 8)             # サンプルごとの有効タイムステップ数
 

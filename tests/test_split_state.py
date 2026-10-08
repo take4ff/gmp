@@ -6,12 +6,12 @@
 import duckdb
 import pytest
 
-from transformer_261008 import config
-from transformer_261008.db.dataset import create_db_dataloader
-from transformer_261008.db.queries import (StaleSplitError, assign_wf_splits, check_split_state,
+from transformer import config
+from transformer.db.dataset import create_db_dataloader
+from transformer.db.queries import (StaleSplitError, assign_wf_splits, check_split_state,
                                            read_split_state)
-from transformer_261008.scripts.analysis.xai import _xai_common as X
-from transformer_261008.scripts.inspect.preflight_check import check_split_state_info
+from transformer.scripts.analysis.xai import _xai_common as X
+from transformer.scripts.inspect.preflight_check import check_split_state_info
 
 FOLD_A = (None, '2021-07-01', '2021-12-01')         # train: 2021-03〜05(ids1-6) / test: 2021-08,09(ids7,8)
 FOLD_B = ('2021-04-01', '2021-07-01', '2021-12-01')

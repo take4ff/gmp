@@ -7,8 +7,8 @@ import duckdb
 import pytest
 import torch
 
-from transformer_261008.db.dataset import EmptySplitError, create_db_dataloader
-from transformer_261008.train import train_one_epoch
+from transformer.db.dataset import EmptySplitError, create_db_dataloader
+from transformer.train import train_one_epoch
 
 
 def _clear_split(path, split_value):

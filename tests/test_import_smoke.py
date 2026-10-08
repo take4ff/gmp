@@ -10,13 +10,13 @@ import contextlib
 import os
 import pkgutil
 
-import transformer_261008 as pkg
+import transformer as pkg
 
 PKG_DIR = os.path.dirname(pkg.__file__)
 
 
 def _modules():
-    return [m.name for m in pkgutil.walk_packages(pkg.__path__, 'transformer_261008.')
+    return [m.name for m in pkgutil.walk_packages(pkg.__path__, 'transformer.')
             if not m.name.endswith('.__main__')]
 
 

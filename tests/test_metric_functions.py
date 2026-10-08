@@ -1,7 +1,7 @@
 """B1: 指標の集計関数（utils/logging.py）を手計算で検証する。報告される Hit Rate / Precision / Recall / F1 の定義。"""
 import pytest
 
-from transformer_261008.utils.logging import calculate_metrics, calculate_weighted_macro_recall
+from transformer.utils.logging import calculate_metrics, calculate_weighted_macro_recall
 
 
 def test_calculate_metrics_by_hand():

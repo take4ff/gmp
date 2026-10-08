@@ -7,8 +7,8 @@ import copy
 
 import pytest
 
-from transformer_261008 import config
-from transformer_261008.db import feature as F
+from transformer import config
+from transformer.db import feature as F
 
 BASES = list('ATGGCTTTACCC')
 CODONS = ['ATG'] * 3 + ['GCT'] * 3 + ['TTA'] * 3 + ['CCC'] * 3

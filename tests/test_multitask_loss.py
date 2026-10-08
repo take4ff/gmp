@@ -4,7 +4,7 @@ import math
 import pytest
 import torch
 
-from transformer_261008.model import MultiTaskLoss
+from transformer.model import MultiTaskLoss
 
 
 def test_initial_weights_are_one():

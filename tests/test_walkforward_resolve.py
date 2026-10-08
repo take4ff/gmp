@@ -5,7 +5,7 @@
 """
 import pytest
 
-from transformer_261008 import main as m
+from transformer import main as m
 
 
 @pytest.fixture

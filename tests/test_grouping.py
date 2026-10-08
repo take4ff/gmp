@@ -6,7 +6,7 @@ _build_groups は split 全体の (sample_id, raw_path) を一括で受けるた
 """
 import random
 
-from transformer_261008.db.dataset import DBIterableDataset
+from transformer.db.dataset import DBIterableDataset
 
 
 def _groups(pairs):

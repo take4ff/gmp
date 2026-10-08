@@ -9,10 +9,10 @@
 import pytest
 import torch
 
-from transformer_261008 import config
-from transformer_261008.db.dataset import create_db_dataloader
-from transformer_261008.evaluate import evaluate, evaluate_topk
-from transformer_261008.utils.losses import build_loss_fn
+from transformer import config
+from transformer.db.dataset import create_db_dataloader
+from transformer.evaluate import evaluate, evaluate_topk
+from transformer.utils.losses import build_loss_fn
 
 V = {'region': 37, 'position': 30006, 'aa_pos': 10001, 'codon_pos': 6, 'synonymous': 2}
 
@@ -124,7 +124,7 @@ def test_hierarchical_masking_changes_hit_rate_through_evaluate(loader, cfg, mon
     """予測Region上位R個に属さない位置を除外 → top1が変わりhit_rateが上がる（統合確認）。"""
     pr = torch.zeros(config.VOCAB_SIZE_POSITION, dtype=torch.long)
     pr[999] = 9; pr[210] = 3; pr[600] = 7
-    monkeypatch.setattr('transformer_261008.db.queries.get_position_region_map', lambda *a, **k: pr)
+    monkeypatch.setattr('transformer.db.queries.get_position_region_map', lambda *a, **k: pr)
     ranks = {'position': [[999, 210, 100, 5, 6], [999, 500, 400, 7, 8], [601, 600, 3, 4, 5]],
              'region': [[3, 1], [9, 1], [7, 1]]}
     cfg(USE_HIERARCHICAL_PREDICTION=False)

@@ -5,7 +5,7 @@ group_targets_list が代表だけに偏らず全メンバーのラベルを含�
 """
 import pytest
 
-from transformer_261008.db.dataset import create_db_dataloader
+from transformer.db.dataset import create_db_dataloader
 
 
 def _collect(db, split, workers):
@@ -50,7 +50,7 @@ def test_workers_do_not_change_content(synthetic_db):
 
 
 def test_batch_tensor_shapes_and_padding_are_left_aligned(synthetic_db):
-    from transformer_261008 import config
+    from transformer import config
     loader = create_db_dataloader(synthetic_db, 0, batch_size=3, shuffle=False,
                                   max_cooccurrence=20, num_workers_override=0)
     batch = next(iter(loader))

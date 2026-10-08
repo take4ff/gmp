@@ -7,12 +7,12 @@ codon_freqが0（リーク対策の設計が黙って崩れる）/ kNNデータ�
 """
 import pytest
 
-from transformer_261008 import config, preprocess
-from transformer_261008.db import dataset as ds
-from transformer_261008.model import HierarchicalTransformer
-from transformer_261008.scripts.analysis.xai import _xai_common as X
-from transformer_261008.utils.knn_output import KNNOutput
-from transformer_261008.utils.logging import FallbackError, fallback_or_raise
+from transformer import config, preprocess
+from transformer.db import dataset as ds
+from transformer.model import HierarchicalTransformer
+from transformer.scripts.analysis.xai import _xai_common as X
+from transformer.utils.knn_output import KNNOutput
+from transformer.utils.logging import FallbackError, fallback_or_raise
 
 
 def test_default_is_strict():
@@ -35,7 +35,7 @@ def test_helper_follows_config(cfg):
 
 
 def test_missing_pretrain_checkpoint_stops_instead_of_random_init(tmp_path, cfg):
-    from transformer_261008.main import build_components
+    from transformer.main import build_components
     cfg(USE_PRETRAINING=True, OUTPUT_DIR=str(tmp_path) + '/', WF_PREV_FOLD_CHECKPOINT=None,
         SPLIT_MODE='walk_forward', DEVICE='cpu', PRETRAINING_MODE='mlm')
     with pytest.raises(FallbackError, match='事前学習checkpoint'):
@@ -68,7 +68,7 @@ def test_missing_point_in_time_table_stops(tmp_path, cfg, monkeypatch):
 def test_existing_point_in_time_tables_cover_every_fold_date():
     """実ファイルの存在確認: 全foldのsplit_dateの表がある（厳格化で学習が止まらない前提）。"""
     import os
-    from transformer_261008.scripts.eval.walk_forward import FOLDS
+    from transformer.scripts.eval.walk_forward import FOLDS
     missing = [sd for _, _, sd, _, _ in FOLDS
                if not os.path.exists(os.path.join(config.POINT_IN_TIME_FREQ_DIR, f'{sd}.csv'))]
     if not os.path.isdir(config.POINT_IN_TIME_FREQ_DIR):

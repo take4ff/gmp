@@ -5,10 +5,10 @@
 import duckdb
 import pytest
 
-from transformer_261008 import config
-from transformer_261008.db.connection import connect_db, get_db_path
-from transformer_261008.db.queries import valid_date_sql
-from transformer_261008.scripts.inspect import preflight_check as pf
+from transformer import config
+from transformer.db.connection import connect_db, get_db_path
+from transformer.db.queries import valid_date_sql
+from transformer.scripts.inspect import preflight_check as pf
 
 pytestmark = pytest.mark.slow
 

@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from transformer_261008.utils import provenance as pv
+from transformer.utils import provenance as pv
 
 
 def _git(cwd, *args):
@@ -73,3 +73,20 @@ def test_records_environment_and_db_fingerprint(repo, tmp_path):
 def test_failure_is_swallowed(monkeypatch, tmp_path):
     monkeypatch.setattr(pv, 'collect_provenance', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('boom')))
     assert pv.save_run_provenance(str(tmp_path / 'o')) is None      # 学習を止めない
+
+
+def test_describe_uses_the_nearest_tag_and_marks_dirty(repo, tmp_path):
+    _git(repo, 'tag', 'run-baseline')
+    out = tmp_path / 'o1'
+    pv.save_run_provenance(str(out), repo_dir=str(repo), db_path='/nonexistent')
+    assert json.loads((out / 'provenance.json').read_text())['git']['describe'] == 'run-baseline'
+    (repo / 'a.py').write_text('x = 3\n')
+    out2 = tmp_path / 'o2'
+    pv.save_run_provenance(str(out2), repo_dir=str(repo), db_path='/nonexistent')
+    assert json.loads((out2 / 'provenance.json').read_text())['git']['describe'] == 'run-baseline-dirty'
+
+
+def test_describe_falls_back_to_short_hash_without_tags(repo, tmp_path):
+    pv.save_run_provenance(str(tmp_path / 'o'), repo_dir=str(repo), db_path='/nonexistent')
+    d = json.loads((tmp_path / 'o' / 'provenance.json').read_text())['git']['describe']
+    assert _git(repo, 'rev-parse', '--short', 'HEAD') in d

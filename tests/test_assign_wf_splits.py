@@ -6,9 +6,9 @@ train/test非重複、valid比率、参照実装(expected_wf_split)との全件�
 import duckdb
 import pytest
 
-from transformer_261008 import config
-from transformer_261008.db.queries import assign_wf_splits
-from transformer_261008.scripts.inspect.preflight_check import expected_wf_split, check_wf_assignment
+from transformer import config
+from transformer.db.queries import assign_wf_splits
+from transformer.scripts.inspect.preflight_check import expected_wf_split, check_wf_assignment
 from conftest import build_synthetic_db
 
 DATES = ['2020-12-31', '2021-01-01', '2021-06-30', '2021-07-01', '2021-12-31', '2022-01-01',
@@ -101,7 +101,7 @@ def test_malformed_date_is_excluded_in_every_fold(tmp_path, cfg, fold, bad):
 
 def test_date_mode_excludes_malformed_dates(tmp_path, cfg):
     """SPLIT_MODE='date' の assign_date_splits でも不正形式は -1（既定のtrain扱いにしない）。"""
-    from transformer_261008.db.queries import assign_date_splits
+    from transformer.db.queries import assign_date_splits
     con = _db(tmp_path, ['2021-03-01', '2022/2024', '2023-05-01', None])
     cfg(TEMPORAL_SPLIT_DATE='2022-01-01', TEMPORAL_SPLIT_TEST_END=None, DATE_VALID_RATIO=0.0)
     assign_date_splits(con)
@@ -112,7 +112,7 @@ def test_date_mode_excludes_malformed_dates(tmp_path, cfg):
 def test_light_assign_fold_test_window_matches_full_assignment(tmp_path, cfg):
     """分析用の軽量割当（assign_fold_test_window）も、testの集合が assign_wf_splits と一致する
     （不正日付を含めて）。ずれると分析のtestが学習時のtestと食い違う。"""
-    from transformer_261008.scripts.analysis.xai import _xai_common as X
+    from transformer.scripts.analysis.xai import _xai_common as X
     path = str(tmp_path / 'light.duckdb')
     samples = [(i + 1, 1, f'A{i + 1}T>C2G>T3A', d, 0, [(1, 100, 10, 1, 0)]) for i, d in enumerate(DATES)]
     build_synthetic_db(path, samples)
@@ -130,7 +130,7 @@ def test_light_assign_fold_test_window_matches_full_assignment(tmp_path, cfg):
 
 
 def test_valid_date_sql_accepts_only_expected_formats():
-    from transformer_261008.db.queries import valid_date_sql
+    from transformer.db.queries import valid_date_sql
     con = duckdb.connect()
     ok = ['2021', '2021-07', '2021-07-01']
     ng = ['2022/2024', '2021/07', '2021-7-1', 'abc', '', '2021-07-01T00', ' 2021']

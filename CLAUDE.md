@@ -36,8 +36,8 @@ conda activate gvp25-05   # PyTorch / DuckDB / W&B が入った環境
    割当は`split_state`テーブルに記録され、不一致なら`StaleSplitError`で止まる。
 8. **指標・特徴量・ラベルを変えるときは、手計算できる期待値のテストを足す。** `tests/golden/numerics.json`は意図した変更のときだけ
    `UPDATE_GOLDEN=1`で更新し、差分をレビューしてからコミットする。
-9. **学習・評価の実行中は、`transformer_*`のコードを書き換えない**（関数内の遅延importで挙動が変わる）。テストと文書のみ。
-10. **結果に使うrunは、コミット済みのコードで起動する**（`provenance.json`のcommit hashが再現の鍵。未追跡ファイルは`code_changes.patch`に入らない）。
+9. **学習・評価の実行中は、`transformer/`のコードを書き換えない**（関数内の遅延importで挙動が変わる）。テストと文書のみ。
+10. **結果に使うrunは、コミット済みのコードで起動し、そのコミットにタグを付ける**（`git tag run-<日付>-<名前>`。`provenance.json`のcommit hashと`git describe`が再現の鍵。未追跡ファイルは`code_changes.patch`に入らない）。
 11. **数値を報告・記録するときは、出典（runのディレクトリ、fold、フラグ、サンプル数n）を併記し、旧版・旧設定のrunと混ぜない。**
 12. **コミットは論理単位で分ける**（機能・修正／検証スクリプト／テスト／計画メモ）。CLAUDE.mdの既定値表は`test_config_health`が検証するので、
     既定値を変えたらこのファイルも更新する。
@@ -46,15 +46,22 @@ conda activate gvp25-05   # PyTorch / DuckDB / W&B が入った環境
 
 ## バージョン（重要）
 
-**正典パッケージは `transformer_261008`**。修正・実装はここに入れる。
-旧版 `transformer_260817` / `transformer_260723` / `transformer_260707` / `transformer_260702` / `transformer_260625` は
-`old_file/` 配下に退避済み（git管理外）で「前実装をすぐ参照する」ための残置として触らない。
+**正典パッケージは `transformer`**（固定名）。修正・実装はここに入れる。
+2026-10-08に `transformer_261008` から日付なしの固定名へ改名した（日付付きディレクトリのコピー運用を廃止）。
+**版は日付付きディレクトリではなく、gitのタグと`provenance.json`で管理する**:
+- 実験の区切り（結果を出す学習の前）に、そのコミットへタグを付ける: `git tag run-<日付>-<名前>`（例 `run-20261008-baseline`）。
+- run出力の`provenance.json`に commit hash・`git describe`（直近のタグ）・dirty・環境が残る。結果は「どのタグのコードか」で特定する。
+- 旧コードを開く: `git worktree add ../gmp_old <タグ>`。**新しい日付付きディレクトリ（`transformer_YYMMDD`）を作らない**（`tests/test_package_name.py`が検知）。
+- 旧版 `transformer_260817` / `transformer_260723` / `transformer_260707` / `transformer_260702` / `transformer_260625` は
+  `old_file/` 配下に退避済み（git管理外）で「前実装をすぐ参照する」ための残置として触らない（履歴はgitに残っている）。
 DB は特徴量設定ハッシュで命名されるため（`db/features_<hash>.duckdb`）、特徴量構成が同じなら
-260702・260707・260723・260817 は同一 DB を共有し、再前処理は不要。
+旧版（260702〜261008）と`transformer`は同一 DB を共有し、再前処理は不要。
 
-261008 で 260817 から入れた変更（2026-10-08）:
-- ディレクトリ名変更（`petra/`・`tests/`の参照も追随）。旧260817は`old_file/transformer_260817`へ退避。
-  以降の「260817で追加」記述は260817時点の変更履歴。
+以下の「261008」「260817」等の見出しは、**当時の版名での変更履歴**（現在の`transformer`の履歴でもある）。
+
+261008 で 260817 から入れた変更（2026-10-08、現在の `transformer`）:
+- ディレクトリ名変更（`transformer_260817` → `transformer_261008`、のち固定名 `transformer` へ。`petra/`・`tests/`の参照も追随）。
+  旧260817は`old_file/transformer_260817`へ退避。以降の「260817で追加」記述は260817時点の変更履歴。
 - **不正な`collection_date`（`'2022/2024'`217件）をsplit割当から除外**: `db/queries.py`の`valid_date_sql()`
   （`YYYY`/`YYYY-MM`/`YYYY-MM-DD`のみ有効）を、日付範囲で割当・抽出する全SQL（`assign_wf_splits`・`assign_date_splits`・
   `assign_fold_test_window`・`attention_by_month`・一部分析スクリプト）にANDした。fold4のtestとfold5のtrainから
@@ -179,57 +186,57 @@ DB は特徴量設定ハッシュで命名されるため（`db/features_<hash>.
 
 ```bash
 # 0. UShER 出力 → TSV 変換（初回のみ・preprocess より先に実行）
-python -m transformer_261008.scripts.preprocess.data_format
+python -m transformer.scripts.preprocess.data_format
 
 # 1. DuckDB 前処理（初回 or DB再構築時）
-nice -n 19 python -m transformer_261008.preprocess
+nice -n 19 python -m transformer.preprocess
 
 # 2. 学習・評価
-nohup python -m transformer_261008.main > nohup0.out 2>&1 &
+nohup python -m transformer.main > nohup0.out 2>&1 &
 
 # 3. バックグラウンド進捗確認
 tail -f nohup0.out
 
 # 事前学習
-python -m transformer_261008.scripts.train.pretrain
+python -m transformer.scripts.train.pretrain
 
 # 推論のみ（学習済みチェックポイントから評価再実行）
-python -m transformer_261008.scripts.eval.evaluate_only \
-    --checkpoint outputs/transformer_261008/results/<timestamp>/models/best_model.pth
+python -m transformer.scripts.eval.evaluate_only \
+    --checkpoint outputs/transformer/results/<timestamp>/models/best_model.pth
 
 # 半年次 Walk-forward 検証（全 7 フォールド）
 # config.py で SPLIT_MODE='walk_forward' にしておくこと
-nohup python -m transformer_261008.scripts.eval.walk_forward > nohup_wf.out 2>&1 &
+nohup python -m transformer.scripts.eval.walk_forward > nohup_wf.out 2>&1 &
 # 特定フォールドのみ
-python -m transformer_261008.scripts.eval.walk_forward --folds 2 6
+python -m transformer.scripts.eval.walk_forward --folds 2 6
 
 # walk_forward 全fold横断プロット一括実行（全fold学習完了後に実行すること）
-python -m transformer_261008.scripts.analysis.walk_forward.run_all_walk_forward_plots \
-    --walk_forward_dir outputs/transformer_261008/results/walk_forward/<timestamp>
+python -m transformer.scripts.analysis.walk_forward.run_all_walk_forward_plots \
+    --walk_forward_dir outputs/transformer/results/walk_forward/<timestamp>
 
 # 特徴量重要度分析（学習済みモデル）
-python -m transformer_261008.scripts.analysis.feature_importance \
-    --checkpoint outputs/transformer_261008/results/<timestamp>/models/best_model.pth
+python -m transformer.scripts.analysis.feature_importance \
+    --checkpoint outputs/transformer/results/<timestamp>/models/best_model.pth
 
 # DB・データ確認
-python -m transformer_261008.scripts.inspect.inspect_duckdb     # DB スキーマ確認
-python -m transformer_261008.scripts.inspect.view_one_sample    # サンプル内容確認
+python -m transformer.scripts.inspect.inspect_duckdb     # DB スキーマ確認
+python -m transformer.scripts.inspect.view_one_sample    # サンプル内容確認
 
 # テスト（DB/GPU不要・数秒。コード変更後、長時間学習の起動前に実行する）
 python -m pytest -q                      # 既定は slow マーカーを除外（223件、約13秒）
 python -m pytest -m slow                 # 実DB・読み取り専用（約10秒。DBが他プロセスに開かれていればskip）
 # 起動前のプリフライト検査（実DB、読み取り専用、約10秒。--fold Nは割当済みのsplitと日付規則を突合）
-python -m transformer_261008.scripts.inspect.preflight_check --output stage_verification.json
+python -m transformer.scripts.inspect.preflight_check --output stage_verification.json
 
 # 集計・分析
-python -m transformer_261008.scripts.analysis.aggregate_strains    # 株別集計
-python -m transformer_261008.scripts.analysis.aggregate_lineages   # 系統別集計
-python -m transformer_261008.scripts.analysis.aggregate_variants   # 月別変異株集計
+python -m transformer.scripts.analysis.aggregate_strains    # 株別集計
+python -m transformer.scripts.analysis.aggregate_lineages   # 系統別集計
+python -m transformer.scripts.analysis.aggregate_variants   # 月別変異株集計
 ```
 
-出力先: `outputs/transformer_261008/results/<EXPERIMENT_NAME>/<timestamp>/`
+出力先: `outputs/transformer/results/<EXPERIMENT_NAME>/<timestamp>/`
 （`EXPERIMENT_NAME = ''` のときは `results/<timestamp>/` に直接保存）
-スクリプト出力: `outputs/transformer_261008/scripts/`
+スクリプト出力: `outputs/transformer/scripts/`
 
 ---
 
@@ -237,7 +244,7 @@ python -m transformer_261008.scripts.analysis.aggregate_variants   # 月別変�
 
 ```
 gmp/
-├── transformer_261008/       # メインパッケージ
+├── transformer/       # メインパッケージ
 │   ├── config.py             # 全設定フラグ（ここを変えて実験する）
 │   ├── model.py              # HierarchicalTransformer / MultiTaskLoss
 │   ├── main.py               # エントリポイント（学習→評価→保存）
@@ -360,7 +367,7 @@ gmp/
 ├── db/                       # DuckDB ファイル（大容量・git管理外）
 ├── cache/                    # 前処理キャッシュ（git管理外）
 ├── outputs/                  # 学習結果（git管理外）
-│   ├── transformer_261008/
+│   ├── transformer/
 │   │   ├── results/          # main.py の実験出力
 │   │   │   └── <EXPERIMENT_NAME>/<timestamp>/
 │   │   └── scripts/          # スクリプト出力

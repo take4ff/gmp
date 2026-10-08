@@ -14,12 +14,12 @@ import re
 import pytest
 import torch
 
-from transformer_261008 import config
-from transformer_261008.model import HierarchicalTransformer
-from transformer_261008.scripts.analysis.xai import _xai_common as X
+from transformer import config
+from transformer.model import HierarchicalTransformer
+from transformer.scripts.analysis.xai import _xai_common as X
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PKG = os.path.join(REPO, 'transformer_261008')
+PKG = os.path.join(REPO, 'transformer')
 
 
 def _py_sources():

@@ -5,14 +5,14 @@
 # 別スクリプト（動作実績のある既存コードに触れないため）。tolerance=0 は「予測位置==正解位置」
 # （塩基不一致でも正解扱い）で、提案モデルの position_hit_rate と判定基準を揃えてある。
 #
-# transformer_261008/scripts/analysis/walk_forward/position_tolerance_monthly.py と対になる月別粒度の
+# transformer/scripts/analysis/walk_forward/position_tolerance_monthly.py と対になる月別粒度の
 # CSVを出力し、同パッケージの plot_position_tolerance_comparison.py で両モデルを重ねてプロットする。
 #
 # split_type_wf 列には一切触れず、日付範囲を直接指定して各フォールドのテストデータを解決する
 # （他フォールドの学習が同時に走っていても安全）。
 #
 # --- 追加: 「親グループ単位・any-of-set」版（本体の評価方式に揃えた比較用) ---
-# 本体(transformer_261008)は分岐(同一 input_path_str から複数の子ノードへ分岐)と共起(同一
+# 本体(transformer)は分岐(同一 input_path_str から複数の子ノードへ分岐)と共起(同一
 # ステップ内の複数同時変異)を、db/dataset.py の collate_fn で1つの評価単位にまとめ、
 # 「予測1個がその評価単位の正解集合(分岐K個×共起M個)のいずれかに当たればヒット」という
 # any-of-set 方式で評価している(evaluate.py)。実測ではこの分岐はサンプルの約87%に該当する
@@ -42,8 +42,8 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, IterableDataset
 
-from transformer_261008 import config as main_config
-from transformer_261008.scripts.eval.walk_forward import FOLDS
+from transformer import config as main_config
+from transformer.scripts.eval.walk_forward import FOLDS
 from petra import config as petra_config
 from petra.dataset import PetraDataset
 from petra.eval.eval_tail_by_daterange import (resolve_test_ids_by_daterange, _FixedIdsPetraDataset,
@@ -324,7 +324,7 @@ def main():
     device = torch.device('cpu' if args.force_cpu or not torch.cuda.is_available()
                           else petra_config.DEVICE)
 
-    from transformer_261008.db.connection import get_db_path
+    from transformer.db.connection import get_db_path
     db_path = get_db_path()
     tokenizer = MutationTokenizer.load(resolve_vocab_cache_path())
     position_lookup = build_position_lookup(tokenizer)

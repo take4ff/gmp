@@ -3,8 +3,8 @@ import math
 
 import pytest
 
-from transformer_261008 import config
-from transformer_261008.model import HierarchicalTransformer
+from transformer import config
+from transformer.model import HierarchicalTransformer
 
 
 def _load(csv_path, cfg):

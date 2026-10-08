@@ -220,3 +220,15 @@ AIコーディングで入りうる静かな不具合を減らすため、プロ
 
 **未対応（棚卸し結果）**: `except Exception`が主要経路にまだ約60か所ある。このうち学習・評価の結果に影響しうるもの（`db/queries.py`の統計計算、`utils/io.py`のキャッシュ読み書き、`preprocess.py`のキャッシュ・メモリ監視など）は個別に精査していない。ログのみで継続する箇所を今後`fallback_or_raise`か明示的な例外へ置き換える候補。
 
+---
+
+### パッケージ名を固定名 `transformer` に改名（対処済み・2026-10-08）
+
+日付付きディレクトリのコピー運用（`transformer_260702` → … → `transformer_261008`）を廃止し、パッケージ名を固定の `transformer` にした。版はgitのタグ（`git tag run-<日付>-<名前>`）と、run出力の`provenance.json`（commit hash・`git describe`）で管理する。
+
+- **理由**: 版を上げるたびに全参照（コード・テスト・`petra/`・docs・出力パス、今回は122ファイル・626か所）を書き換える必要があり、AIの一括置換のリスクが毎回かかる。旧版を`old_file/`（`.gitignore`対象）に退避する運用では、手元のコピーにしか残らない。旧checkpointは`_OFF_IF_ABSENT_FROM_SNAPSHOT`と互換テストで現行コードのまま読めるため、旧コードを残す必要も小さい。結果のrunがまだ新名で1つも無い（旧名と新名にまたがらない）今が、最も影響が小さい時期だった。
+- **実施**: `git mv transformer_261008 transformer`、`transformer_261008`の完全一致置換（コード・テスト・`petra/`・出力パス`outputs/transformer/`）。履歴を含むdocsは置換せず、CLAUDE.mdのバージョン節を書き換え。`transformers`（HuggingFace）とは別名で衝突しない。
+- **テストで見つかった取り残し（過去の版更新で更新されていなかった旧名）**: `utils/plotting.py`の関数内に `from transformer_260416 import config`（存在しないモジュール。該当機能の実行時に`ImportError`）と、出力パスの既定値 `outputs/transformer_260416/...`、各scriptsのUsage例の旧run dir。すべて新名へ修正。importの確認では関数の内側は検知できないため、`tests/test_package_name.py`（旧名のimport・`-m`実行・出力パス・日付付きディレクトリの再作成を検知）を追加。
+- **`provenance.json`に`git describe`を追加**（直近のタグ。無ければ短縮hash、未コミット変更があれば`-dirty`）。
+- 中断された起動が残した空のrun（`outputs/transformer_261008/.../walk_forward_meta.json`のみ）と小さなログを削除。
+
