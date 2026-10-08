@@ -506,6 +506,7 @@ EVAL_TOP_KS = (1, 3, 5)             # Top-K 評価で計算する K のリスト
 SAVE_CONFIDENT_SUBSET     = True
 CONFIDENT_COVERAGE_LEVELS = [1.0, 0.75, 0.5, 0.25, 0.1]
 PLOT_TOP_N_POSITIONS = 40           # 塩基位置の Recall でプロットする上位 N 件
+PLOT_TOP_N_LINEAGES = 30            # 系統別プロット（main.py）の上位 N 系統。従来は getattr のデフォルト30で黙って固定されていた
 DIVERSITY_PLOT_MIN_SAMPLES = 10     # 多様度 vs hit-rate 散布図/CSV で系統を採用する最小サンプル数
 SAVE_ATTENTION_HEATMAP = False      # Attentionヒートマップを保存するかどうか（可視化のみ・学習時間に影響）
 

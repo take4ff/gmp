@@ -18,6 +18,14 @@ def test_flag_absent_in_old_snapshot_is_turned_off(tmp_path, cfg):
     assert config.USE_REGION_CONDITIONED_POSITION is False
 
 
+def test_substitution_head_flag_absent_in_old_snapshot_is_turned_off(tmp_path, cfg):
+    """base_after/aa_afterヘッド（パラメータ追加）が無い時代のcheckpointも読めるようにFalseへ戻す。"""
+    cfg(USE_SUBSTITUTION_HEAD=True)
+    X.load_config_snapshot(_write(tmp_path, "FEATURE_DIM = 256\n"))
+    from transformer_261008 import config
+    assert config.USE_SUBSTITUTION_HEAD is False
+
+
 def test_flag_present_in_snapshot_is_respected(tmp_path, cfg):
     from transformer_261008 import config
     cfg(USE_REGION_CONDITIONED_POSITION=False)

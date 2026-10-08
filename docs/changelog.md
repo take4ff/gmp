@@ -186,3 +186,27 @@ AIコーディングで入りうる静かな不具合を減らすため、プロ
 
 **調査で見つかった残課題**（B・C項目として別途）: `evaluate.py`のカバレッジ4%（報告される指標そのもの）、`feature.py`/`preprocess.py`は0%、`CLAUDE.md`が`.gitignore`対象、`getattr(config,X,default)`が274か所でフラグ名のタイプミスが黙って無視される、定義済み248フラグのうち12個が未配線、`mutation_freq.py`に`__main__`ガードが無くimportで実行される。
 
+---
+
+### テストの拡充（B項目）と、テストで見つかった問題（対処済み・2026-10-08、transformer_261008）
+
+プロジェクト全体の調査（カバレッジ19%、`evaluate.py` 4%、`feature.py`/`preprocess.py` 0%）を受けて追加。テストは202件（カバレッジ 19%→28%、`evaluate.py` 4%→76%、`feature.py` 0%→23%、`preprocess.py` 0%→23%）。
+
+- **B1 報告される指標**: `evaluate`/`evaluate_topk`（Top-K の hit/precision/recall、R-Precision、位置の許容誤差、階層マスク）と集計関数（`calculate_metrics`・weighted/macro recall）を、偽モデル＋合成DBで手計算の期待値と照合。`evaluate`のサンプル別hitと集計値の整合も確認。
+- **B2 モデル入力・ラベル**: 12塩基の極小ゲノムで特徴量（コンテキスト塩基・同義判定・累積カウント・状態復元）を手計算と照合。前処理の中核（`process_strain_features_core_chunked`）で、ラベルが最終ステップから作られること、`raw_path`が切り詰められない/設定時は末尾を保持すること、除外統計、サンプル間で参照ゲノムが持ち越されないことを確認。
+- **B3 import**: 全107モジュールがimportでき（約1.5秒）、`scripts/`直下に実行文が無く、`def main`には`__main__`ガードがあること。
+- **B4 設定**: コードが参照する`config.X`/`getattr(config,'X')`が定義済みであること、未配線フラグは許可リスト（現在12件）で管理、CLAUDE.mdの既定値表がconfigと一致。
+- **B5 数値回帰**: 固定seedの順伝播と1エポック学習（loss・タスク重み・更新量）を`tests/golden/numerics.json`と照合（更新は`UPDATE_GOLDEN=1`）。
+- **B6 既定値変更の互換**: 既定Trueでパラメータを追加するフラグは、旧checkpoint互換の登録が必須（挙動ベースで検出）。
+
+**テストで見つかった問題（修正済み）**
+1. `PLOT_TOP_N_LINEAGES`がconfigに未定義で、`getattr(...,30)`により設定不能のまま黙って30固定だった → configに追加（値は同じ30）。
+2. `USE_SUBSTITUTION_HEAD`（既定True、パラメータ追加）が旧checkpoint互換に未登録だった → `_OFF_IF_ABSENT_FROM_SNAPSHOT`に追加。
+3. `scripts/analysis/mutation_freq.py`が、モジュール直下で全データを読む解析を実行し、importで固まっていた → `main()`化し`__main__`ガードを追加（内容は不変）。
+
+**調査で分かった仕様（テストで記録、変更なし）**
+- **同一コドン内の共起変異の特徴量は、記載順に適用され順序依存**（後の変異のaa_before/afterが前の変異の影響を受ける）。モデルの共起集約は順序不変だが、特徴量生成の段階では順序依存が残る。論文では「共起集約が順序の不確実性に対処する」主張の範囲（同一コドン内の稀なケースで特徴量が順序に依存する）に注意。
+- `evaluate`の`detailed_results['hit_*']`は、集計の hit_rate とは別経路で計算される（整合性テストで一致を確認）。
+
+変異テストは累計で約50種（指標・特徴量・前処理・設定・importの各変異を含む）。いずれも該当テストが失敗することを確認。
+

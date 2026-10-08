@@ -1,5 +1,5 @@
-# --- transformer_261008/scripts/mutation_freq.py ---
-# Usage: python -m transformer_261008.scripts.mutation_freq
+# --- transformer_261008/scripts/analysis/mutation_freq.py ---
+# Usage: python -m transformer_261008.scripts.analysis.mutation_freq
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -323,127 +323,128 @@ def compress_csv_rows_folder(input_dir, output_dir, step=100):
         print(f"Saved: {out_path}")
     return df_compressed_ts
 
-# %%
-from transformer_261008.preprocess import get_all_data_base_dirs
+def main():
+    """旧: モジュール直下に書かれていた集計スクリプト本体（importで実行されないよう関数化、内容は不変）。"""
+    # %%
+    from transformer_261008.preprocess import get_all_data_base_dirs
 
-data_base_dirs = get_all_data_base_dirs()  # DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS(usher_output2等)
-files = sorted({
-    f for d in data_base_dirs if os.path.isdir(d)
-    for f in os.listdir(d) if not f.startswith('.')
-})
-print(files)
-print(len(files))
+    data_base_dirs = get_all_data_base_dirs()  # DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS(usher_output2等)
+    files = sorted({
+        f for d in data_base_dirs if os.path.isdir(d)
+        for f in os.listdir(d) if not f.startswith('.')
+    })
+    print(files)
+    print(len(files))
 
-strains = files
+    strains = files
 
-dir_ver = "260715"
-output_dir = os.path.join("outputs/table_heatmap", dir_ver)
-tables_dir = os.path.join(output_dir, "timestep_tables/strains")
+    dir_ver = "260715"
+    output_dir = os.path.join("outputs/table_heatmap", dir_ver)
+    tables_dir = os.path.join(output_dir, "timestep_tables/strains")
 
-"""
-timestep_max_list = []
+    """
+    timestep_max_list = []
 
-for strain in strains:
+    for strain in strains:
+        names = []
+        lengths = []
+        paths = []
+        file_paths = import_mutation_paths(usher_dir,strain)
+        for file_path in file_paths:
+            #print(f"[INFO]import: {file_path}")
+            f = open(file_path, 'r',encoding="utf-8_sig")
+            datalist = f.readlines()
+            f.close()
+
+            data_num = len(datalist)
+
+            for i in range(1,data_num):
+                data = datalist[i].split('\t')
+                names.append(data[0])
+                lengths.append(int(data[1]))
+                paths.append(data[2].rstrip().split('>'))
+
+        print(f"[INFO] {strain}のデータ読み込み完了: {len(paths)} サンプル")
+        #print(paths[0])
+
+        timestep_max = max(lengths)
+        timestep_max_list.append(timestep_max)
+
+        tables_dir_strain = os.path.join(tables_dir, strain)
+        print(f"[INFO] {strain}のtimestep_tablesを作成中:{tables_dir_strain}")
+        os.makedirs(tables_dir_strain, exist_ok=True)
+    
+        df_timestep = mutation_table_by_timestep(paths,timestep_max)
+        save_timestep_df(df_timestep, tables_dir_strain)  
+    df_timestep = tables_summary(strains, timestep_max_list, output_dir, tables_dir)   
+
+    # %%
+    pos_step = 100
+    input_dir_pos_step = os.path.join(output_dir, "timestep_tables/default")
+    output_dir_pos_step = os.path.join(output_dir, "timestep_tables/pos-step" + str(pos_step))
+    df_timestep_pos_step = compress_csv_rows_folder(input_dir_pos_step, output_dir_pos_step, pos_step)
+
+    heatmaps_dir = os.path.join(output_dir, "timestep_heatmaps/pos-step" + str(pos_step))
+    save_heatmaps(df_timestep_pos_step, pos_step, heatmaps_dir)
+    create_video_from_heatmaps(heatmaps_dir, heatmaps_dir+"/mutation_heatmaps_video.mp4", fps=1)
+    """
+
+    # %%
+    # --- データ読み込み・前処理 ---
+    data_base_dirs = get_all_data_base_dirs()  # DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS(usher_output2等)
+    files = sorted({
+        f for d in data_base_dirs if os.path.isdir(d)
+        for f in os.listdir(d) if not f.startswith('.')
+    })
+    print(files)
+    print(len(files))
+
+    strains = files
+    #max_co_occur = 5
+
+    # 全件データの読み込み
     names = []
     lengths = []
     paths = []
-    file_paths = import_mutation_paths(usher_dir,strain)
-    for file_path in file_paths:
-        #print(f"[INFO]import: {file_path}")
-        f = open(file_path, 'r',encoding="utf-8_sig")
-        datalist = f.readlines()
-        f.close()
+    for strain in strains:
+        file_paths = import_mutation_paths_multi(data_base_dirs, strain)
+        for file_path in file_paths:
+            print(f"[INFO]import: {file_path}")
+            f = open(file_path, 'r',encoding="utf-8_sig")
+            datalist = f.readlines()
+            f.close()
 
-        data_num = len(datalist)
+            data_num = len(datalist)
 
-        for i in range(1,data_num):
-            data = datalist[i].split('\t')
-            names.append(data[0])
-            lengths.append(int(data[1]))
-            paths.append(data[2].rstrip().split('>'))
-
-    print(f"[INFO] {strain}のデータ読み込み完了: {len(paths)} サンプル")
-    #print(paths[0])
-
-    timestep_max = max(lengths)
-    timestep_max_list.append(timestep_max)
-
-    tables_dir_strain = os.path.join(tables_dir, strain)
-    print(f"[INFO] {strain}のtimestep_tablesを作成中:{tables_dir_strain}")
-    os.makedirs(tables_dir_strain, exist_ok=True)
+            for i in range(1,data_num):
+                data = datalist[i].split('\t')
+                names.append(data[0])
+                lengths.append(int(data[1]))
+                paths.append(data[2].rstrip().split('>'))
     
-    df_timestep = mutation_table_by_timestep(paths,timestep_max)
-    save_timestep_df(df_timestep, tables_dir_strain)  
-df_timestep = tables_summary(strains, timestep_max_list, output_dir, tables_dir)   
+    print(f"[INFO] 全件読み込み完了: {len(paths)} サンプル")
 
-# %%
-pos_step = 100
-input_dir_pos_step = os.path.join(output_dir, "timestep_tables/default")
-output_dir_pos_step = os.path.join(output_dir, "timestep_tables/pos-step" + str(pos_step))
-df_timestep_pos_step = compress_csv_rows_folder(input_dir_pos_step, output_dir_pos_step, pos_step)
+    # %%
+    output_dir_set = os.path.join(output_dir, "table_set")
+    os.makedirs(output_dir_set, exist_ok=True)
 
-heatmaps_dir = os.path.join(output_dir, "timestep_heatmaps/pos-step" + str(pos_step))
-save_heatmaps(df_timestep_pos_step, pos_step, heatmaps_dir)
-create_video_from_heatmaps(heatmaps_dir, heatmaps_dir+"/mutation_heatmaps_video.mp4", fps=1)
-"""
+    timestep_data = transposition_and_set(paths)
+    mutation_list = to1Dlist(timestep_data)
+    df_set,df_set_all = mutation_table([mutation_list])
+    save_df(df_set, output_dir_set, output_file_name = 'table_set.csv')
+    save_df(df_set_all, output_dir_set, output_file_name = 'table_set_sum.csv')
 
-# %%
-# --- データ読み込み・前処理 ---
-data_base_dirs = get_all_data_base_dirs()  # DATA_BASE_DIR + EXTRA_DATA_BASE_DIRS(usher_output2等)
-files = sorted({
-    f for d in data_base_dirs if os.path.isdir(d)
-    for f in os.listdir(d) if not f.startswith('.')
-})
-print(files)
-print(len(files))
+    # %%
+    pos_step = 100
+    df_set_path = os.path.join(output_dir_set, "table_set.csv")
+    df_set_pos_step = compress_csv_rows(df_set_path,pos_step)
 
-strains = files
-#max_co_occur = 5
+    save_df(df_set_pos_step, output_dir_set, output_file_name = 'table_set_pos-step'+str(pos_step)+'.csv')
+    save_heatmap(df_set_pos_step,pos_step,output_dir_set)
 
-# 全件データの読み込み
-names = []
-lengths = []
-paths = []
-for strain in strains:
-    file_paths = import_mutation_paths_multi(data_base_dirs, strain)
-    for file_path in file_paths:
-        print(f"[INFO]import: {file_path}")
-        f = open(file_path, 'r',encoding="utf-8_sig")
-        datalist = f.readlines()
-        f.close()
-
-        data_num = len(datalist)
-
-        for i in range(1,data_num):
-            data = datalist[i].split('\t')
-            names.append(data[0])
-            lengths.append(int(data[1]))
-            paths.append(data[2].rstrip().split('>'))
-    
-print(f"[INFO] 全件読み込み完了: {len(paths)} サンプル")
-
-# %%
-output_dir_set = os.path.join(output_dir, "table_set")
-os.makedirs(output_dir_set, exist_ok=True)
-
-timestep_data = transposition_and_set(paths)
-mutation_list = to1Dlist(timestep_data)
-df_set,df_set_all = mutation_table([mutation_list])
-save_df(df_set, output_dir_set, output_file_name = 'table_set.csv')
-save_df(df_set_all, output_dir_set, output_file_name = 'table_set_sum.csv')
-
-# %%
-pos_step = 100
-df_set_path = os.path.join(output_dir_set, "table_set.csv")
-df_set_pos_step = compress_csv_rows(df_set_path,pos_step)
-
-save_df(df_set_pos_step, output_dir_set, output_file_name = 'table_set_pos-step'+str(pos_step)+'.csv')
-save_heatmap(df_set_pos_step,pos_step,output_dir_set)
-
-# %%
-timestep_data
-
-# %%
+    # %%
+    # timestep_data  （ノートブック由来の単独参照。未定義名のためコメントアウト）
 
 
-
+if __name__ == "__main__":
+    main()

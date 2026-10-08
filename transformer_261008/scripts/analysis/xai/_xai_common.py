@@ -22,7 +22,8 @@ from transformer_261008.utils.logging import force_print
 
 
 # 学習可能パラメータ/バッファを追加するフラグ（スナップショットに無ければ旧checkpoint＝OFF扱い）
-_OFF_IF_ABSENT_FROM_SNAPSHOT = ('USE_REGION_CONDITIONED_POSITION',)
+# USE_SUBSTITUTION_HEAD: base_after/aa_after ヘッド（学習可能パラメータ）が無い時代のcheckpoint用
+_OFF_IF_ABSENT_FROM_SNAPSHOT = ('USE_REGION_CONDITIONED_POSITION', 'USE_SUBSTITUTION_HEAD')
 
 
 def load_config_snapshot(checkpoint_dir):
