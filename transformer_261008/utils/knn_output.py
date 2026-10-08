@@ -102,11 +102,11 @@ class KNNOutput:
     def load(cls, vocab_size):
         paths = cls.datastore_paths()
         if not all(os.path.exists(p) for p in paths):
-            _log.force_print(f"[WARN] kNN datastore not found ({paths[0]}). kNN output disabled.")
+            _log.fallback_or_raise(f"kNN datastore が無い ({paths[0]})。kNN出力を無効化します")
             return None
         keys, indptr, positions, weights = (np.load(p) for p in paths)
         if len(keys) == 0:
-            _log.force_print("[WARN] kNN datastore is empty. kNN output disabled.")
+            _log.fallback_or_raise("kNN datastore が空です。kNN出力を無効化します")
             return None
         return cls(keys, indptr, positions, weights, vocab_size)
 

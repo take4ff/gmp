@@ -15,7 +15,7 @@ from tqdm import tqdm
 from datetime import datetime
 
 from . import config
-from .utils.logging import force_print
+from .utils.logging import force_print, fallback_or_raise
 from .db.connection import init_db, connect_db, get_db_path, print_db_stats, get_feature_config_hash, create_db_indexes
 from .db.queries import assign_splits, assign_splits_auto, get_processed_strains, get_next_ids
 from .utils.io import get_config_hash
@@ -60,7 +60,7 @@ def load_combined_sequences_df(usecols=None):
     dfs = []
     for csv_path in get_all_sequences_csv_paths():
         if not os.path.exists(csv_path):
-            force_print(f"[WARNING] Sequences CSV not found: {csv_path}")
+            fallback_or_raise(f"Sequences CSV が無い: {csv_path}。このCSVを除外して続行します")
             continue
         dfs.append(pd.read_csv(csv_path, usecols=usecols))
     if not dfs:
@@ -90,7 +90,7 @@ def load_release_dates():
     """
     csv_paths = [p for p in get_all_sequences_csv_paths() if os.path.exists(p)]
     if not csv_paths:
-        force_print(f"[WARNING] Sequences CSV not found: {config.SEQUENCES_CSV}")
+        fallback_or_raise(f"Sequences CSV が無い: {config.SEQUENCES_CSV}。release_date は空になります")
         return {}
 
     # Release_Date カラムが存在しない旧版 CSV はスキップ
@@ -112,7 +112,7 @@ def load_countries():
     """SEQUENCES_CSV(+EXTRA_SEQUENCES_CSV) から Accession と Country のマッピングを読み込む。"""
     csv_paths = [p for p in get_all_sequences_csv_paths() if os.path.exists(p)]
     if not csv_paths:
-        force_print(f"[WARNING] Sequences CSV not found: {config.SEQUENCES_CSV}")
+        fallback_or_raise(f"Sequences CSV が無い: {config.SEQUENCES_CSV}。country は空になります")
         return {}
 
     # Country カラムが存在しない旧版 CSV はスキップ
@@ -205,7 +205,7 @@ def import_strains_to_db(con, strain_to_strength):
         elapsed = time.time() - start_t
         force_print(f"[INFO] Loaded {len(acc_to_pango):,} mappings in {elapsed:.1f} seconds")
     else:
-        force_print(f"[WARNING] Sequences CSV not found for mapping: {csv_path}")
+        fallback_or_raise(f"Sequences CSV が無い（系統マッピング用）: {csv_path}")
 
     data_base_dirs = get_all_data_base_dirs()
     strains = sorted({
@@ -421,7 +421,9 @@ def process_strain_features_core_chunked(strain_name, codon_data, freq_dict, dis
                         current_chunk_data = []
                         chunk_idx += 1
                         gc.collect()
-        except Exception:
+        except Exception as e:
+            # 読めない/処理に失敗したデータファイルを黙って捨てない（サンプルが静かに欠落する）
+            fallback_or_raise(f"データファイルの処理に失敗: {file_path}: {type(e).__name__}: {e}。このファイルを除外して続行します")
             continue
 
     # 残ったデータの保存

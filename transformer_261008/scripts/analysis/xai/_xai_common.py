@@ -30,7 +30,9 @@ def load_config_snapshot(checkpoint_dir):
     """checkpoint と同じディレクトリの config_snapshot.py で config を上書きする。"""
     snapshot_path = os.path.join(checkpoint_dir, 'config_snapshot.py')
     if not os.path.exists(snapshot_path):
-        force_print(f"[WARNING] config_snapshot.py が見つかりません: {snapshot_path}")
+        from transformer_261008.utils.logging import fallback_or_raise
+        # 無いと現行configでcheckpointを読むことになり、学習時とフラグ・次元が食い違いうる
+        fallback_or_raise(f"config_snapshot.py が見つかりません: {snapshot_path}。現行configで続行します")
         return
     import importlib.util
     spec = importlib.util.spec_from_file_location('config_snapshot', snapshot_path)
@@ -217,6 +219,8 @@ def assign_fold_test_window(db_path, train_start, split_date, split_end):
     else:
         con.execute(base + " AND RPAD(collection_date, 10, '-01-01') < ?", [split_date, split_end])
     n_test = con.execute("SELECT COUNT(*) FROM samples WHERE split_type_wf = 2").fetchone()[0]
+    from transformer_261008.db.queries import write_split_state
+    write_split_state(con, 'test_only', 'split_type_wf', train_start, split_date, split_end)   # train/valid は空
     con.close()
     force_print(f"[INFO] test split_type_wf=2 に {n_test:,} 件を割り当て")
     return n_test

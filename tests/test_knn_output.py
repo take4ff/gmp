@@ -122,8 +122,8 @@ def test_save_load_roundtrip(tmp_path, cfg):
     assert float(p[0, 2]) == pytest.approx(0.5)
 
 
-def test_load_returns_none_when_missing_or_empty(tmp_path, cfg):
-    cfg(KNN_DATASTORE_PATH=str(tmp_path / 'nope'))
+def test_load_returns_none_when_missing_or_empty_if_lenient(tmp_path, cfg):
+    cfg(STRICT_FALLBACKS=False, KNN_DATASTORE_PATH=str(tmp_path / 'nope'))
     assert KNNOutput.load(V) is None
     cfg(KNN_DATASTORE_PATH=str(tmp_path / 'empty'))
     KNNOutput(np.zeros((0, 2), np.float32), np.zeros(1, np.int64), np.zeros(0, np.int64),

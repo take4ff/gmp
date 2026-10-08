@@ -133,8 +133,10 @@ def _get_point_in_time_freq_dict():
                         d[(bef, pos, aft)] = count
         print(f"[INFO] Loaded point-in-time freq table: {path} ({len(d):,} 非ゼロ変異)")
     else:
-        print(f"[WARNING] point-in-time freq table not found for cutoff={cutoff} "
-              f"(expected {path})。FREQ_CSV由来の値のままフォールバックします。")
+        from ..utils.logging import fallback_or_raise
+        # 表が無いと codon_freq(num[0]) が全て0になる（リークの無い頻度設計が黙って崩れる）ため、厳格時は止める
+        fallback_or_raise(f"point-in-time頻度表が無い (cutoff={cutoff}, expected {path})。"
+                          f"codon_freq特徴が0になります")
     _POINT_IN_TIME_FREQ_CACHE[cutoff] = d
     return d
 
@@ -169,6 +171,10 @@ class DBIterableDataset(IterableDataset):
         self.chunk_size = chunk_size
         self.strain_to_strength = strain_to_strength
         self.split_col_override = split_col_override
+
+        # 共有DBの split 割当が、今の設定・用途と矛盾していないか（別fold/test専用割当のまま等）を検査する。
+        from .queries import check_split_state, get_split_col
+        check_split_state(db_path, split_type, split_col_override if split_col_override else get_split_col())
 
         # 数値特徴量マスクのキー順を一度だけ確定（ホットパスでの再構築を回避）
         self._num_mask_keys = list(_NUM_MASK_KEYS_BASE)

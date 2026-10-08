@@ -291,8 +291,9 @@ def build_components(class_counts_dict=None):
             if unexpected:
                 force_print(f"[INFO]   Unexpected keys: {unexpected}")
         else:
-            force_print(f"[WARNING] USE_PRETRAINING=True but checkpoint not found: {pretrain_path}")
-            force_print("[WARNING]   Falling back to random initialization.")
+            from .utils.logging import fallback_or_raise
+            fallback_or_raise(f"USE_PRETRAINING=True だが事前学習checkpointが無い: {pretrain_path}。"
+                              f"ランダム初期化にフォールバックします")
 
     loss_wrapper = None
     if config.USE_MULTITASK_LOSS:

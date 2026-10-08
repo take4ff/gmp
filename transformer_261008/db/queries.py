@@ -20,6 +20,79 @@ def valid_date_sql(col='collection_date'):
     return f"regexp_matches({col}, '{VALID_DATE_REGEX}')"
 
 
+class StaleSplitError(RuntimeError):
+    """DB上の split 割当が、今の設定・用途と食い違っている（別foldの割当が残っている、test専用割当のままtrainを読む等）。"""
+
+
+def write_split_state(con, kind, col='split_type_wf', train_start=None, split_date=None, split_end=None,
+                      valid_ratio=None, seed=None):
+    """split列(col)を書き換えた直後に、割当の内容を split_state テーブルへ記録する（col毎に1行）。
+
+    split_type_wf は共有DBの可変な状態で、学習・分析スクリプトが書き換える。どのfold・どの種類の割当が
+    残っているかが分からないと、別foldの割当や test 専用割当のまま学習・評価しても気付けない
+    （2026-10-08: 軽量割当の後にtrainを読み、0件のデータストアができた）。kind: 'full'(train/valid/test) | 'test_only'。
+    """
+    con.execute("""CREATE TABLE IF NOT EXISTS split_state (
+        col VARCHAR PRIMARY KEY, kind VARCHAR, train_start VARCHAR, split_date VARCHAR, split_end VARCHAR,
+        valid_ratio DOUBLE, seed INTEGER, n_train BIGINT, n_valid BIGINT, n_test BIGINT, assigned_at TIMESTAMP)""")
+    cnt = dict(con.execute(f"SELECT {col}, COUNT(*) FROM samples GROUP BY {col}").fetchall())
+    con.execute("DELETE FROM split_state WHERE col = ?", [col])
+    con.execute("INSERT INTO split_state VALUES (?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP)",
+                [col, kind, train_start, split_date, split_end, valid_ratio, seed,
+                 int(cnt.get(0, 0)), int(cnt.get(1, 0)), int(cnt.get(2, 0))])
+
+
+def read_split_state(con, col='split_type_wf'):
+    """split_state の1行を dict で返す。テーブル/行が無ければ None（割当が未記録＝不明）。"""
+    try:
+        row = con.execute("SELECT kind, train_start, split_date, split_end, valid_ratio, seed, n_train, n_valid,"
+                          " n_test, assigned_at FROM split_state WHERE col = ?", [col]).fetchone()
+    except Exception:                                              # テーブルが無い（旧DB・手組みの合成DB）
+        return None
+    if row is None:
+        return None
+    keys = ['kind', 'train_start', 'split_date', 'split_end', 'valid_ratio', 'seed', 'n_train', 'n_valid',
+            'n_test', 'assigned_at']
+    return dict(zip(keys, row))
+
+
+def check_split_state(db_path, split_type, col):
+    """これから読む split(split_type, col) が、記録された割当と矛盾しないか検査する（矛盾なら StaleSplitError）。
+
+    walk_forward(split_type_wf) のみ対象。記録が無ければ検査しない（不明）。
+    ① 'test_only'（軽量割当）のまま train/valid(0,1) を読もうとしていないか
+    ② 'full' 割当について、現在の設定のfold窓(WALK_FORWARD_TRAIN_START/TEMPORAL_SPLIT_DATE/TEMPORAL_SPLIT_TEST_END)が
+       割当時の窓と一致するか（学習で別foldのデータを使う事故を防ぐ）。
+       'test_only'（分析用）では窓の一致は見ない: 分析スクリプトは「割当→checkpoint読込（古い静的スナップショットが
+       窓を上書き）→再割当」の順序に依存しており、読込直後に窓が食い違うのが正常なため。
+    """
+    if col != 'split_type_wf':
+        return
+    from .connection import connect_db
+    con = connect_db(db_path, read_only=True)
+    try:
+        st = read_split_state(con, col)
+    finally:
+        con.close()
+    if st is None:
+        return
+    if st['kind'] == 'test_only' and split_type in (0, 1):
+        raise StaleSplitError(
+            f"split_type={split_type}(train/valid) を読もうとしていますが、DBの現在の割当は test のみ（軽量割当、"
+            f"{st['assigned_at']}, split_date={st['split_date']}）で train/valid は空です。"
+            f"assign_wf_splits でそのfoldを割り当て直してください。")
+    if st['kind'] != 'full':
+        return
+    cfg = (getattr(config, 'WALK_FORWARD_TRAIN_START', None), getattr(config, 'TEMPORAL_SPLIT_DATE', None),
+           getattr(config, 'TEMPORAL_SPLIT_TEST_END', None))
+    rec = (st['train_start'], st['split_date'], st['split_end'])
+    if cfg != rec:
+        raise StaleSplitError(
+            f"DBの割当のfold窓 (train_start, split_date, split_end)={rec} が、現在の設定 {cfg} と一致しません"
+            f"（割当 {st['assigned_at']}、kind={st['kind']}）。別foldの割当が残っている可能性があります。"
+            f"assign_wf_splits（または assign_fold_test_window）で現在の設定に割り当て直してください。")
+
+
 def get_split_col():
     """現在設定されている SPLIT_MODE に応じて参照すべき DB のカラム名を返す。"""
     mode = getattr(config, 'SPLIT_MODE', 'timestep').lower()
@@ -463,6 +536,8 @@ def assign_wf_splits(con):
     """).fetchall()
     for val, label, count in stats:
         print(f"[{timestamp}]   {label}: {count:,} samples")
+
+    write_split_state(con, 'full', 'split_type_wf', train_start, split_date, split_end, valid_ratio, config.SEED)
 
 
 def assign_splits_auto(con):

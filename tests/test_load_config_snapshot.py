@@ -40,8 +40,8 @@ def test_other_values_are_overridden_from_snapshot(tmp_path, cfg):
     assert config.N_LAYERS == 7
 
 
-def test_missing_snapshot_file_leaves_config_untouched(tmp_path, cfg):
+def test_missing_snapshot_file_leaves_config_untouched_if_lenient(tmp_path, cfg):
     from transformer_261008 import config
-    cfg(USE_REGION_CONDITIONED_POSITION=True)
+    cfg(USE_REGION_CONDITIONED_POSITION=True, STRICT_FALLBACKS=False)
     X.load_config_snapshot(str(tmp_path))          # ファイル無し
     assert config.USE_REGION_CONDITIONED_POSITION is True

@@ -729,7 +729,7 @@ class HierarchicalTransformer(nn.Module):
         import os
         path = getattr(config, 'HOMOPLASY_CSV', '')
         if not path or not os.path.exists(path):
-            _log.force_print(f"[WARN] {context}=True but CSV not found: {path}. Disabled.")
+            _log.fallback_or_raise(f"{context}=True だがホモプラシーCSVが無い: {path}。この機能を無効化します")
             return None
         try:
             import pandas as pd
@@ -741,7 +741,7 @@ class HierarchicalTransformer(nn.Module):
             _log.force_print(f"[INFO] Homoplasy bias loaded ({context}): {len(df)} sites from {path}")
             return bias
         except Exception as e:
-            _log.force_print(f"[WARN] Failed to load homoplasy CSV ({path}) for {context}: {e}. Disabled.")
+            _log.fallback_or_raise(f"{context}: ホモプラシーCSVの読み込みに失敗 ({path}): {e}。この機能を無効化します")
             return None
 
     def forward(self, x_cat, x_num, src_mask=None, src_key_padding_mask=None, clade_ids=None):

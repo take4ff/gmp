@@ -11,6 +11,23 @@ def force_print(message):
     print(f"[{timestamp}] {message}", flush=True)
 
 
+class FallbackError(RuntimeError):
+    """必要なリソースが無い/読めないのに、警告だけで続行すると結果が静かに劣化する状況。"""
+
+
+def fallback_or_raise(message, strict=None):
+    """config.STRICT_FALLBACKS が True なら FallbackError を送出、False なら警告ログのみ出して続行する。
+
+    呼び出し側は「厳格でないとき」に従来のフォールバック動作を続ければよい。
+    strict を明示すればconfigに依らず挙動を固定できる。
+    """
+    if strict is None:
+        strict = getattr(config, 'STRICT_FALLBACKS', True)
+    if strict:
+        raise FallbackError(message + "（STRICT_FALLBACKS=False で警告のみに緩和できるが、結果が静かに劣化する）")
+    force_print(f"[WARNING] {message}")
+
+
 def print_config():
     """現在の設定値を一覧表示する。"""
     force_print("Current Configurations:")

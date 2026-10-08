@@ -506,6 +506,13 @@ EVAL_TOP_KS = (1, 3, 5)             # Top-K 評価で計算する K のリスト
 SAVE_CONFIDENT_SUBSET     = True
 CONFIDENT_COVERAGE_LEVELS = [1.0, 0.75, 0.5, 0.25, 0.1]
 PLOT_TOP_N_POSITIONS = 40           # 塩基位置の Recall でプロットする上位 N 件
+# --- 黙って劣化するフォールバックの扱い ---
+# True(既定): 「フラグはONなのに必要なリソースが無い/読めない」場合に、警告だけで続行せず FallbackError で止める。
+#   例: 事前学習checkpointが無い→ランダム初期化、ホモプラシーCSVが無い→機能が無効化、point-in-time頻度表が無い→
+#   頻度特徴が0になる(リークの無い設計が黙って崩れる)、kNNデータストアが無い、config_snapshotが無い→現行configで続行。
+#   いずれも結果は「もっともらしい値」のまま劣化するため、実験では止めるのが安全。
+# False: 従来通り警告のみで続行（探索的な利用・欠損を承知の上でのみ）。utils/logging.py::fallback_or_raise
+STRICT_FALLBACKS = True
 PLOT_TOP_N_LINEAGES = 30            # 系統別プロット（main.py）の上位 N 系統。従来は getattr のデフォルト30で黙って固定されていた
 DIVERSITY_PLOT_MIN_SAMPLES = 10     # 多様度 vs hit-rate 散布図/CSV で系統を採用する最小サンプル数
 SAVE_ATTENTION_HEATMAP = False      # Attentionヒートマップを保存するかどうか（可視化のみ・学習時間に影響）

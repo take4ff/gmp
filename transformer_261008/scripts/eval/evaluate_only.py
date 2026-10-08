@@ -71,7 +71,8 @@ def main():
                 overridden.append(attr)
         force_print(f"[INFO] Loaded config_snapshot.py from {snapshot_path} ({len(overridden)} attrs overridden)")
     else:
-        force_print(f"[WARNING] config_snapshot.py not found at {snapshot_path}. Using current config.")
+        from transformer_261008.utils.logging import fallback_or_raise
+        fallback_or_raise(f"config_snapshot.py が見つかりません: {snapshot_path}。現行configで続行します")
 
     print_config()
     save_config_copy(run_output_dir)

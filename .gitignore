@@ -33,7 +33,6 @@ nohup*.out
 
 
 # Claude code
-CLAUDE.md
 .claudeignore
 
 

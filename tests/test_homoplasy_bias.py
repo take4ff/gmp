@@ -38,5 +38,6 @@ def test_negative_recurrence_clamped_to_zero(tmp_path, cfg):
     assert float(_load(p, cfg)[7]) == 0.0
 
 
-def test_missing_csv_returns_none(tmp_path, cfg):
+def test_missing_csv_returns_none_when_lenient(tmp_path, cfg):
+    cfg(STRICT_FALLBACKS=False)                      # 厳格時の挙動は tests/test_strict_fallbacks.py
     assert _load(tmp_path / 'nope.csv', cfg) is None

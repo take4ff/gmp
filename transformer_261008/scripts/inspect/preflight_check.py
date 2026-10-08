@@ -130,6 +130,19 @@ def check_labels_and_features(con):
             'samples_without_labels': n_no_label, 'samples_without_features': n_no_feat}
 
 
+def check_split_state_info(con):
+    """DBに記録された現在のsplit割当（種類・fold窓・件数）を返す。記録が無い/test専用なら warn（failにはしない）。"""
+    from transformer_261008.db.queries import read_split_state
+    st = read_split_state(con)
+    if st is None:
+        return {'status': WARN, 'note': 'split_state の記録なし（割当が未記録。assign_wf_splits 後に記録される）'}
+    st = {k: (str(v) if k == 'assigned_at' else v) for k, v in st.items()}
+    st['status'] = WARN if st['kind'] == 'test_only' else PASS
+    if st['kind'] == 'test_only':
+        st['note'] = 'test専用の軽量割当（train/valid は空）。学習前に assign_wf_splits が必要'
+    return st
+
+
 def run_preflight(con, fold_window=None, truncate_len=None):
     """全チェックを実行して {stage名: 結果} を返す。fold_window=(train_start, split_date, split_end)。"""
     out = {
@@ -137,6 +150,7 @@ def run_preflight(con, fold_window=None, truncate_len=None):
         'stage_1_collection_dates': check_collection_dates(con),
         'stage_1_labels_features': check_labels_and_features(con),
         'stage_2_cross_split_duplicates': check_cross_split_duplicates(con),
+        'stage_2_split_state': check_split_state_info(con),
     }
     if fold_window is not None:
         out['stage_2_wf_assignment'] = check_wf_assignment(con, *fold_window)

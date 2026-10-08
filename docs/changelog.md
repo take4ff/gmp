@@ -210,3 +210,13 @@ AIコーディングで入りうる静かな不具合を減らすため、プロ
 
 変異テストは累計で約50種（指標・特徴量・前処理・設定・importの各変異を含む）。いずれも該当テストが失敗することを確認。
 
+---
+
+### 運用面の対策（C項目）: 割当状態の記録・フォールバックの厳格化・AIの変更ルール（対処済み・2026-10-08、transformer_261008）
+
+1. **C4 DB割当の状態を記録・検査**: `split_type_wf`（共有DBの可変な状態）を書く処理が、割当の内容を`split_state`テーブル（kind=full/test_only、fold窓、valid比率、seed、件数、時刻）に記録する（`assign_wf_splits`・`assign_fold_test_window`・`attention_by_month`）。読む側（`DBIterableDataset`）は、①test専用割当のままtrain/validを読む、②`full`割当の窓が現在の設定と一致しない（別foldの割当が残っている）、のとき`StaleSplitError`で止まる。記録が無い（旧DB）場合は検査しない。`preflight_check`が現在の割当状態を表示する。窓の一致は`full`のみ検査する（分析スクリプトは「割当→checkpoint読込で窓が上書き→再割当」の順序に依存するため）。
+2. **C5 フォールバックの厳格化**: `config.STRICT_FALLBACKS=True`（既定）で、`utils/logging.py::fallback_or_raise`が、これまで警告のみで続行していた次の箇所を`FallbackError`で止める — 事前学習checkpoint無し（ランダム初期化）／ホモプラシーCSV無し・読込失敗（機能が無効化）／**point-in-time頻度表が無い（codon_freqが0になり、リーク対策の設計が黙って崩れる）**／kNNデータストア無し・空／config_snapshot無し（現行configで続行）／前処理の入力CSV無し・読めないデータファイル（サンプルが欠落）。`False`で従来の警告のみに緩和できる。全foldのpoint-in-time表(2021-01-01〜2024-01-01)が存在することをテストで確認。
+3. **C1/C2**: `CLAUDE.md`を`.gitignore`から外して追跡対象に。「AI（Claude）が変更を入れるときのルール」12項目を追記。
+
+**未対応（棚卸し結果）**: `except Exception`が主要経路にまだ約60か所ある。このうち学習・評価の結果に影響しうるもの（`db/queries.py`の統計計算、`utils/io.py`のキャッシュ読み書き、`preprocess.py`のキャッシュ・メモリ監視など）は個別に精査していない。ログのみで継続する箇所を今後`fallback_or_raise`か明示的な例外へ置き換える候補。
+

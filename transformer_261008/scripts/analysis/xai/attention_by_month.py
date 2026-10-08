@@ -326,6 +326,8 @@ def run_walk_forward(args):
         else:
             con.execute(base + " AND RPAD(collection_date, 10, '-01-01') < ?", [split_date, split_end])
         n_test = con.execute("SELECT COUNT(*) FROM samples WHERE split_type_wf = 2").fetchone()[0]
+        from transformer_261008.db.queries import write_split_state
+        write_split_state(con, 'test_only', 'split_type_wf', train_start, split_date, split_end)
         con.close()
         force_print(f"[INFO] Fold {fold_id}: test split_type_wf=2 に {n_test:,} 件を割り当て")
 
