@@ -171,3 +171,18 @@ gc.freeze()  # _group_label_cache構築済み・worker fork前
 
 **未対応（別件）**: `collection_date` が空文字の710件は従来仕様（Fold1 は train、Fold N は除外）のまま。
 
+---
+
+### 学習が黙って失敗・再現不能になる経路の対策（対処済み・2026-10-08、transformer_261008）
+
+AIコーディングで入りうる静かな不具合を減らすため、プロジェクト全体を調査して「学習前に必須」の4点を入れた。
+
+1. **空splitの検知**: trainが0件でも、DataLoaderは0バッチ・`train_one_epoch`は例外なく loss=0 を返して学習が「成功」していた（再現済み）。`create_db_dataloader`が0件で `EmptySplitError`（`allow_empty=True`で許可）、`train_one_epoch`が1バッチも処理しなければ `RuntimeError`。
+2. **実行の来歴の保存**: run出力に `provenance.json`（git commit・branch・dirty・変更/未追跡ファイル・python/torch/numpy/duckdbの版・GPU・DBのサイズと更新時刻）と、dirtyなら `code_changes.patch`（追跡ファイルの`git diff HEAD`）を保存（`utils/provenance.py`）。これまではconfigだけで、コードの版が残らなかった。**未追跡ファイルはpatchに入らないため、実行前にコミットしておくこと**。
+3. **起動前ゲート**: `scripts/eval/walk_forward.py`が、起動時に`pytest -x`（合成データのみ、数秒）と実DBのプリフライトを自動実行し、失敗したら学習を始めない（`--skip_gate`で省略可）。
+4. **主貢献の性質テスト**: Co-occurrence Attentionの出力が、同一タイムステップ内の共起変異の順序・スロット配置に依らない（差は1e-6、数値誤差）こと、timestep順には敏感であること、PADの中身が出力に影響しないことを、Broadcast-back／Region条件付けON時も含めてテスト化。
+
+テストは156件。変異テスト（空splitガード削除、来歴のdirty判定、スロット位置依存の導入、共起マスク無効化、ゲートの無効化など）で検出を確認した。
+
+**調査で見つかった残課題**（B・C項目として別途）: `evaluate.py`のカバレッジ4%（報告される指標そのもの）、`feature.py`/`preprocess.py`は0%、`CLAUDE.md`が`.gitignore`対象、`getattr(config,X,default)`が274か所でフラグ名のタイプミスが黙って無視される、定義済み248フラグのうち12個が未配線、`mutation_freq.py`に`__main__`ガードが無くimportで実行される。
+

@@ -145,6 +145,47 @@ def run_preflight(con, fold_window=None, truncate_len=None):
     return out
 
 
+class PreflightFailed(RuntimeError):
+    """プリフライト検査（またはテスト）に失敗し、学習の起動を中止すべき状態。"""
+
+
+def evaluate_gate(result):
+    """run_preflight の結果が fail を含むなら PreflightFailed を送出する（warn は通す）。"""
+    failed = {k: v for k, v in result.items() if isinstance(v, dict) and v.get('status') == FAIL}
+    if failed:
+        raise PreflightFailed("プリフライト検査に失敗: " + "; ".join(
+            f"{k}={json.dumps(v, ensure_ascii=False, default=str)[:200]}" for k, v in failed.items()))
+    return result
+
+
+def run_gate(run_tests=True, repo_dir=None, db_path=None, truncate_len=None):
+    """学習起動前ゲート: ①pytest（合成データのみ、数秒）②実DBのプリフライト。失敗したら PreflightFailed。
+
+    人間の「起動前にテストを流す」記憶に頼らず、walk_forward 起動時に自動で実行する
+    （scripts/eval/walk_forward.py。--skip_gate で省略可）。DBは読み取り専用で開く。
+    """
+    import os
+    import subprocess
+    import sys
+    repo_dir = repo_dir or os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    if run_tests:
+        r = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-x', '-p', 'no:cacheprovider'],
+                           cwd=repo_dir, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise PreflightFailed("pytest が失敗しました（学習を起動しません）:\n" + (r.stdout + r.stderr)[-1500:])
+    from transformer_261008.db.connection import connect_db, get_db_path
+    path = db_path or get_db_path()
+    if not os.path.exists(path):
+        raise PreflightFailed(f"DBが見つかりません: {path}")
+    con = connect_db(path, read_only=True)
+    try:
+        result = run_preflight(con, None, truncate_len)
+    finally:
+        con.close()
+    return evaluate_gate(result)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--fold', type=int, default=None,

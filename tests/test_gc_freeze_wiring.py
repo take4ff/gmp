@@ -11,6 +11,9 @@ class _DummyDataset(IterableDataset):
     def __init__(self, **kwargs):
         self.kwargs = kwargs
 
+    def __len__(self):
+        return 1                      # 実クラス DBIterableDataset と同様に件数を持つ（空splitガード対象）
+
     def __iter__(self):
         return iter([])
 

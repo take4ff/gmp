@@ -157,4 +157,8 @@ def train_one_epoch(model, dataloader, optimizer, loss_fn, loss_wrapper=None):
         total_epoch_loss += total_loss.item()
         batches_processed += 1
 
-    return total_epoch_loss / batches_processed if batches_processed > 0 else 0
+    if batches_processed == 0:
+        # 空のloader、または全バッチで losses=None（有効なターゲットが無い）。loss=0で「成功」させない。
+        raise RuntimeError("train_one_epoch: 1バッチも処理されませんでした（splitが空、または全バッチでラベル無し）。"
+                           "split割当とデータを確認してください。")
+    return total_epoch_loss / batches_processed

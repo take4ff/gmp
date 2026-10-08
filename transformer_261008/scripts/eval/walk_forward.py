@@ -43,10 +43,18 @@ def main():
                         help='部分/非連続実行(--foldsの先頭foldがfold_id==1でない場合)で直前フォールドの'
                              '重みとして使うcheckpointパス。省略時は既存のwalk_forward結果ディレクトリから'
                              '該当fold_id-1のbest_model.pthを自動探索する（見つからなければエラー）。')
+    parser.add_argument('--skip_gate', action='store_true',
+                        help='起動前ゲート（pytest＋DBプリフライト）を省略する。通常は使わない。')
     args = parser.parse_args()
 
     from transformer_261008 import config
     from transformer_261008.main import _run_entry
+
+    if not args.skip_gate:
+        # 起動前ゲート: テストまたはDB検査に失敗したら学習を始めない（長時間学習の無駄を防ぐ）。
+        from transformer_261008.scripts.inspect.preflight_check import run_gate
+        gate = run_gate(run_tests=True, truncate_len=getattr(config, 'RAW_PATH_TRUNCATE_LEN', None))
+        print(f"[GATE] pass (overall={gate.get('overall')})")
 
     config.SPLIT_MODE = 'walk_forward'
     if args.folds:

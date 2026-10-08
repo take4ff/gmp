@@ -13,6 +13,10 @@ from .connection import connect_db
 from .. import config
 
 
+class EmptySplitError(RuntimeError):
+    """対象splitのサンプルが0件。割当（split_type_wf等）が壊れたまま学習・評価が「成功」するのを防ぐ。"""
+
+
 class DBBatch(NamedTuple):
     """collate_fn が返すバッチ。位置アンパック（従来コード）と名前アクセスの両対応。
 
@@ -853,7 +857,7 @@ def _build_soft_target(group_items, temperature=None, route_weights=None):
 def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
                          max_cooccurrence=None, min_length=None, max_length=None,
                          chunk_size=1000, strain_to_strength=None, split_col_override=None,
-                         num_workers_override=None):
+                         num_workers_override=None, allow_empty=False):
     """DBからデータを読み込むDataLoaderを作成する。
 
     Args:
@@ -868,6 +872,8 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
         split_col_override: 参照カラムを強制指定（Noneなら get_split_col() に従う）
         num_workers_override: Noneの場合 config.NUM_DATALOADER_WORKERS を使用。
             val/test評価用ローダーは呼び出し側から config.EVAL_NUM_DATALOADER_WORKERS を渡す。
+        allow_empty: False(既定)なら、対象splitが0件のとき EmptySplitError を送出する。
+            空のtrainで学習が例外なく0バッチ・loss=0のまま進む（2026-10-08に再現）のを防ぐ。
 
     Returns:
         DataLoader
@@ -883,6 +889,12 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
         strain_to_strength=strain_to_strength,
         split_col_override=split_col_override,
     )
+
+    if len(dataset) == 0 and not allow_empty:
+        raise EmptySplitError(
+            f"split_type={split_type} のサンプルが0件です（db={db_path}, SPLIT_MODE={getattr(config, 'SPLIT_MODE', None)}）。"
+            f"split列の割当（walk_forwardなら assign_wf_splits。assign_fold_test_window は test 以外を -1 にする）"
+            f"とフィルタ条件を確認してください。")
 
     # dataset._group_label_cache（巨大なネストしたdict/list/tuple）が循環GCの定期走査対象に
     # 残ると、各worker（fork・persistent_workers=True）内で「読むだけ」のGC走査が

@@ -911,6 +911,8 @@ def main(optuna_trial=None):
     if not config.USE_DB:
         save_synonymous_distribution_csv(train, valid, test, run_output_dir)
     save_config_copy(run_output_dir)
+    from .utils.provenance import save_run_provenance
+    save_run_provenance(run_output_dir)       # コミットhash・dirty・環境・DB fingerprint（再現性）
 
     # 共通: strength_thresholds を決定して両関数に渡す (config優先、DYNAMIC_STRENGTH_CATEGORYで動的切り替え)
     use_dynamic = getattr(config, 'DYNAMIC_STRENGTH_CATEGORY', False)
@@ -1703,6 +1705,8 @@ def run_walk_forward(folds, wf_run_dir: str):
     }
     with open(os.path.join(wf_run_dir, 'walk_forward_meta.json'), 'w') as f:
         _json.dump(meta, f, indent=2, ensure_ascii=False)
+    from .utils.provenance import save_run_provenance
+    save_run_provenance(wf_run_dir)           # walk_forward全体のコード版・環境（各foldのrun dirにも保存される）
 
     prev_best_model_path = None
     prev_fold_id = None  # このループ内で直近に完了した fold_id

@@ -39,3 +39,7 @@ CLAUDE.md
 
 # PETra
 petra/PETra
+# テスト・カバレッジの生成物
+.coverage
+htmlcov/
+.pytest_cache/
