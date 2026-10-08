@@ -42,3 +42,6 @@ petra/PETra
 .coverage
 htmlcov/
 .pytest_cache/
+
+# 修士論文（独立した非公開リポジトリ。公開しない）
+/thesis/
