@@ -20,6 +20,9 @@ def get_feature_config_hash():
         str(config.RAW_PATH_TRUNCATE_LEN),  # raw_path保存時の切り詰め文字数
         "v2_strength_clade", # スキーマバージョン情報追加（DB再構築を強制）
     ]
+    # 順序非依存の特徴量(FEATURE_ORDER_INDEPENDENT=True)のときだけ追加。False では従来のハッシュ(=従来のDB名)を保つ
+    if getattr(config, 'FEATURE_ORDER_INDEPENDENT', False):
+        relevant_configs.append("order_independent_features_v1")
     config_string = "_".join(relevant_configs)
     return hashlib.md5(config_string.encode('utf-8')).hexdigest()
 

@@ -465,8 +465,107 @@ def Feature_from_csv_fast(mutation, codon_state, freq_dict, dissim_dict, pam250_
            host_adapt, context_bases
 
 
+def Step_features_order_independent(mutations_str, codon_state, freq_dict, dissim_dict, pam250_dict,
+                                    host_adapt_dict, undo_list=None, cum_syn=0, cum_nonsyn=0):
+    """1ステップ（同時に生じた共起変異群）の特徴量を、記載順に依存しない形で生成する（FEATURE_ORDER_INDEPENDENT=True）。
+
+    - 全変異を「ステップ開始時のゲノム状態」に対して独立に評価する（他の変異の適用結果を見ない）。
+    - 同一コドン内で適用される変異は、そのコドンに対する全変異を合成した後のコドンを共有する。コドン単位の特徴量
+      （aa_before/aa_after・同義判定・置換スコア・ホスト適応）は全メンバーで同一になる。位置・塩基・codon_pos・
+      再発頻度などの変異単位の特徴量は、それぞれの変異固有の値のまま。
+    - 前後文脈の塩基はステップ開始時のゲノムから取る（隣の変異の変異後塩基は含めない）。
+    - 評価後、適用可能な全変異をゲノム状態へ適用する（undo_listへ記録。順序に依らず同じ最終状態）。
+    - 参照塩基が一致しない変異・非コード領域は従来どおり「変化なし」として扱う。
+    出力は記載順のリスト。k=1や、互いに作用しない共起（別コドン・5bp超）では従来の逐次適用と同一の値になる。
+    """
+    ctx_w = getattr(config, 'CONTEXT_WINDOW', 3)
+    base_arr = codon_state['base']
+    base_len = len(base_arr)
+
+    # --- pass 1: ステップ開始時の状態を読むだけ（状態は変更しない）---
+    infos = []
+    for mutation in mutations_str.split(','):
+        bef, aft = mutation[0], mutation[-1]
+        idx = int(mutation[1:-1]) - 1
+        base = str(base_arr[idx])
+        codon = str(codon_state['codon'][idx])
+        codon_pos = int(codon_state['codon_pos'][idx])
+        infos.append({
+            'mutation': mutation, 'bef': bef, 'aft': aft, 'idx': idx, 'codon': codon, 'codon_pos': codon_pos,
+            'protein': str(codon_state['protein'][idx]), 'aa_pos': int(codon_state['aa_pos'][idx]),
+            'applicable': bef == base and codon != 'none',
+            'context': ([str(base_arr[idx - i]) if idx - i >= 0 else 'n' for i in range(ctx_w, 0, -1)]
+                        + [str(base_arr[idx + i]) if idx + i < base_len else 'n' for i in range(1, ctx_w + 1)]),
+            'new_codon': codon,
+        })
+
+    # 同一コドン内の適用可能な変異をまとめ、合成後のコドンを求める
+    groups = {}
+    for info in infos:
+        if info['applicable'] and 1 <= info['codon_pos'] <= 3:
+            groups.setdefault(info['idx'] - (info['codon_pos'] - 1), []).append(info)
+    combined_of = {}
+    for start, members in groups.items():
+        chars = list(members[0]['codon'])
+        for m in members:
+            chars[m['codon_pos'] - 1] = m['aft']
+        combined = "".join(chars)
+        combined_of[start] = combined
+        for m in members:
+            m['new_codon'] = combined
+
+    # --- 特徴量（従来の Feature_from_csv_fast / Mutation_features_fast と同じ組み立て）---
+    features = []
+    for info in infos:
+        mutation, codon, new_codon = info['mutation'], info['codon'], info['new_codon']
+        mut_key = f"{info['bef']}->{info['aft']}"
+        freq = freq_dict[mut_key][info['idx']] if mut_key in freq_dict else 0.0
+        bef_aa = DNA2Protein.get(codon, 'X')
+        aft_aa = DNA2Protein.get(new_codon, 'X')
+        metrics = dissim_dict.get((bef_aa, aft_aa))
+        if metrics:
+            hydro, charge, size, blsm = metrics['hydro'], metrics['charge'], metrics['size'], metrics['blsm']
+        else:
+            hydro = charge = size = blsm = 0.0
+        pam250 = pam250_dict.get((bef_aa, aft_aa), 0.0)
+        host_adapt = host_adapt_dict.get((codon, new_codon), _ADAPT_ZERO)
+
+        codon_t = codon if codon != 'none' else 'nnn'
+        new_codon_t = new_codon if new_codon != 'none' else 'nnn'
+        bef_token = config.BASE_VOCABS.get(mutation[0], config.BASE_VOCABS['n'])
+        aft_token = config.BASE_VOCABS.get(mutation[-1], config.BASE_VOCABS['n'])
+        aa_bef_token = config.AA_VOCABS.get(DNA2Protein.get(codon_t, 'n'), config.AA_VOCABS['n'])
+        aa_aft_token = config.AA_VOCABS.get(DNA2Protein.get(new_codon_t, 'n'), config.AA_VOCABS['n'])
+        protein_token = config.PROTEIN_VOCABS.get(info['protein'], config.PROTEIN_VOCABS['PAD'])
+        context_tokens = [config.BASE_VOCABS.get(b, config.BASE_VOCABS['n']) for b in info['context']]
+        is_synonymous = 1 if aa_bef_token == aa_aft_token else 0
+        cat_feat = [bef_token, int(mutation[1:-1]), aft_token, info['codon_pos'], aa_bef_token, info['aa_pos'],
+                    aa_aft_token, protein_token, is_synonymous] + context_tokens
+        num_feat = [freq, hydro, charge, size, blsm, pam250] + list(host_adapt) + [float(cum_syn), float(cum_nonsyn)]
+        features.append((cat_feat, num_feat))
+
+    # --- pass 2: 適用可能な全変異をゲノム状態へ適用（順序に依らず同じ最終状態）---
+    limit = len(codon_state['codon'])
+    for info in infos:
+        if info['applicable']:
+            if undo_list is not None:
+                undo_list.append(('base', info['idx'], codon_state['base'][info['idx']]))
+            codon_state['base'][info['idx']] = info['aft']
+    for start, combined in combined_of.items():
+        for k in range(3):
+            curr = start + k
+            if 0 <= curr < limit:
+                if undo_list is not None:
+                    undo_list.append(('codon', curr, codon_state['codon'][curr]))
+                codon_state['codon'][curr] = combined
+    return features
+
+
 def Mutation_features_fast(mutations_str, codon_state, freq_dict, dissim_dict, pam250_dict,
                            host_adapt_dict, undo_list=None, cum_syn=0, cum_nonsyn=0):
+    if getattr(config, 'FEATURE_ORDER_INDEPENDENT', False):
+        return Step_features_order_independent(mutations_str, codon_state, freq_dict, dissim_dict, pam250_dict,
+                                               host_adapt_dict, undo_list, cum_syn, cum_nonsyn)
     features = []
     for mutation in mutations_str.split(','):
         codon, new_codon, codon_pos, protein, aa_pos, freq, hydro, charge, size, blsm, pam250, \

@@ -79,7 +79,11 @@ DB は特徴量設定ハッシュで命名されるため（`db/features_<hash>.
 - **運用面の対策（C項目）**: 共有DBの割当状態を`split_state`に記録し、test専用割当のままtrain読込・別foldの割当のままの学習を
   `StaleSplitError`で止める。`STRICT_FALLBACKS=True`（既定）で、「リソース無し→警告で続行→結果が静かに劣化」する箇所
   （事前学習ckpt・ホモプラシーCSV・**point-in-time頻度表**・kNN・config_snapshot・前処理の入力）を`FallbackError`で止める。
-  CLAUDE.mdを追跡対象にし、「AI（Claude）が変更を入れるときのルール」を追記。テスト223件。
+  CLAUDE.mdを追跡対象にし、「AI（Claude）が変更を入れるときのルール」を追記。テスト242件。
+- **共起変異の特徴量を順序非依存にするオプション**（`FEATURE_ORDER_INDEPENDENT`、既定False）: 全変異をステップ開始時の
+  ゲノム状態に対して独立に評価し、同一コドン内は合成後のコドンを共有する（従来は位置昇順の逐次適用で、同一コドンの後の
+  変異が中間アミノ酸に基づく。実データで共起ステップの13.7%）。Falseは従来と同一（現行DB`features_b516bca4`のまま）、
+  Trueは別DB（`features_7bba0728`）。構築は`python -m transformer.preprocess --order_independent`。詳細は docs/changelog.md。
 
 260817 で 260723 から入れた変更（2026-08-17）:
 - ディレクトリ名変更のみ（コード内容・機能は260723と完全に同一、diffで確認済み）。
@@ -353,6 +357,7 @@ gmp/
 │       ├── walk_forward.py        # 本体と同一フォールドでのwalk-forward学習
 │       ├── plot_monthly_hitrate.py            # 月別tail-only Hit Rateプロット
 │       └── plot_monthly_position_tolerance.py # 月別・許容誤差付き位置Hit Rateプロット
+├── thesis/                   # 修士論文(LaTeX)。.gitignore対象の独立した非公開gitリポジトリ（親リポジトリにコミットしない）
 ├── tests/                    # pytest（conftest.py: cfg/_restore_config/synthetic_db。real_data/は実DB・slow）
 ├── pytest.ini                # pythonpath=. ／ slowマーカーは既定除外
 ├── PLAN_accuracy_improvement.md       # 精度向上の検証キュー

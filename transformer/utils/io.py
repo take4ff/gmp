@@ -51,6 +51,9 @@ def get_config_hash():
             relevant_configs.append(str(config.MAX_STRAIN_NUM))
             relevant_configs.append(str(config.MAX_NUM_PER_STRAIN))
 
+        # 株キャッシュのキー。順序非依存の特徴量(True)のときだけ追加（Falseでは従来のキャッシュをそのまま使う）
+        if getattr(config, 'FEATURE_ORDER_INDEPENDENT', False):
+            relevant_configs.append("order_independent_features_v1")
         config_string = "_".join(relevant_configs)
         return hashlib.md5(config_string.encode('utf-8')).hexdigest()
     except Exception as e:

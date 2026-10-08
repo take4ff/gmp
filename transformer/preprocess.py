@@ -816,4 +816,12 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+    _ap = argparse.ArgumentParser(description='DuckDB前処理（特徴量・ラベルの生成とDB構築）')
+    _ap.add_argument('--order_independent', action='store_true',
+                     help='共起変異の特徴量を順序非依存で生成する（config.FEATURE_ORDER_INDEPENDENT=True）。'
+                          'DB名のハッシュが変わり、現行DBとは別ファイルに構築される。')
+    _args = _ap.parse_args()
+    if _args.order_independent:
+        config.FEATURE_ORDER_INDEPENDENT = True      # forkされる並列workerにも引き継がれる
     main()

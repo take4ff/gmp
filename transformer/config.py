@@ -253,6 +253,18 @@ NUM_FEATURE_STRING = 9 + 2 * CONTEXT_WINDOW  # 固定9 + 両側コンテキス�
 # epidemic 件数は系列メタCSV(Pangolin × Collection_Date)から週次で構築。詳細は db/growth_features.py。
 # True にすると NUM_CHEM_FEATURES が +4 され設定ハッシュが変わる → DB 再構築が必要。
 USE_LINEAGE_GROWTH_FEATURES = True
+
+# --- 共起変異の特徴量生成を「順序非依存」にする（2026-10-08、既定False＝従来の逐次適用）---
+# 従来: 1ステップ内の共起変異を位置昇順に1つずつ共有ゲノム状態へ適用しながら特徴量を作る。そのため
+#   ・同一コドン内の2変異では、後の変異のaa_before/after・同義判定・置換スコア・ホスト適応が、先の変異適用後の
+#     「存在しない中間アミノ酸」に基づく（実データで共起ステップの13.7%、全ステップの3.3%）。
+#   ・±5bp以内に別の変異があると、前後文脈の塩基に先の変異の変異後塩基が入る（共起ステップの21.7%）。
+# True: 全変異を「そのステップ開始時のゲノム状態」に対して独立に評価する。同一コドン内の変異は、そのコドンに対する
+#   全変異を合成した後のコドン（aa）を共有し、コドン単位の特徴量（aa_before/after・同義判定・置換スコア・ホスト適応）が
+#   全メンバーで揃う。文脈はステップ開始時のゲノムから取る。ステップ終了後のゲノムには全変異を適用する。
+#   記載順を入れ替えても各変異の特徴量は同一（tests/test_feature_order_independent.py）。
+# 注意: True にすると特徴量・ラベル(is_synonymous)が変わるため DB再構築が必要（DB名のハッシュに含まれ、現行DBとは別ファイル）。
+FEATURE_ORDER_INDEPENDENT = False
 GROWTH_WINDOW_WEEKS         = 4        # 成長率の傾きを取る直近ウィンドウ幅（週）
 GROWTH_LINEAGE_CSV_COLUMN   = 'Pangolin'         # SEQUENCES_CSV の系統列
 GROWTH_DATE_CSV_COLUMN      = 'Collection_Date'  # SEQUENCES_CSV の収集日列
