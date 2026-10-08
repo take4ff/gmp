@@ -20,6 +20,10 @@ from transformer_260817.model import HierarchicalTransformer
 from transformer_260817.utils.logging import force_print
 
 
+# 学習可能パラメータ/バッファを追加するフラグ（スナップショットに無ければ旧checkpoint＝OFF扱い）
+_OFF_IF_ABSENT_FROM_SNAPSHOT = ('USE_REGION_CONDITIONED_POSITION',)
+
+
 def load_config_snapshot(checkpoint_dir):
     """checkpoint と同じディレクトリの config_snapshot.py で config を上書きする。"""
     snapshot_path = os.path.join(checkpoint_dir, 'config_snapshot.py')
@@ -34,6 +38,17 @@ def load_config_snapshot(checkpoint_dir):
     for a in overridden:
         setattr(config, a, getattr(snap, a))
     force_print(f"[INFO] Loaded config_snapshot.py ({len(overridden)} attrs overridden)")
+
+    # スナップショットに無いフラグ＝そのフラグが存在しなかった時代のcheckpoint。
+    # 学習可能パラメータ/バッファを追加するフラグは、現行configの既定(True)のままだと
+    # モデル構築時にstate_dictのキー不足で読み込みに失敗する（2026-10-06:
+    # USE_REGION_CONDITIONED_POSITION=True が既定になった後、旧checkpoint
+    # (20260803_115144等)で "Missing key(s): region_hier_scale, pos_region_map"）。
+    # 旧checkpointは当該機能OFFで学習されているため、スナップショットに無ければOFFに戻す。
+    for flag in _OFF_IF_ABSENT_FROM_SNAPSHOT:
+        if not hasattr(snap, flag) and getattr(config, flag, False):
+            setattr(config, flag, False)
+            force_print(f"[INFO] {flag} は config_snapshot に無い旧checkpointのため False に設定")
 
 
 def make_output_dir(subdir, output_dir=None):

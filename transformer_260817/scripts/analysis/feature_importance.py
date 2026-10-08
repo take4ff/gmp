@@ -102,15 +102,22 @@ _CAT_SLOT_NAMES = [
 # 1. Gradient × Input (x_num)
 # ─────────────────────────────────────────────────────────────
 
-def compute_grad_x_input(model, loader, target_head_idx, n_batches, device):
+def compute_grad_x_input(model, loader, target_head_idx, n_batches, device,
+                         return_by_recency=False):
     """position (or region) ロジット Top-1 に対する Gradient × Input を集計する。
 
     Returns:
         importance: ndarray [NUM_CHEM_FEATURES]  — 平均絶対値スコア
+        return_by_recency=True のとき (importance, by_recency) を返す。
+        by_recency: ndarray [T, NUM_CHEM_FEATURES] — recency別（行0=末尾=直近）の平均絶対値。
+            PADされたタイムステップ（mask=True）は平均から除外する（左PADのため
+            古いrecencyほど有効サンプルが減る）。共起スロット方向(C)は従来通り単純平均。
     """
     model.eval()
     accum = None
     n_total = 0
+    rec_sum = None    # [T, F]
+    rec_cnt = None    # [T]
 
     for i, batch in enumerate(loader):
         if i >= n_batches:
@@ -134,6 +141,14 @@ def compute_grad_x_input(model, loader, target_head_idx, n_batches, device):
         # B / T / C を平均し [F] に集約
         imp  = gi.detach().cpu().mean(dim=(0, 1, 2)).numpy()
 
+        if return_by_recency:
+            valid = (~mask).detach().cpu().float()            # [B, T]（mask=True がPAD）
+            gi_t  = gi.detach().cpu().mean(dim=2)             # [B, T, F]
+            part_sum = (gi_t * valid.unsqueeze(-1)).sum(dim=0).numpy()   # [T, F]
+            part_cnt = valid.sum(dim=0).numpy()                          # [T]
+            rec_sum = part_sum if rec_sum is None else rec_sum + part_sum
+            rec_cnt = part_cnt if rec_cnt is None else rec_cnt + part_cnt
+
         if accum is None:
             accum = imp
         else:
@@ -143,7 +158,12 @@ def compute_grad_x_input(model, loader, target_head_idx, n_batches, device):
         if (i + 1) % 50 == 0:
             force_print(f"  GradxInput: {i+1}/{n_batches} batches processed")
 
-    return accum / max(n_total, 1)
+    importance = accum / max(n_total, 1)
+    if not return_by_recency:
+        return importance
+    by_time = rec_sum / np.maximum(rec_cnt, 1)[:, None]   # [T(古→新), F]
+    by_recency = by_time[::-1].copy()                       # 行0=直近
+    return importance, by_recency, rec_cnt[::-1].copy()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -277,6 +297,34 @@ def plot_num_importance(importance, feature_names, out_dir, top_n=32):
     _save_fig(fig, os.path.join(out_dir, 'num_feature_importance.png'))
 
 
+def plot_feature_by_recency(by_recency, counts, feature_names, out_dir,
+                            max_recency=None, top_n=15):
+    """特徴量(行) × recency(列) の Gradient×Input ヒートマップ。
+
+    上位 top_n 特徴（全recency平均の重要度順）を表示。色は各特徴の最大値で正規化した
+    相対値（特徴間でスケールが2桁違うため）。絶対値は CSV を参照。
+    """
+    R = by_recency.shape[0] if max_recency is None else min(max_recency, by_recency.shape[0])
+    valid_r = [r for r in range(R) if counts[r] > 0]
+    mat = by_recency[valid_r]                                 # [R', F]
+    overall = mat.mean(axis=0)
+    order = np.argsort(overall)[::-1][:top_n]
+    sub = mat[:, order].T                                     # [top_n, R']
+    norm = sub / np.maximum(sub.max(axis=1, keepdims=True), 1e-12)
+
+    fig, ax = plt.subplots(figsize=(max(8, len(valid_r) * 0.28), max(4, top_n * 0.38)))
+    im = ax.imshow(norm, aspect='auto', cmap='viridis', vmin=0, vmax=1)
+    ax.set_yticks(range(len(order)))
+    ax.set_yticklabels([feature_names[i] for i in order], fontsize=9)
+    ax.set_xticks(range(len(valid_r)))
+    ax.set_xticklabels([str(r) for r in valid_r], fontsize=7)
+    ax.set_xlabel('recency (0 = most recent timestep)')
+    ax.set_title('Gradient × Input by feature and timestep (row-normalized)')
+    fig.colorbar(im, ax=ax, label='importance / row max')
+    fig.tight_layout()
+    _save_fig(fig, os.path.join(out_dir, 'feature_by_recency_heatmap.png'))
+
+
 def plot_embedding_norms(records, out_dir):
     df = pd.DataFrame(records).sort_values('mean_norm', ascending=False)
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -384,7 +432,16 @@ def main():
 
     # ── 1. Gradient × Input ───────────────────────────────────
     force_print(f"\n[1/3] Gradient × Input on x_num ({args.target} head, {args.n_batches} batches)...")
-    importance = compute_grad_x_input(model, loader, target_idx, args.n_batches, device)
+    importance, by_recency, rec_counts = compute_grad_x_input(
+        model, loader, target_idx, args.n_batches, device, return_by_recency=True)
+
+    # 特徴量 × recency（timestep）の同時マップ（CSV: 行=recency、列=特徴量。有効サンプル数も併記）
+    df_rec = pd.DataFrame(by_recency, columns=feat_names)
+    df_rec.insert(0, 'recency', np.arange(by_recency.shape[0]))
+    df_rec.insert(1, 'n_valid_samples', rec_counts)
+    df_rec.to_csv(os.path.join(out_dir, 'feature_by_recency_importance.csv'), index=False)
+    plot_feature_by_recency(by_recency, rec_counts, feat_names, out_dir,
+                            max_recency=getattr(config, 'MAX_SEQ_LEN', None))
 
     df_num = pd.DataFrame({
         'feature':    feat_names,

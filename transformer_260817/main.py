@@ -430,15 +430,32 @@ def run_training(model, train_loader, val_loader, loss_fn, loss_wrapper,
             f"LR: {current_lr:.6f} | Time: {epoch_time:.1f}s"
         )
 
+        # MultiTaskLoss（Kendall不確実性重み付け）が実際に収束させた重みを可視化する。
+        # config.LOSS_WEIGHT_REGION/POSITION/...（手動優先度、Position=0.7等）は
+        # USE_MULTITASK_LOSS=True 時は一切参照されず、この自動重みのみが有効になる。
+        # get_weights() がこれまで一度も呼ばれておらず、タスク間の実際の重み配分が
+        # 手動優先度と一致しているか誰も確認していなかったため追加（2026-10-05）。
+        task_weights = None
+        if loss_wrapper is not None:
+            w = loss_wrapper.get_weights()
+            task_names = ['region', 'position', 'aa_pos', 'strength', 'codon_pos', 'synonymous']
+            task_weights = dict(zip(task_names, w))
+            weight_str = ' | '.join(f'{k}={v:.4f}' for k, v in task_weights.items())
+            force_print(f"[MultiTaskLoss weights] {weight_str}")
+
         if wandb and config.USE_WANDB:
-            wandb.log({
+            wandb_log = {
                 "epoch": epoch + 1, "train_loss": train_loss,
                 "val_loss": val_loss, "learning_rate": current_lr,
-            })
+            }
+            if task_weights is not None:
+                wandb_log.update({f"loss_weight/{k}": v for k, v in task_weights.items()})
+            wandb.log(wandb_log)
 
         training_log.append({
             'epoch': epoch + 1, 'train_loss': train_loss,
             'val_loss': val_loss, 'time_seconds': epoch_time,
+            **({f'weight_{k}': v for k, v in task_weights.items()} if task_weights is not None else {}),
         })
 
         # エポックごとの簡易メトリクス表示
@@ -1623,6 +1640,40 @@ def _wf_find_prev_fold_checkpoint(fold_id):
     return max(candidates, key=os.path.getmtime)
 
 
+def _wf_resolve_prev_checkpoint(fold_id, prev_fold_id, prev_best_model_path):
+    """walk_forward で fold_id の学習に引き継ぐ直前foldのcheckpointを解決する。
+
+    run_walk_forward() のループ内ロジックを、挙動を変えずに純関数として切り出したもの
+    （テスト容易性のため。tests/test_walkforward_resolve.py）。
+
+    Args:
+        fold_id: これから学習するfold番号
+        prev_fold_id: この実行内で直近に完了したfold番号（無ければ None）
+        prev_best_model_path: そのfoldのbest_model.pth（無ければ None）
+    Returns:
+        (resolved_prev_ckpt, from_search):
+          fold_id==1 → (None, False)（事前学習 or ランダム初期化）
+          prev_fold_id==fold_id-1 → (prev_best_model_path, False)（連続実行）
+          それ以外（部分/非連続実行） → WF_PREV_CHECKPOINT_OVERRIDE → 自動探索の順で解決し
+            (path, True)。どちらでも見つからなければ誤って事前学習に落ちないよう RuntimeError。
+    """
+    if fold_id == 1:
+        return None, False
+    if prev_fold_id == fold_id - 1:
+        return prev_best_model_path, False
+    resolved = getattr(config, 'WF_PREV_CHECKPOINT_OVERRIDE', None)
+    if resolved is None:
+        resolved = _wf_find_prev_fold_checkpoint(fold_id)
+    if resolved is None:
+        raise RuntimeError(
+            f"Fold {fold_id} の部分/非連続実行には直前フォールド(fold_{fold_id - 1})の"
+            f"checkpointが必要ですが、既存の walk_forward 結果からも見つかりませんでした"
+            f"（{os.path.join(config.RESULT_SAVE_DIR, 'walk_forward', '*', f'fold_{fold_id - 1}', '*', 'models', 'best_model.pth')}）。"
+            f"--prev_checkpoint で明示的に指定するか、fold_{fold_id - 1}を先に実行してください。"
+        )
+    return resolved, True
+
+
 def run_walk_forward(folds, wf_run_dir: str):
     """Walk-forward 検証：フォールドを順番に学習＋評価して集計する。
 
@@ -1688,21 +1739,9 @@ def run_walk_forward(folds, wf_run_dir: str):
         #    それ以外（部分/非連続実行でfold_id-1がこの実行内にない）:
         #    WF_PREV_CHECKPOINT_OVERRIDE か既存結果からの自動探索で解決し、
         #    見つからなければ誤って事前学習に落ちないようエラーで止める。
-        if fold_id == 1:
-            resolved_prev_ckpt = None
-        elif prev_fold_id == fold_id - 1:
-            resolved_prev_ckpt = prev_best_model_path
-        else:
-            resolved_prev_ckpt = getattr(config, 'WF_PREV_CHECKPOINT_OVERRIDE', None)
-            if resolved_prev_ckpt is None:
-                resolved_prev_ckpt = _wf_find_prev_fold_checkpoint(fold_id)
-            if resolved_prev_ckpt is None:
-                raise RuntimeError(
-                    f"Fold {fold_id} の部分/非連続実行には直前フォールド(fold_{fold_id - 1})の"
-                    f"checkpointが必要ですが、既存の walk_forward 結果からも見つかりませんでした"
-                    f"（{os.path.join(config.RESULT_SAVE_DIR, 'walk_forward', '*', f'fold_{fold_id - 1}', '*', 'models', 'best_model.pth')}）。"
-                    f"--prev_checkpoint で明示的に指定するか、fold_{fold_id - 1}を先に実行してください。"
-                )
+        resolved_prev_ckpt, from_search = _wf_resolve_prev_checkpoint(
+            fold_id, prev_fold_id, prev_best_model_path)
+        if from_search:
             force_print(f"[INFO] 部分/非連続実行検出: fold_{fold_id - 1}のcheckpointを自動使用: "
                         f"{resolved_prev_ckpt}")
 

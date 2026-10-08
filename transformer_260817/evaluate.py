@@ -63,6 +63,33 @@ def _predict_tta(model, x_cat, x_num, mask, n_passes, clade_ids=None):
     return tuple(averaged)
 
 
+def build_allowed_position_mask(predictions_position, predictions_region,
+                                pos_region_map, topk_regions):
+    """階層的予測（Region→Position マスキング）で許可する位置のboolマスクを返す。
+
+    evaluate() 内のインライン処理を、挙動を変えずに純関数として切り出したもの
+    （テスト容易性のため。tests/test_hierarchical_mask.py）。
+
+    Args:
+        predictions_position: [B, VOCAB] Positionロジット（shape/dtype/deviceの参照にのみ使用）
+        predictions_region:   [B, NUM_REGIONS] Regionロジット
+        pos_region_map:       [VOCAB] 各位置が属するRegion id
+        topk_regions:         マスクに使う予測Regionの上位個数（>=1）
+    Returns:
+        allowed: [B, VOCAB] bool。予測Region上位 topk_regions 個に属する位置のみTrue。
+        予測Regionに写像位置が皆無で全位置が除外される行は、nan回避のため全位置を許可
+        （マスクなし＝現行挙動へフォールバック）する。
+    """
+    R = min(topk_regions, predictions_region.size(1))
+    topR_regions = torch.topk(predictions_region, R, dim=1).indices        # [B, R]
+    pr = pos_region_map.unsqueeze(0)                                        # [1, VOCAB]
+    allowed = torch.zeros_like(predictions_position, dtype=torch.bool)      # [B, VOCAB]
+    for r in range(R):
+        allowed |= (pr == topR_regions[:, r:r + 1])
+    no_allowed = ~allowed.any(dim=1, keepdim=True)
+    return allowed | no_allowed
+
+
 def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
     """モデルを評価し、各タスクのメトリクスと詳細結果を返す。
 
@@ -93,6 +120,13 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
     hier_topk_regions = max(1, int(getattr(config, 'HIERARCHICAL_TOPK_REGIONS', 3)))
 
     use_clade = getattr(config, 'USE_CLADE_EMBEDDING', False)
+
+    # 提案12: kNN検索拡張出力（OFF時は None のまま、挙動は従来と完全一致）。
+    # データストアは scripts/eval/build_knn_datastore.py で事前構築しておく（無ければ警告して無効化）。
+    knn = None
+    if getattr(config, 'USE_KNN_OUTPUT', False):
+        from .utils.knn_output import KNNOutput
+        knn = KNNOutput.load(config.VOCAB_SIZE_POSITION)
 
     # 動的閾値の設定
     if strength_thresholds is not None:
@@ -216,21 +250,17 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
             position_pred_scores = predictions_position
             allowed_position_mask = None  # [B, VOCAB] bool（None=マスク無し）
             if pos_region_map is not None:
-                R = min(hier_topk_regions, predictions_region.size(1))
-                topR_regions = torch.topk(predictions_region, R, dim=1).indices        # [B, R]
-                pr = pos_region_map.unsqueeze(0)                                        # [1, VOCAB]
-                allowed_position_mask = torch.zeros_like(
-                    predictions_position, dtype=torch.bool)                            # [B, VOCAB]
-                for r in range(R):
-                    allowed_position_mask |= (pr == topR_regions[:, r:r + 1])
-                # 全位置が除外される行（予測 Region に写像位置が皆無）は nan 回避のため
-                # マスクを解除して現行挙動へフォールバックする。
-                no_allowed = ~allowed_position_mask.any(dim=1, keepdim=True)
-                allowed_position_mask = allowed_position_mask | no_allowed
+                allowed_position_mask = build_allowed_position_mask(
+                    predictions_position, predictions_region, pos_region_map, hier_topk_regions)
                 if not getattr(config, 'USE_TTA', False):
                     neg_inf = torch.finfo(predictions_position.dtype).min
                     position_pred_scores = predictions_position.masked_fill(
                         ~allowed_position_mask, neg_inf)
+
+            # --- 提案12: kNN補間（階層マスク適用後のスコアに対し、許可位置内でのみ補間）---
+            if knn is not None:
+                _p_final = knn.blend(model._last_context, position_pred_scores, allowed_position_mask)
+                position_pred_scores = torch.log(_p_final.clamp_min(1e-12))
 
             topk_indices_region    = safe_topk(predictions_region,    config.TOP_K_EVAL)
             topk_indices_position  = safe_topk(position_pred_scores,  config.TOP_K_EVAL)

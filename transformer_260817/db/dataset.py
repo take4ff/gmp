@@ -2,6 +2,7 @@
 # DBIterableDataset: DuckDBからバッチ単位でデータを読み込むDataset
 # collate_fn内でSoft Target（確率分配ベクトル）を生成する機能を追加
 
+import gc
 import pickle
 from typing import Any, List, NamedTuple
 import numpy as np
@@ -882,6 +883,19 @@ def create_db_dataloader(db_path, split_type, batch_size, shuffle=False,
         strain_to_strength=strain_to_strength,
         split_col_override=split_col_override,
     )
+
+    # dataset._group_label_cache（巨大なネストしたdict/list/tuple）が循環GCの定期走査対象に
+    # 残ると、各worker（fork・persistent_workers=True）内で「読むだけ」のGC走査が
+    # 参照カウント書き込みを誘発し、epochを重ねるたびにCopy-on-Writeでページが複製されて
+    # OOMに至る（2026-08-03実測、MAX_GROUP_MEMBERS_FOR_CACHE等はこの複製の「量」を削る
+    # 対策で「頻度」自体は止めていなかった）。gc.freeze()でここまでに生成済みの全オブジェクト
+    # を永続世代に移し、以降のGCサイクルの走査対象から外すことで、fork後のworkerでの
+    # 不要なCOW複製を防ぐ。num_workers>0の全呼び出し経路（train/valid/test、
+    # make_train_loader等によるepoch毎の再構築含む）がこの関数を通るため、ここ1箇所で
+    # カバーする。
+    gc.freeze()
+    print(f"[INFO] gc.freeze() called (split_type={split_type}): "
+          f"{len(gc.get_objects()):,} objects remain trackable (non-frozen) post-freeze")
 
     hybrid_alpha = getattr(config, 'HYBRID_ALPHA', 1.0)
     use_soft_target = hybrid_alpha > 0  # 0より大きければSoftラベルを生成（Soft/Hybrid共通）

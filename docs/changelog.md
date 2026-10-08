@@ -114,3 +114,40 @@ fold_3 を単独プロセスで再検証し、修正前に OOM していた R-Pr
 3. `codon_freq` は「コドン使用頻度」ではなく塩基位置×置換パターン単位の変異再発頻度であるため、表示名を `mutation_recurrence_freq` に変更（`utils/codon_freq.py` という無関係な別モジュールと同名だった点も解消）。
 
 fold_3 で再実行した結果、重要度は 0.000946→0.000212（約4.5倍減）に低下したが、依然として1位（2位比 2.4倍→2.0倍）。リークを除いても一定の正当な予測シグナル（ホモプラシー変異の再発しやすさ）が残ることを示唆。
+
+---
+
+### 巨大共起グループ（Omicron期）による学習中 OOM（修正済み・2026-08-03、transformer_260723）
+
+**症状**: `walk_forward` 学習中、特定 fold（fold_3・fold_4 等）で長時間経過後にプロセスが OOM-Kill される。前項（2026-07-29）の R-Precision 評価フェーズ分離後も、学習フェーズ自体で再発。
+
+**原因**: 2つの経路が特定された。いずれも Omicron 系統で祖先枝1本に大量サンプルがぶら下がる巨大な共起グループ（同一 `input_path_str` を共有し any-of-set 統合されるサンプル群。fold_3 test で最大14,684件、fold_4 train で最大13,871件を実測、2026-07-30/31）が起因。
+
+1. **`_build_group_label_cache` の Copy-on-Write 崩壊**: `db/dataset.py` のグループ別ラベルキャッシュはメインプロセスで1回だけ構築し fork 後の全 worker に Copy-on-Write で共有される設計だが、CPython は読み取りだけでも参照カウントの書き込みを伴うため、`DATALOADER_PERSISTENT_WORKERS=True` で全 epoch（15epoch×数百〜千バッチ）生存する worker がバッチ処理のたびに少しずつページを複製し、長時間かけて実質的に worker 数分重複する。巨大グループを含む split では 1 worker あたり約6GBまで肥大化し、8 worker 合計・評価用待機 worker との合算で OOM した（2026-07-31実測）。
+2. **R-Precision 動的 K の瞬間的巨大確保**: `evaluate_topk` の動的 K はバッチ内の最大 `target_set` 長（any-of-set 評価でグループ全メンバーのターゲットを合算するため、グループサイズがそのまま長さになる）を `need_k` として全サンプル共通で使うため、バッチにたった1サンプルでも巨大グループが混入すると、バッチ全体に対し `torch.topk(..., k=need_k)` と CPU化（`.tolist()`）が走り、`k×batch_size` 相当のテンソル/Pythonリストを瞬間的に確保して OOM する（fold_3、Omicron早期BA.1/BA.2で最大14,684人を実測、2026-07-30）。
+
+**修正内容**（`config.py` にコメント付きで記録）:
+1. `MAX_GROUP_MEMBERS_FOR_CACHE = 4000` を新設。これを超えるグループはメンバーを決定的に（代表サンプルIDをseedに）ランダムサブサンプリングし、キャッシュ・Soft Target分配・any-of-set評価の対象から間引く（代表サンプル自身は常に残す。`None`で無効化）。
+2. `TRAIN_NUM_DATALOADER_WORKERS = NUM_DATALOADER_WORKERS // 2` を新設し、学習用ローダーの worker 数を絞って Copy-on-Write 複製の総量を抑制。
+3. `MAX_R_PRECISION_K = 4000` を新設し、R-Precision評価の `need_k` に上限を設定。`group_label_count_histogram.py`（新規追加）でfold別のグループ内ユニークラベル数を実測した結果、fold_3のみ突出（最大12,751）で他fold（1,2,4,5,6,7）は最大でも3,510（fold_2）だったため、4000に設定すればfold_3以外は打ち切りなしで厳密な評価を維持しつつfold_3の外れ値のみ打ち切れる。
+4. `train.py`／`evaluate.py`／`main.py` にトレーニング中のメモリ使用量を追跡するロギングを追加。`plot_group_count_by_month.py`・`group_label_count_histogram.py`を新規追加し、共起グループサイズの分布を可視化できるようにした。
+
+**未検証**: `MAX_GROUP_MEMBERS_FOR_CACHE`・`MAX_R_PRECISION_K` の打ち切りが fold_3 の評価指標（Recall@K・R-Precision等）に与える影響の定量評価は未実施。間引き後もfold_3が他foldと同じオーダーの値を示すかの確認が今後の課題。
+
+---
+
+### `gc.freeze()` によるCopy-on-Write崩壊の根本対策（対処済み・2026-10-05、transformer_260817）
+
+**背景**: 上記（2026-08-03）の対策は、巨大キャッシュによるCOW崩壊の「複製される量」を `MAX_GROUP_MEMBERS_FOR_CACHE` 等で削る対策であり、「複製が起きる頻度」自体は止めていなかった。
+
+**メカニズムの深掘り**: COW崩壊は、CPythonの循環参照GC（世代0は約700オブジェクト生成ごとに自動起動）が `_group_label_cache`（巨大なネストしたdict/list/tuple）を定期的に走査することが引き金になっている。GCは生存確認のため各オブジェクトの参照カウントを読むだけだが、CPythonの参照カウントはオブジェクトヘッダに格納されているため「読むだけ」でも参照カウントの書き込みが発生し、forkされたworkerプロセスではこれがCopy-on-Writeのページ複製トリガーになる。`DATALOADER_PERSISTENT_WORKERS=True` でworkerが全epochに渡り生存し続けるため、GCが走るたびに複製が進行し、最終的にworker数分の実質コピーが溜まってOOMする。
+
+**対処内容**: `db/dataset.py:create_db_dataloader()` で `DBIterableDataset` 構築直後（`_group_label_cache` 構築完了後、DataLoaderがworkerをforkする前）に `gc.freeze()` を呼ぶよう追加。これはその時点までに生成済みの全オブジェクトを「永続世代」に移し、以降の循環GCの走査対象から除外する。複製が起きる経路自体を断つため、既存の `MAX_GROUP_MEMBERS_FOR_CACHE` 等（量を削る対策）とは独立かつ併用可能。train/valid/test全ローダー経路（`make_train_loader`等によるepoch毎の再構築含む）が `create_db_dataloader()` を通るため、1箇所の変更で全てカバーされる。
+
+```python
+# db/dataset.py:create_db_dataloader()
+dataset = DBIterableDataset(...)
+gc.freeze()  # _group_label_cache構築済み・worker fork前
+```
+
+**未検証**: 実際のwalk_forward実行（特にfold_3）でのRSS推移の改善効果は、既存の `_log_rss()` ロギング（main.py）を使った before/after 比較がまだ未実施。次の実行で確認する。

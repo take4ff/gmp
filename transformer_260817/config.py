@@ -879,7 +879,12 @@ TRAIN_ENTROPY_MAX        = 0.7    # 正規化エントロピー上限（0〜1、
 # 評価時に、予測 Region（上位 HIERARCHICAL_TOPK_REGIONS 個）に属さない位置の
 # Position ロジットを -inf でマスクしてから softmax/topk を行う。学習は不変。
 # Option A のみ実装（学習時間増加ゼロ）。Option B/C（条件付きヘッド・2段階）は未実装。
-USE_HIERARCHICAL_PREDICTION = False
+# 2026-10-05: USE_REGION_CONDITIONED_POSITION=True で学習した fold_3 checkpoint
+# （walk_forward 20260809_194502）でも追加効果を確認（position_hit_rate 5.1026→5.4709%、
+# +0.368pt、region_hit_rate不変、hierarchical_prediction_check.py）。学習時の条件付けと
+# 冗長ではなく上乗せで効くため既定をTrueに変更（再学習不要・評価時のみの変更）。
+# 現行config下での全fold平均は未確認（当該学習がfold_3のみのため）。
+USE_HIERARCHICAL_PREDICTION = True
 HIERARCHICAL_TOPK_REGIONS   = 3    # マスクに使う予測 Region の上位個数（>=1）
 
 # --- 提案4: 主要系統クレード埋め込み（分布シフト対策）---
