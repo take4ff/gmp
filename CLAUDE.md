@@ -362,7 +362,7 @@ gmp/
 ├── pytest.ini                # pythonpath=. ／ slowマーカーは既定除外
 ├── PLAN_accuracy_improvement.md       # 精度向上の検証キュー
 ├── PLAN_thesis_schedule.md            # 修論までのスケジュールと報告内容
-├── PAPER_outline.md                   # 修論の構成・論点・図表リスト
+├── PAPER_outline.md                   # 修論の主張・論点・図表リスト（章構成の正は thesis/、日程は PLAN_thesis_schedule.md）
 ├── reference/                # 参照データ（CSV・FASTA等）
 │   ├── aa_properties/        # アミノ酸特性（PAM250・dissimilarity）
 │   ├── codon/                # コドン頻度・変異テーブル
