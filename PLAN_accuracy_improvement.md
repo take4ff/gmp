@@ -31,7 +31,7 @@
 
 - **#5・#6の配線テストと残タスク（2026-10-08）**: `USE_CLADE_EMBEDDING`・`USE_TRAIN_ENTROPY_FILTER`は
   実装済みだがテストが無かったため、`tests/test_clade_and_entropy_filter.py`（28件、変異テスト7種で検出力確認）を追加した。
-  **残り: `getattr(config, 'USE_CLADE_EMBEDDING', False)`等を`config.X`直読みへ書き換える**（CLAUDE.mdルール4。
+  **✅`config.X`直読みへ書き換え済み（2026-10-10）**。元の残タスク: `getattr(...)`等を（CLAUDE.mdルール4。
   対象: `train.py`・`evaluate.py`・`model.py`の`USE_CLADE_EMBEDDING`、`db/dataset.py`の`USE_TRAIN_ENTROPY_FILTER`・`TRAIN_ENTROPY_MAX`）。
   DB構築・学習の実行中は`transformer/`を書き換えない（ルール9）ため、完了後に実施する。
   なお`clade_embed`はON時のみstate_dictにキーが増える（`_OFF_IF_ABSENT_FROM_SNAPSHOT`への登録は、既定をONにする場合に必要）。

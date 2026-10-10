@@ -447,9 +447,9 @@ class DBIterableDataset(IterableDataset):
         # --- 提案2: ターゲットエントロピーによる学習サンプルフィルタリング（Train のみ）---
         # 系統別の正規化ターゲット位置エントロピーが TRAIN_ENTROPY_MAX を超える系統の
         # サンプルを除外する。valid/test には適用しない（層別評価のため）。
-        if getattr(config, 'USE_TRAIN_ENTROPY_FILTER', False) and self.split_type == 0:
+        if config.USE_TRAIN_ENTROPY_FILTER and self.split_type == 0:
             from .queries import compute_lineage_entropy_map
-            ent_max = getattr(config, 'TRAIN_ENTROPY_MAX', 0.7)
+            ent_max = config.TRAIN_ENTROPY_MAX
             entropy_map = compute_lineage_entropy_map(self.db_path, split_type=0)
             before_n = len(df)
             # マップに無い系統（想定外）は保守的に保持する（除外しない）

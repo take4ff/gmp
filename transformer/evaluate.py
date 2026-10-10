@@ -119,7 +119,7 @@ def evaluate(model, dataloader, loss_fn, strength_thresholds=None):
         pos_region_map = get_position_region_map().to(config.DEVICE)  # [VOCAB_SIZE_POSITION]
     hier_topk_regions = max(1, int(getattr(config, 'HIERARCHICAL_TOPK_REGIONS', 3)))
 
-    use_clade = getattr(config, 'USE_CLADE_EMBEDDING', False)
+    use_clade = config.USE_CLADE_EMBEDDING
 
     # 提案12: kNN検索拡張出力（OFF時は None のまま、挙動は従来と完全一致）。
     # データストアは scripts/eval/build_knn_datastore.py で事前構築しておく（無ければ警告して無効化）。

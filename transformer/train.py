@@ -62,7 +62,7 @@ def train_one_epoch(model, dataloader, optimizer, loss_fn, loss_wrapper=None):
 
         # 提案4: 主要系統クレード埋め込み（OFF 時は None → モデル側で無視）
         clade_ids = None
-        if getattr(config, 'USE_CLADE_EMBEDDING', False):
+        if config.USE_CLADE_EMBEDDING:
             from .utils.clade import clade_ids_tensor
             clade_ids = clade_ids_tensor(batch_strains, device=config.DEVICE)
 

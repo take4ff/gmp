@@ -652,7 +652,7 @@ class HierarchicalTransformer(nn.Module):
         # strain 名から写像した clade_id の Embedding を pooled 表現(latest_context)へ加算。
         # padding_idx=0（unknown）はゼロベクトルなので、未知系統では現行挙動と一致。
         # clade_ids は forward() の引数で受け取る（None のときは加算しない）。
-        if getattr(config, 'USE_CLADE_EMBEDDING', False):
+        if config.USE_CLADE_EMBEDDING:
             from .utils.clade import NUM_CLADES
             self.clade_embed = nn.Embedding(NUM_CLADES, config.FEATURE_DIM, padding_idx=0)
         else:
